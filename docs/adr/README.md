@@ -22,11 +22,17 @@ Format: Context / Decision / Consequences. Ranges per agent are listed in spec Â
 | [0022](0022-bluetooth-noise-meta-layouts.md) | BLUETOOTH / NOISE / META component layouts |
 | [0023](0023-analysis-raster-alignment.md) | Analysis raster alignment |
 | [0030](0030-m-cd-device-camera-axes.md) | Calibration of m_cd (device â†’ CV camera axes) |
+| [0031](0031-scene-held-out-policy-calibration.md) | Scene-held-out mobile policy calibration |
 | [0040](0040-circuit-core-composition.md) | Circuit core composition (galaxy-pc-v1m) |
 | [0041](0041-witness-input-builder.md) | Witness input schema and `galaxy-witness` |
 | [0042](0042-constraint-level-negative-tests.md) | Constraint-level negative tests |
 | [0043](0043-groth16-setup-ceremony.md) | Groth16 setup: development key now, multi-party ceremony for production |
 | [0044](0044-circuit-build-artifacts.md) | Circuit build pipeline, artifact digests and the circuit bundle |
+| [0045](0045-geometry-integer-bounds.md) | Bound geometry arithmetic for every admitted input |
+| [0046](0046-geometry-floor-division.md) | Constrain Euclidean floor division |
+| [0047](0047-geometry-invalid-observations.md) | Compute well-defined outputs for rejected observations |
+| [0048](0048-geometry-constraint-sharing.md) | Share geometry selection and residual arithmetic |
+| [0049](0049-geometry-reference-differential.md) | Compare the policy R1CS with reference GeometryViews |
 | [0050](0050-xrpl-client-and-submission.md) | XRPL codec, ledger access and reliable submission |
 | [0060](0060-apple-app-attest-verification.md) | Verify the Apple App Attest wire profile |
 | [0070](0070-app-attest-development-environment.md) | App Attest in the development environment without the entitlement |
