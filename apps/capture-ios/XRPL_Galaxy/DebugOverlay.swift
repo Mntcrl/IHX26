@@ -107,7 +107,7 @@ final class OverlayModel {
         let length = max(1e-6, hypot(upCamera.x, upCamera.y))
         upPixels = CGVector(dx: CGFloat(upCamera.x / length), dy: CGFloat(-upCamera.y / length))
 
-        if let depth = snapshot.depth {
+        if let depth = snapshot.depth, showDots || showRays || showDepth {
             dots = Self.sampleDots(depth)
             if showDepth, snapshot.timestamp - lastDepthImage >= 0.1 {
                 depthImage = Self.colorize(depth)
@@ -274,6 +274,8 @@ struct OverlayCanvas: View {
             cross.addLine(to: CGPoint(x: origin.x, y: origin.y + 10))
             context.stroke(cross, with: .color(.white.opacity(0.85)), lineWidth: 1)
         }
+        // Rasterize offscreen (Metal) so redraws stay cheap on the main thread that also receives ARKit frames.
+        .drawingGroup()
         .allowsHitTesting(false)
     }
 }

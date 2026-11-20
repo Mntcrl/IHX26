@@ -50,6 +50,8 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
     @ObservationIgnored private var probeTriggered = false
     @ObservationIgnored private var attempt: (label: SceneLabel, coverage: Double?, orientation: String)?
     @ObservationIgnored private var attemptMotion = MotionSummary()
+    /// Set by the shutter: the next delivered frame becomes t0 (watchdog fails the attempt after 0.35 s).
+    @ObservationIgnored private var centerDeadline: Double?
     private let staticProbe: Bool
 
     override init() {
@@ -147,9 +149,10 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
         overlay.reset()
         imuStatus = "Not collecting"
         bluetoothStatus = "Not scanning"
-        if pending != nil {
+        if pending != nil || centerDeadline != nil {
             timer?.cancel()
             pending = nil
+            centerDeadline = nil
             finishWithoutRaw(["Acquisition was interrupted before the shutter window completed."])
         }
     }
@@ -158,8 +161,10 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
         guard running else { return }
         let timestamp = frame.timestamp
         guard timestamp.isFinite, timestamp > 0 else { return }
-        // At most ~15 fps: keep every second 30 fps frame despite timestamp jitter.
-        if let previous = history.last, timestamp - previous.timestamp < 0.06 { return }
+        // The shutter takes the next delivered frame as t0. Otherwise keep at most ~15 fps
+        // (every second 30 fps frame despite timestamp jitter).
+        let wantsCenter = centerDeadline != nil
+        if !wantsCenter, let previous = history.last, timestamp - previous.timestamp < 0.06 { return }
         let snapshot = FrameSnapshot(frame, arrival: CACurrentMediaTime())
         history.removeAll { timestamp - $0.timestamp > 0.6 }
         if history.count == 10 { history.removeFirst() }
@@ -178,7 +183,18 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
         overlay.update(frame: frame, snapshot: snapshot, viewport: preview.bounds.size, orientation: orientation)
         let wanted: SCNDebugOptions = overlay.showFeatures ? [ARSCNDebugOptions.showFeaturePoints] : []
         if preview.debugOptions != wanted { preview.debugOptions = wanted }
-        if var window = pending {
+        if wantsCenter {
+            centerDeadline = nil
+            pending = Pending(center: snapshot,
+                              minus: nearest(in: history, target: timestamp - 0.25,
+                                             lower: timestamp - 0.5, upper: timestamp - 0.1))
+            // Consider the entire successor window, then allow an additional 50 ms of motion coverage.
+            let delay = max(0, timestamp + 0.58 - CACurrentMediaTime())
+            timer = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+                await self?.freeze()
+            }
+        } else if var window = pending {
             let delta = timestamp - window.center.timestamp
             if (0.1...0.5).contains(delta),
                window.plus.map({ abs(delta - 0.25) < abs($0.timestamp - window.center.timestamp - 0.25) }) ?? true {
@@ -214,7 +230,6 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
 
     func capture() {
         guard canCapture, let store else { return }
-        let now = CACurrentMediaTime()
         var row = CaptureRecord(id: UUID(), claimedTimeMs: UInt64((Date().timeIntervalSince1970 * 1000).rounded()))
         notice = nil
         do {
@@ -229,17 +244,14 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
             notice = "Storage error"
             return
         }
-        guard let center = history.last, (0...0.12).contains(now - center.timestamp) else {
-            finishWithoutRaw([CaptureIssue.missingFrame.message]); return
-        }
-        pending = Pending(center: center,
-                          minus: nearest(in: history, target: center.timestamp - 0.25,
-                                         lower: center.timestamp - 0.5, upper: center.timestamp - 0.1))
-        // Consider the entire successor window, then allow an additional 50 ms of motion coverage.
-        let delay = max(0, center.timestamp + 0.58 - now)
+        // t0 is the first frame delivered after the press (see session(_:didUpdate:)).
+        let deadline = CACurrentMediaTime() + 0.3
+        centerDeadline = deadline
         timer = Task { [weak self] in
-            do { try await Task.sleep(for: .seconds(delay)) } catch { return }
-            await self?.freeze()
+            do { try await Task.sleep(for: .seconds(0.35)) } catch { return }
+            guard let self, self.centerDeadline == deadline else { return }
+            self.centerDeadline = nil
+            self.finishWithoutRaw([CaptureIssue.missingFrame.message])
         }
     }
 
