@@ -16,12 +16,28 @@ pub const CHUNK_BYTES: usize = 800;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BundleKind { Device, Circuit }
 
+/// MemoType namespace of registry records. `Test` (`galaxy/test/<kind>`) uses
+/// the v1 payload codecs unchanged, for Testnet exercises that must never
+/// create `galaxy/v1/*` records. Retrieval accepts only its own namespace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Namespace { V1, Test }
+
 impl BundleKind {
-    fn manifest(self) -> MemoKind {
-        match self { Self::Device => MemoKind::Device, Self::Circuit => MemoKind::Circuit }
+    pub fn manifest_type(self, namespace: Namespace) -> &'static str {
+        match (namespace, self) {
+            (Namespace::V1, Self::Device) => MemoKind::Device.as_str(),
+            (Namespace::V1, Self::Circuit) => MemoKind::Circuit.as_str(),
+            (Namespace::Test, Self::Device) => "galaxy/test/device",
+            (Namespace::Test, Self::Circuit) => "galaxy/test/circuit",
+        }
     }
-    fn chunk(self) -> MemoKind {
-        match self { Self::Device => MemoKind::DeviceChunk, Self::Circuit => MemoKind::CircuitChunk }
+    pub fn chunk_type(self, namespace: Namespace) -> &'static str {
+        match (namespace, self) {
+            (Namespace::V1, Self::Device) => MemoKind::DeviceChunk.as_str(),
+            (Namespace::V1, Self::Circuit) => MemoKind::CircuitChunk.as_str(),
+            (Namespace::Test, Self::Device) => "galaxy/test/device-chunk",
+            (Namespace::Test, Self::Circuit) => "galaxy/test/circuit-chunk",
+        }
     }
 }
 
@@ -46,11 +62,20 @@ pub struct FetchedBundle {
     pub bytes: Vec<u8>,
 }
 
+/// Publishes a `galaxy/v1/*` bundle; see [`publish_bundle_in`].
+pub async fn publish_bundle<R, S, D, F>(
+    submitter: &Submitter<'_, R, S>, wallet: &Wallet, kind: BundleKind, bytes: &[u8], delay: D,
+) -> Result<PublishedBundle, Error>
+where R: RpcTransport, S: TxStore, D: Fn() -> F, F: Future<Output = ()>,
+{
+    publish_bundle_in(submitter, wallet, Namespace::V1, kind, bytes, delay).await
+}
+
 /// Both the journal purpose and the signed payload are stable across crashes.
 /// An expired unvalidated chunk/manifest may be re-signed only after its entire
 /// old ledger window was searched. Transaction execution is strictly serial.
-pub async fn publish_bundle<R, S, D, F>(
-    submitter: &Submitter<'_, R, S>, wallet: &Wallet, kind: BundleKind, bytes: &[u8], delay: D,
+pub async fn publish_bundle_in<R, S, D, F>(
+    submitter: &Submitter<'_, R, S>, wallet: &Wallet, namespace: Namespace, kind: BundleKind, bytes: &[u8], delay: D,
 ) -> Result<PublishedBundle, Error>
 where R: RpcTransport, S: TxStore, D: Fn() -> F, F: Future<Output = ()>,
 {
@@ -71,13 +96,13 @@ where R: RpcTransport, S: TxStore, D: Fn() -> F, F: Future<Output = ()>,
     let bundle_id = ids::bundle_id(bytes);
     let chunk_total = u16::try_from(bytes.len().div_ceil(CHUNK_BYTES)).unwrap();
     let mut chunk_txs = Vec::with_capacity(usize::from(chunk_total));
-    let scope = format!("registry/{network}/{}/{}/{}", classic_address(&account), kind.manifest().as_str(), hex::encode(bundle_id));
+    let scope = format!("registry/{network}/{}/{}/{}", classic_address(&account), kind.manifest_type(namespace), hex::encode(bundle_id));
     let mut first_chunk_ledger = u32::MAX;
     let mut last_chunk_ledger = 0;
     for (index, payload) in bytes.chunks(CHUNK_BYTES).enumerate() {
         let wire = ChunkMemo { bundle_id, index: index as u16, total: chunk_total, payload: payload.to_vec() }.encode();
         let tx = publish_one(submitter, wallet, &format!("{scope}/chunk/{index}"),
-            Memo { kind: kind.chunk().as_str(), data: &wire }, deadline, &delay).await?;
+            Memo { kind: kind.chunk_type(namespace), data: &wire }, deadline, &delay).await?;
         first_chunk_ledger = first_chunk_ledger.min(tx.ledger_index);
         last_chunk_ledger = last_chunk_ledger.max(tx.ledger_index);
         chunk_txs.push(tx.hash);
@@ -99,7 +124,7 @@ where R: RpcTransport, S: TxStore, D: Fn() -> F, F: Future<Output = ()>,
         _ => unreachable!(),
     };
     let manifest_tx = publish_one(submitter, wallet, &format!("{scope}/manifest"),
-        Memo { kind: kind.manifest().as_str(), data: &wire }, deadline, &delay).await?.hash;
+        Memo { kind: kind.manifest_type(namespace), data: &wire }, deadline, &delay).await?.hash;
     Ok(PublishedBundle { manifest_tx, chunk_txs })
 }
 
@@ -140,7 +165,16 @@ fn validate_record(tx: &LedgerTx) -> Result<(), Error> {
     Ok(())
 }
 
+/// Retrieves a `galaxy/v1/*` bundle; see [`fetch_bundle_in`].
 pub async fn fetch_bundle<L: LedgerSource>(source: &L, hash: &Hash32, network_id: u32, allow_mainnet: bool) -> Result<FetchedBundle, Error> {
+    fetch_bundle_in(source, hash, network_id, allow_mainnet, Namespace::V1).await
+}
+
+/// Reconstructs a bundle from its manifest transaction, applying every spec
+/// §10 retrieval rule. Only records of `namespace` are considered.
+pub async fn fetch_bundle_in<L: LedgerSource>(
+    source: &L, hash: &Hash32, network_id: u32, allow_mainnet: bool, namespace: Namespace,
+) -> Result<FetchedBundle, Error> {
     if network_id == 0 && !allow_mainnet { return Err(Error::Network); }
     let tx = source.tx(hash).await?.ok_or(Error::HistoryUnavailable("registry manifest not found"))?;
     let info = source.server_info().await?;
@@ -152,7 +186,7 @@ pub async fn fetch_bundle<L: LedgerSource>(source: &L, hash: &Hash32, network_id
     check_network(memo.network_id, network_id)?;
     let account = memo.account;
     let (kind, manifest, id, len, total, first, last) = match memo.kind.as_str() {
-        kind if kind == MemoKind::Device.as_str() => {
+        kind if kind == BundleKind::Device.manifest_type(namespace) => {
             let b = DeviceManifest::decode(&memo.data)?;
             if b.account_id != account || b.network != network_id
                 || !(b.reg_ledger_index..=b.reg_ledger_index.saturating_add(100)).contains(&tx.ledger_index)
@@ -163,7 +197,7 @@ pub async fn fetch_bundle<L: LedgerSource>(source: &L, hash: &Hash32, network_id
             let fields = (b.bundle_id, b.bundle_len, b.chunk_total, b.first_chunk_ledger, b.last_chunk_ledger);
             (BundleKind::Device, Manifest::Device(b), fields.0, fields.1, fields.2, fields.3, fields.4)
         }
-        kind if kind == MemoKind::Circuit.as_str() => {
+        kind if kind == BundleKind::Circuit.manifest_type(namespace) => {
             let b = CircuitManifest::decode(&memo.data)?;
             if b.network != network_id { return Err(Error::Network); }
             let fields = (b.bundle_id, b.bundle_len, b.chunk_total, b.first_chunk_ledger, b.last_chunk_ledger);
@@ -186,7 +220,8 @@ pub async fn fetch_bundle<L: LedgerSource>(source: &L, hash: &Hash32, network_id
     let mut stored = 0usize;
     let mut marker = None;
     let mut markers = HashSet::new();
-    let memo_type = hex::encode_upper(kind.chunk().as_str());
+    let chunk_type = kind.chunk_type(namespace);
+    let memo_type = hex::encode_upper(chunk_type);
     loop {
         let mut page = source.account_tx(&account, first, last, marker, 200).await?;
         for entry in page.transactions.drain(..) {
@@ -198,7 +233,7 @@ pub async fn fetch_bundle<L: LedgerSource>(source: &L, hash: &Hash32, network_id
             validate_record(&entry)?;
             let decoded = decode_galaxy_object(&object)?;
             check_network(decoded.network_id, network_id)?;
-            if decoded.kind != kind.chunk().as_str() || decoded.account != account
+            if decoded.kind != chunk_type || decoded.account != account
                 || !(first..=last).contains(&entry.ledger_index)
                 || (entry.ledger_index, entry.transaction_index) >= (tx.ledger_index, tx.transaction_index)
             {

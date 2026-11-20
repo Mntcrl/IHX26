@@ -1,6 +1,7 @@
 #![cfg(feature = "native")]
 
 use galaxy_protocol::{ids, wire::{ChunkMemo, CircuitBundle, CircuitManifest, MemoKind}};
+use galaxy_xrpl::registry::{fetch_bundle_in, BundleKind, Namespace};
 use galaxy_xrpl::keys::Wallet;
 use galaxy_xrpl::ledger::{AccountTxPage, LedgerHeader, LedgerTx, ServerInfo};
 use galaxy_xrpl::registry::fetch_bundle;
@@ -38,10 +39,52 @@ impl LedgerSource for History {
 }
 
 fn record(wallet: &Wallet, kind: MemoKind, data: &[u8], ledger_index: u32) -> LedgerTx {
+    record_typed(wallet, kind.as_str(), data, ledger_index)
+}
+
+fn record_typed(wallet: &Wallet, kind: &str, data: &[u8], ledger_index: u32) -> LedgerTx {
     let tx = AccountSet { account:wallet.account_id(), sequence:1, fee_drops:10, last_ledger_sequence:105,
-        network_id:1, memo:Memo { kind:kind.as_str(), data } }.sign(wallet).unwrap();
+        network_id:1, memo:Memo { kind, data } }.sign(wallet).unwrap();
     LedgerTx { hash:tx.hash, tx_blob:tx.blob, meta_blob:Vec::new(), transaction_result:"tesSUCCESS".into(),
         transaction_index:0, ledger_index, validated:true, close_time:None }
+}
+
+#[tokio::test]
+async fn test_namespace_is_isolated_and_ledger_order_is_enforced() {
+    let bundle = CircuitBundle { descriptor_json: br#"{"ns":"test"}"#.to_vec(), vk_bytes: vec![2; 900], policy_json: b"{}".to_vec() };
+    let bytes = bundle.encode();
+    let id = ids::bundle_id(&bytes);
+    let wallet = Wallet::from_entropy(&[10;16]);
+    let chunk = |index: u16, range: std::ops::Range<usize>| ChunkMemo { bundle_id:id, index, total:2, payload:bytes[range].to_vec() }.encode();
+    let manifest = CircuitManifest { network:1, bundle_id:id, bundle_len:bytes.len() as u32, chunk_total:2,
+        first_chunk_ledger:100, last_chunk_ledger:102, circuit_id:ids::circuit_id(&bundle.descriptor_json).unwrap(),
+        policy_id:ids::policy_id(&bundle.policy_json).unwrap(), vk_digest:ids::vk_digest(&bundle.vk_bytes) }.encode();
+    let (c, cc) = (BundleKind::Circuit.manifest_type(Namespace::Test), BundleKind::Circuit.chunk_type(Namespace::Test));
+    assert_eq!((c, cc), ("galaxy/test/circuit", "galaxy/test/circuit-chunk"));
+    let mut history = History { manifest: record_typed(&wallet, c, &manifest, 103),
+        chunk0: record_typed(&wallet, cc, &chunk(0, 0..800), 100),
+        chunk1: record_typed(&wallet, cc, &chunk(1, 800..bytes.len()), 102), extra: None, complete: "90-105" };
+    let hash = history.manifest.hash;
+    assert_eq!(fetch_bundle_in(&history, &hash, 1, false, Namespace::Test).await.unwrap().bytes, bytes);
+    // A test manifest is never a v1 manifest.
+    assert!(fetch_bundle(&history, &hash, 1, false).await.unwrap_err().to_string().contains("unexpected registry manifest"));
+    // v1 chunks are ignored by a test manifest (bundle incomplete).
+    history.chunk1 = record(&wallet, MemoKind::CircuitChunk, &chunk(1, 800..bytes.len()), 102);
+    assert!(fetch_bundle_in(&history, &hash, 1, false, Namespace::Test).await.unwrap_err().to_string().contains("missing chunks"));
+    // A chunk at or after the manifest position is rejected.
+    history.chunk1 = record_typed(&wallet, cc, &chunk(1, 800..bytes.len()), 102);
+    history.manifest.ledger_index = 102;
+    assert!(fetch_bundle_in(&history, &hash, 1, false, Namespace::Test).await.is_err());
+    history.manifest.ledger_index = 103;
+    // Endpoint ledgers must match the manifest exactly.
+    history.chunk1.ledger_index = 101;
+    assert!(fetch_bundle_in(&history, &hash, 1, false, Namespace::Test).await.unwrap_err().to_string().contains("incorrect ledger endpoints"));
+    history.chunk1.ledger_index = 102;
+    // Wrong network on the reader side.
+    assert!(matches!(fetch_bundle_in(&history, &hash, 2, false, Namespace::Test).await, Err(Error::Network)));
+    assert!(matches!(fetch_bundle_in(&history, &hash, 0, false, Namespace::Test).await, Err(Error::Network)));
+    // Manifest not found by the RPC is missing history, not invalid data.
+    assert!(matches!(fetch_bundle_in(&history, &[0; 32], 1, false, Namespace::Test).await, Err(Error::HistoryUnavailable(_))));
 }
 
 #[tokio::test]

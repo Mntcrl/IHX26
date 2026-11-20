@@ -5,6 +5,7 @@ pub mod codec;
 pub mod dev_wallet;
 pub mod keys;
 pub mod ledger;
+pub mod mobile;
 #[cfg(all(feature = "native", not(target_arch = "wasm32")))]
 pub mod native;
 pub mod registry;

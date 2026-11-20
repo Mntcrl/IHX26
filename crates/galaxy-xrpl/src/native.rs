@@ -116,7 +116,7 @@ impl RpcClient {
             }
             bytes.extend_from_slice(&chunk);
         }
-        take_http_result(serde_json::from_slice(&bytes)?)
+        ledger::take_http_result(serde_json::from_slice(&bytes)?)
     }
 }
 
@@ -204,15 +204,6 @@ fn parse_urls(urls: impl IntoIterator<Item = impl AsRef<str>>, websocket: bool) 
         return Err(Error::Invalid("no XRPL endpoint URLs"));
     }
     Ok(parsed)
-}
-
-fn take_http_result(mut envelope: Value) -> Result<Value, Error> {
-    if envelope.get("error").is_some() {
-        return Err(Error::Invalid("unexpected error outside XRPL result"));
-    }
-    let result = envelope.as_object_mut().and_then(|object| object.remove("result"))
-        .filter(Value::is_object).ok_or(Error::Invalid("invalid XRPL HTTP response envelope"))?;
-    Ok(result)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -688,5 +679,34 @@ mod tests {
         let backfill = client.ledger_transactions(ledger_index).await.unwrap();
         assert_eq!(backfill.header.hash, ledger_hash);
         assert!(backfill.header.validated);
+
+        // Live streams: the next closed ledger and its transaction notices must
+        // match an HTTP backfill of that ledger.
+        let mut closed: Option<LedgerClosed> = None;
+        let mut notices = Vec::new();
+        for _ in 0..10_000 {
+            match subscription.next_event().await.unwrap() {
+                SubscriptionEvent::LedgerClosed(event) if closed.is_none() => {
+                    assert!(event.ledger_index > ledger_index);
+                    closed = Some(event);
+                }
+                SubscriptionEvent::LedgerClosed(_) => break,
+                SubscriptionEvent::Transaction(notice) => notices.push(notice),
+                SubscriptionEvent::Connected { .. } => panic!("unexpected reconnect during the live test"),
+            }
+        }
+        let closed = closed.expect("no ledgerClosed event");
+        let backfill = client.ledger_transactions(closed.ledger_index).await.unwrap();
+        assert_eq!(backfill.header.hash, closed.ledger_hash);
+        assert_eq!(backfill.header.close_time, closed.close_time);
+        assert_eq!(backfill.transactions.len(), closed.transaction_count as usize);
+        let in_ledger: Vec<_> = notices.iter().filter(|n| n.ledger_index == closed.ledger_index).collect();
+        for notice in &in_ledger {
+            assert_eq!(notice.ledger_hash, closed.ledger_hash);
+            let tx = backfill.transactions.iter().find(|tx| tx.hash == notice.hash).expect("notice not in backfill");
+            assert_eq!((tx.transaction_index, tx.transaction_result.as_str()),
+                (notice.transaction_index, notice.transaction_result.as_str()));
+        }
+        println!("ledger {} txs {} notices {}", closed.ledger_index, closed.transaction_count, in_ledger.len());
     }
 }

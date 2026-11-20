@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::future::Future;
 
+/// Pending polls between rebroadcasts of the identical blob in [`Submitter::run`].
+pub const REBROADCAST_POLLS: u32 = 8;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PendingTx {
@@ -122,6 +125,115 @@ fn index(value: &Value) -> Result<u32, Error> {
         .ok_or(Error::Invalid("missing or invalid ledger index/sequence"))
 }
 
+/// Common fields of a Galaxy AccountSet derived from validated RPC answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Autofill {
+    pub sequence: u32,
+    pub fee_drops: u64,
+    /// `min(validated + 20, deadline)`.
+    pub last_ledger_sequence: u32,
+    /// `validated + 1`: the first ledger that can include the transaction.
+    pub first_possible_ledger: u32,
+}
+
+/// `LastLedgerSequence = min(validated + 20, deadline)`; fails once the
+/// deadline is not after the validated ledger.
+pub fn last_ledger_for(validated_ledger: u32, deadline: Option<u32>) -> Result<u32, Error> {
+    let last_ledger = validated_ledger.saturating_add(20).min(deadline.unwrap_or(u32::MAX));
+    if last_ledger <= validated_ledger { return Err(Error::Invalid("transaction deadline already passed")); }
+    Ok(last_ledger)
+}
+
+/// `account_info` parameters pinned to the validated ledger used for autofill.
+pub fn account_info_params(address: &str, validated_ledger: u32) -> Value {
+    json!({"account": address, "ledger_index": validated_ledger})
+}
+
+/// Sans-IO autofill from the `fee` result and the `account_info` result
+/// requested with [`account_info_params`]. The fee is the open-ledger fee and
+/// must not exceed `max_fee_drops`.
+pub fn autofill_from_responses(
+    validated_ledger: u32, deadline: Option<u32>, max_fee_drops: u64, address: &str, fee: &Value, account_info: &Value,
+) -> Result<Autofill, Error> {
+    let last_ledger_sequence = last_ledger_for(validated_ledger, deadline)?;
+    let fee_drops = fee["drops"]["open_ledger_fee"].as_str().and_then(|n| n.parse().ok())
+        .filter(|&n| n > 0 && n <= max_fee_drops)
+        .ok_or(Error::Invalid("missing fee quote or fee exceeds configured cap"))?;
+    if account_info["validated"] != true || account_info["ledger_index"] != validated_ledger
+        || account_info["account_data"]["Account"] != address
+    {
+        return Err(Error::Invalid("account_info does not match validated account/ledger"));
+    }
+    let sequence = index(&account_info["account_data"]["Sequence"])?;
+    Ok(Autofill { sequence, fee_drops, last_ledger_sequence, first_possible_ledger: validated_ledger + 1 })
+}
+
+/// `tx` parameters for looking up a persisted transaction. Once the validated
+/// ledger passed `last_ledger`, the bounded window lets the server prove absence.
+pub fn tx_lookup_params(pending: &PendingTx, validated_ledger: u32) -> Value {
+    let mut params = json!({"transaction":hex::encode_upper(pending.hash),"binary":true,"api_version":2});
+    if validated_ledger > pending.last_ledger {
+        params["min_ledger"] = json!(pending.first_possible_ledger);
+        params["max_ledger"] = json!(pending.last_ledger);
+    }
+    params
+}
+
+/// Sans-IO evaluation of a `tx` result obtained with [`tx_lookup_params`] for
+/// the same `validated_ledger`. `txnNotFound` alone is never evidence of expiry;
+/// the server must report that it searched every ledger in the bounded window.
+pub fn evaluate_tx_lookup(pending: &PendingTx, validated_ledger: u32, result: &Value) -> Result<TxState, Error> {
+    let past = validated_ledger > pending.last_ledger;
+    match result["error"].as_str() {
+        Some("txnNotFound") if past && result["searched_all"] == true => return Ok(TxState::Expired),
+        Some("txnNotFound") if past => return Err(Error::Rpc("expiry not provable: RPC did not search full ledger window".into())),
+        Some("txnNotFound") => return Ok(TxState::Pending),
+        Some(code) => return Err(Error::Rpc(format!("tx: {code}"))),
+        None => {}
+    }
+    if result["validated"] == false && !past { return Ok(TxState::Pending); }
+    let tx = parse_tx(result)?;
+    if tx.hash != pending.hash || tx.tx_blob != pending.blob || !tx.validated
+        || !(pending.first_possible_ledger..=pending.last_ledger).contains(&tx.ledger_index)
+    {
+        return Err(Error::Invalid("RPC returned a different tx, non-final tx, or out-of-range ledger"));
+    }
+    if !matches!(classify_result(&tx.transaction_result), ResultClass::Success | ResultClass::ClaimedFee) {
+        return Err(Error::Invalid("invalid result for a validated transaction"));
+    }
+    Ok(TxState::Validated(tx))
+}
+
+/// Checks a `submit` result for the persisted blob. Engine results are
+/// provisional, even `tesSUCCESS`; only a validated lookup is final.
+pub fn evaluate_submit(pending: &PendingTx, result: &Value) -> Result<SubmitResult, Error> {
+    if let Some(code) = result["error"].as_str() { return Err(Error::Rpc(format!("submit: {code}"))); }
+    if let Some(blob) = result.get("tx_blob") {
+        if blob.as_str().and_then(|s| hex::decode(s).ok()).as_deref() != Some(&pending.blob) {
+            return Err(Error::Invalid("submit RPC returned a different blob"));
+        }
+    }
+    let code = result["engine_result"].as_str().ok_or(Error::Invalid("missing submit engine result"))?.to_owned();
+    Ok(SubmitResult { class: classify_result(&code), code })
+}
+
+impl PendingTx {
+    /// Builds the journal record of a freshly signed transaction (the caller
+    /// persists it durably before the first submit).
+    pub fn new(purpose: &str, signed: crate::transaction::SignedTransaction, network_id: u32, autofill: &Autofill) -> Result<Self, Error> {
+        check_purpose(purpose)?;
+        let pending = Self { purpose: purpose.to_owned(), hash: signed.hash, blob: signed.blob, network_id,
+            first_possible_ledger: autofill.first_possible_ledger, last_ledger: autofill.last_ledger_sequence };
+        pending.check(purpose, network_id)?;
+        Ok(pending)
+    }
+
+    /// Integrity of a journal record: hash, network and ledger window match the blob.
+    pub fn verify(&self, network_id: u32) -> Result<(), Error> {
+        self.check(&self.purpose, network_id).map(drop)
+    }
+}
+
 fn check_purpose(purpose: &str) -> Result<(), Error> {
     if purpose.is_empty() || purpose.len() > 256 || !purpose.bytes().all(|b| b.is_ascii_graphic()) {
         return Err(Error::Invalid("invalid transaction purpose"));
@@ -144,22 +256,14 @@ impl<'a, R: RpcTransport, S: TxStore> Submitter<'a, R, S> {
 
     async fn build(&self, purpose: &str, wallet: &Wallet, memo: Memo<'_>, deadline: Option<u32>) -> Result<PendingTx, Error> {
         let head = self.validated_ledger().await?;
-        let last_ledger = head.saturating_add(20).min(deadline.unwrap_or(u32::MAX));
-        if last_ledger <= head { return Err(Error::Invalid("transaction deadline already passed")); }
+        last_ledger_for(head, deadline)?;
         let fee = request(self.rpc, "fee", json!({})).await?;
-        let fee_drops = fee["drops"]["open_ledger_fee"].as_str().and_then(|n| n.parse().ok())
-            .filter(|&n| n > 0 && n <= self.max_fee_drops)
-            .ok_or(Error::Invalid("missing fee quote or fee exceeds configured cap"))?;
         let address = wallet.classic_address();
-        let account = request(self.rpc, "account_info", json!({"account":address,"ledger_index":head})).await?;
-        if account["validated"] != true || account["ledger_index"] != head || account["account_data"]["Account"] != address {
-            return Err(Error::Invalid("account_info does not match validated account/ledger"));
-        }
-        let sequence = index(&account["account_data"]["Sequence"])?;
-        let signed = AccountSet { account: wallet.account_id(), sequence, fee_drops, last_ledger_sequence: last_ledger,
-            network_id: self.network_id, memo }.sign(wallet)?;
-        Ok(PendingTx { purpose: purpose.to_owned(), hash: signed.hash, blob: signed.blob,
-            network_id: self.network_id, first_possible_ledger: head + 1, last_ledger })
+        let account = request(self.rpc, "account_info", account_info_params(&address, head)).await?;
+        let autofill = autofill_from_responses(head, deadline, self.max_fee_drops, &address, &fee, &account)?;
+        let signed = AccountSet { account: wallet.account_id(), sequence: autofill.sequence, fee_drops: autofill.fee_drops,
+            last_ledger_sequence: autofill.last_ledger_sequence, network_id: self.network_id, memo }.sign(wallet)?;
+        PendingTx::new(purpose, signed, self.network_id, &autofill)
     }
 
     fn check_intent(&self, pending: &PendingTx, purpose: &str, wallet: &Wallet, memo: Memo<'_>, deadline: Option<u32>) -> Result<(), Error> {
@@ -213,31 +317,8 @@ impl<'a, R: RpcTransport, S: TxStore> Submitter<'a, R, S> {
 
     async fn lookup(&self, pending: &PendingTx) -> Result<TxState, Error> {
         let head = self.validated_ledger().await?;
-        let mut params = json!({"transaction":hex::encode_upper(pending.hash),"binary":true,"api_version":2});
-        let past = head > pending.last_ledger;
-        if past {
-            params["min_ledger"] = json!(pending.first_possible_ledger);
-            params["max_ledger"] = json!(pending.last_ledger);
-        }
-        let result = self.rpc.request("tx", params).await?;
-        match result["error"].as_str() {
-            Some("txnNotFound") if past && result["searched_all"] == true => return Ok(TxState::Expired),
-            Some("txnNotFound") if past => return Err(Error::Rpc("expiry not provable: RPC did not search full ledger window".into())),
-            Some("txnNotFound") => return Ok(TxState::Pending),
-            Some(code) => return Err(Error::Rpc(format!("tx: {code}"))),
-            None => {}
-        }
-        if result["validated"] == false && !past { return Ok(TxState::Pending); }
-        let tx = parse_tx(&result)?;
-        if tx.hash != pending.hash || tx.tx_blob != pending.blob || !tx.validated
-            || !(pending.first_possible_ledger..=pending.last_ledger).contains(&tx.ledger_index)
-        {
-            return Err(Error::Invalid("RPC returned a different tx, non-final tx, or out-of-range ledger"));
-        }
-        if !matches!(classify_result(&tx.transaction_result), ResultClass::Success | ResultClass::ClaimedFee) {
-            return Err(Error::Invalid("invalid result for a validated transaction"));
-        }
-        Ok(TxState::Validated(tx))
+        let result = self.rpc.request("tx", tx_lookup_params(pending, head)).await?;
+        evaluate_tx_lookup(pending, head, &result)
     }
 
     /// Submit exactly the persisted blob. Submission engine results are
@@ -254,17 +335,13 @@ impl<'a, R: RpcTransport, S: TxStore> Submitter<'a, R, S> {
             return Err(Error::Invalid("refusing to submit against an already closed last ledger"));
         }
         let result = request(self.rpc, "submit", json!({"tx_blob":hex::encode_upper(&pending.blob)})).await?;
-        if let Some(blob) = result.get("tx_blob") {
-            if blob.as_str().and_then(|s| hex::decode(s).ok()).as_deref() != Some(&pending.blob) {
-                return Err(Error::Invalid("submit RPC returned a different blob"));
-            }
-        }
-        let code = result["engine_result"].as_str().ok_or(Error::Invalid("missing submit engine result"))?.to_owned();
-        Ok(SubmitResult { class: classify_result(&code), code })
+        evaluate_submit(pending, &result)
     }
 
     /// Safe after a crash before or after the original submit. A transport
     /// error leaves the purpose durable and can be retried by calling `run`.
+    /// While pending, the identical blob is rebroadcast every
+    /// `REBROADCAST_POLLS` polls until the window closes.
     pub async fn run<D, F>(&self, pending: &PendingTx, delay: D) -> Result<TxState, Error>
     where D: Fn() -> F, F: Future<Output = ()>,
     {
@@ -278,7 +355,24 @@ impl<'a, R: RpcTransport, S: TxStore> Submitter<'a, R, S> {
                 if self.validated_ledger().await? < pending.last_ledger { return Err(err); }
             }
         }
-        self.poll(pending, delay).await
+        // A provisional `tel*`/`ter*` result or a dropped relay can leave the
+        // transaction out of every queue: rebroadcast the identical blob (same
+        // hash and Sequence, so at most one copy can ever apply) while it is open.
+        let mut polls = 0u32;
+        loop {
+            match self.lookup(pending).await? {
+                TxState::Pending => {
+                    polls += 1;
+                    if polls.is_multiple_of(REBROADCAST_POLLS) {
+                        // The next lookup is authoritative; a rebroadcast that fails
+                        // (window closing, transport error) changes nothing.
+                        let _ = self.submit_saved(pending).await;
+                    }
+                    delay().await;
+                }
+                final_state => return Ok(final_state),
+            }
+        }
     }
 
     pub async fn poll<D, F>(&self, pending: &PendingTx, delay: D) -> Result<TxState, Error>

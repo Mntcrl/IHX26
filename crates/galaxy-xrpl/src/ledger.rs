@@ -372,6 +372,17 @@ fn parse_ledger_backfill(result: &Value, index: u32) -> Result<LedgerBackfill, E
     Ok(LedgerBackfill { header, transactions })
 }
 
+/// Unwraps a JSON-RPC HTTP response body `{"result": {...}}`. The `result`
+/// object may itself carry an RPC error, which callers inspect.
+pub fn take_http_result(mut envelope: Value) -> Result<Value, Error> {
+    if envelope.get("error").is_some() {
+        return Err(Error::Invalid("unexpected error outside XRPL result"));
+    }
+    let result = envelope.as_object_mut().and_then(|object| object.remove("result"))
+        .filter(Value::is_object).ok_or(Error::Invalid("invalid XRPL HTTP response envelope"))?;
+    Ok(result)
+}
+
 pub(crate) fn check_result(result: &Value) -> Result<(), Error> {
     if !result.is_object() {
         return Err(Error::Invalid("RPC result must be an object"));

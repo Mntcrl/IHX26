@@ -9,7 +9,7 @@ use galaxy_xrpl::dev_wallet::{faucet, wallet_load, wallet_new, wallet_root};
 use galaxy_xrpl::keys::Wallet;
 use galaxy_xrpl::ledger::{LedgerTx, RpcTransport};
 use galaxy_xrpl::native::RpcClient;
-use galaxy_xrpl::registry::{fetch_bundle, publish_bundle, BundleKind, MAX_BUNDLE_BYTES};
+use galaxy_xrpl::registry::{fetch_bundle_in, publish_bundle_in, BundleKind, Namespace, MAX_BUNDLE_BYTES};
 use galaxy_xrpl::submission::{balance, classify_result, FileTxStore, PendingTx, Submitter, TxState, TxStore};
 use galaxy_xrpl::transaction::{sign_transaction, AccountSet, Memo};
 use galaxy_xrpl::{codec, Error, Hash32, LedgerSource};
@@ -31,8 +31,15 @@ struct Args {
 enum Command {
     Wallet { #[command(subcommand)] command: WalletCommand },
     Tx { #[command(subcommand)] command: TxCommand },
-    PublishBundle { kind: CliKind, file: PathBuf },
-    FetchBundle { manifest_tx: String, #[arg(short, long)] output: Option<PathBuf> },
+    /// Publish chunk txs then the manifest tx. `--namespace test` writes galaxy/test/* memo types.
+    PublishBundle { kind: CliKind, file: PathBuf, #[arg(long, value_enum)] namespace: CliNamespace },
+    FetchBundle {
+        manifest_tx: String,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        #[arg(long, value_enum, default_value = "v1")]
+        namespace: CliNamespace,
+    },
     /// Serialize the v1 envelopes. Live exercises send only galaxy/test/* on Testnet.
     Measure {
         #[arg(long, conflicts_with = "interrupt")]
@@ -51,6 +58,14 @@ enum WalletCommand { New, ShowAddress, Fund, Balance }
 enum TxCommand { Inspect { hash: String } }
 #[derive(Clone, Copy, ValueEnum)]
 enum CliKind { Device, Circuit }
+#[derive(Clone, Copy, ValueEnum)]
+enum CliNamespace { V1, Test }
+
+impl From<CliNamespace> for Namespace {
+    fn from(value: CliNamespace) -> Self {
+        match value { CliNamespace::V1 => Self::V1, CliNamespace::Test => Self::Test }
+    }
+}
 
 fn user_name(s: &str) -> Result<(), Error> {
     if !(1..=64).contains(&s.len()) || !s.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b)) {
@@ -97,6 +112,10 @@ fn measure_offline() -> Result<(), Error> {
     for (label, kind, len) in [
         ("CAPTURE/max-assertion", "galaxy/v1/capture", 901),
         ("CAPTURE/450-byte-assertion", "galaxy/v1/capture", 751),
+        // Real App Attest assertions observed on device: 141/142 bytes.
+        ("CAPTURE/142-byte-assertion", "galaxy/v1/capture", 443),
+        // Dev-unattested: 0xF0 ‖ ed25519 signature[64].
+        ("CAPTURE/dev-unattested", "galaxy/v1/capture", 366),
         ("PROOF", "galaxy/v1/proof", 361),
     ] {
         let payload = vec![0; len];
@@ -227,7 +246,7 @@ async fn run(args: Args) -> Result<(), Error> {
             show_json(&json!({"hash":hex::encode_upper(tx.hash),"validated":tx.validated,"ledger_index":tx.ledger_index,
                 "close_time_unix":tx.close_time,"tx":codec::decode(&tx.tx_blob)?,"meta":codec::decode(&tx.meta_blob)?}))?;
         }
-        Command::PublishBundle { kind, file } => {
+        Command::PublishBundle { kind, file, namespace } => {
             let config = read_config(&args.config)?;
             let rpc = rpc_client(&config)?;
             let store = store(&args.wallet)?;
@@ -236,14 +255,15 @@ async fn run(args: Args) -> Result<(), Error> {
             let mut bytes = Vec::new();
             File::open(file)?.take((MAX_BUNDLE_BYTES + 1) as u64).read_to_end(&mut bytes)?;
             let kind = match kind { CliKind::Device => BundleKind::Device, CliKind::Circuit => BundleKind::Circuit };
-            let result = publish_bundle(&sm, &wallet, kind, &bytes, delay).await?;
+            let result = publish_bundle_in(&sm, &wallet, (*namespace).into(), kind, &bytes, delay).await?;
             show_json(&json!({"manifest_tx":hex::encode_upper(result.manifest_tx),
                 "chunk_txs":result.chunk_txs.into_iter().map(hex::encode_upper).collect::<Vec<_>>()}))?;
         }
-        Command::FetchBundle { manifest_tx, output } => {
+        Command::FetchBundle { manifest_tx, output, namespace } => {
             let config = read_config(&args.config)?;
             let rpc = rpc_client(&config)?;
-            let bundle = fetch_bundle(&rpc, &hash(manifest_tx)?, config.network_id.as_u32(), config.allow_mainnet).await?;
+            let bundle = fetch_bundle_in(&rpc, &hash(manifest_tx)?, config.network_id.as_u32(), config.allow_mainnet,
+                (*namespace).into()).await?;
             if let Some(path) = output { fs::write(path, bundle.bytes)?; }
             else { std::io::stdout().lock().write_all(&bundle.bytes)?; }
         }
