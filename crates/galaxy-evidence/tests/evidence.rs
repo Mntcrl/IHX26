@@ -90,6 +90,11 @@ fn profile_vector(e: &Evidence) -> Value {
         "meta_elements": decimals(&meta),
         "components": decimals(&c.components),
         "evidence_root": fr_to_dec(&c.evidence_root),
+        "bundle_sha256": sha(&bundle::encode(&EvidenceBundle {
+            evidence: e.clone(),
+            salts: fixed_salts(),
+            capture_state: b"state-v1".to_vec(),
+        }).unwrap()),
     })
 }
 
@@ -153,7 +158,7 @@ fn ingest_quantization() {
     assert_eq!(e.imu.g0, [0, -1_046_479, -52_429]);
     assert_eq!(e.imu.a_peak_mg, 37);
     // Depth: NaN → 0, conf copied; meta from header and timestamps.
-    assert_eq!(e.frames[1].depth_mm[0], 0);
+    assert_eq!(e.frames[1].depth_mm[4], 0);
     assert_eq!(e.frames[1].depth_mm[2 * 256 + 128], 1500);
     assert_eq!(e.frames[1].conf[2 * 256 + 128], 2);
     assert_eq!(e.meta.frame_offsets_ms, [-150, 0, 150]);
@@ -172,8 +177,7 @@ fn canonical_image_per_profile() {
     assert_eq!(decode_any(&jpeg.image.encoded).unwrap().raster, jpeg.image.rgb);
     assert_ne!(jpeg.image.rgb, png.image.rgb);
     assert_eq!(jpeg.frames[1].rgb, analysis_raster(&jpeg.image.rgb).unwrap());
-    assert_eq!(jpeg.frames[0], png.frames[0]);
-    assert_eq!(jpeg.frames[2], png.frames[2]);
+    assert!(jpeg.frames[0] == png.frames[0] && jpeg.frames[2] == png.frames[2]);
     assert_eq!(jpeg.meta.image_profile, ImageProfile::JpegV1);
     assert_eq!(commit(jpeg, &fixed_salts()).rgb_root, rgb_root_from_raster(&jpeg.image.rgb).unwrap());
     assert_eq!(commit(png, &fixed_salts()).rgb_root, rgb_root_from_raster(&png.image.rgb).unwrap());
@@ -259,7 +263,7 @@ fn ingest_rejects_malformed_captures() {
     assert!(matches!(header(|h| { h.as_object_mut().unwrap().remove("claimed_time_ms"); }), Err(IngestError::Header { .. })));
     assert!(matches!(header(|h| { h["frames"].as_array_mut().unwrap().pop(); }), Err(IngestError::Header { .. })));
     assert!(matches!(header(|h| h["frames"][0]["intrinsics"][0] = Value::Null), Err(IngestError::Header { .. })));
-    assert!(matches!(header(|h| h["frames"].as_array_mut().unwrap().swap(0, 2)), Err(_)));
+    assert!(header(|h| h["frames"].as_array_mut().unwrap().swap(0, 2)).is_err());
     assert!(matches!(header(|h| h["frames"][1]["role"] = json!("centre")), Err(IngestError::Frames)));
     assert!(matches!(header(|h| h["frames"][2]["timestamp_s"] = json!(5000.1)), Err(IngestError::Frames)));
     assert!(matches!(header(|h| h["frames"][0]["timestamp_s"] = json!(-1.0)), Err(IngestError::Quantization(_))));
@@ -289,7 +293,7 @@ fn ingest_rejects_malformed_captures() {
     assert!(reordered == *evidence(ImageProfile::PngV1), "IMU samples are time-ordered");
     // Aggregates and device fields.
     assert!(matches!(header(|h| h["bluetooth"]["n_unique"] = json!(11)), Err(IngestError::Evidence(ValidationError::Bluetooth))));
-    assert!(matches!(header(|h| h["noise"]["stats"] = json!([0; 17])), Err(IngestError::Evidence(ValidationError::Noise))));
+    assert!(matches!(header(|h| h["noise"]["stats"] = json!(vec![0; 17])), Err(IngestError::Evidence(ValidationError::Noise))));
     assert!(matches!(header(|h| h["device"]["app_build"] = json!("4a2")), Err(IngestError::Evidence(ValidationError::Meta))));
     assert!(matches!(header(|h| h["device"]["app_build"] = json!("99999999999")), Err(IngestError::Evidence(ValidationError::Meta))));
     let missing = header(|h| {

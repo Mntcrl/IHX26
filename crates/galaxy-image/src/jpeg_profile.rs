@@ -185,7 +185,7 @@ fn exif_orientation(tiff: &[u8]) -> Result<(), ImageError> {
         return Err(Invalid("EXIF TIFF magic"));
     }
     let ifd = u32_at(4)? as usize;
-    if ifd < 8 || ifd % 2 != 0 {
+    if ifd < 8 || !ifd.is_multiple_of(2) {
         return Err(Invalid("EXIF IFD0 offset"));
     }
     let count = usize::from(u16_at(ifd)?);

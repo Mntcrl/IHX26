@@ -45,7 +45,7 @@ const fn coverage(position: usize) -> (usize, [u32; 3]) {
     (first, [first_weight as u32, second_weight as u32, (remaining - second_weight) as u32])
 }
 
-const X_COVERAGE: [(usize, [u32; 3]); WIDTH] = {
+static X_COVERAGE: [(usize, [u32; 3]); WIDTH] = {
     let mut coverage_by_x = [(0, [0; 3]); WIDTH];
     let mut x = 0;
     while x < WIDTH {

@@ -175,7 +175,7 @@ fn png_rejected_layouts() {
     }
     let chunks = png_chunks(&encoded);
     // IHDR profile fields.
-    for (index, value) in [(3, 1u8), (7, 0), (8, 16), (9, 6), (10, 1), (11, 1), (12, 1)] {
+    for (index, value) in [(3, 1u8), (6, 2), (7, 1), (8, 16), (9, 6), (10, 1), (11, 1), (12, 1)] {
         let mut changed = png_chunks(&encoded);
         changed[0].data[index] = value;
         unsupported(decode_any(&png_assemble(&changed)));

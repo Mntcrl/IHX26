@@ -92,7 +92,7 @@ impl SyntheticCapture {
         for v in 0..ANALYSIS_HEIGHT {
             for u in 0..ANALYSIS_WIDTH {
                 let border = u < 2 || v < 2 || u >= ANALYSIS_WIDTH - 2 || v >= ANALYSIS_HEIGHT - 2;
-                let value = if border && (u + v + f) % 5 == 0 {
+                let value = if border && (u + v + f).is_multiple_of(5) {
                     f32::NAN
                 } else {
                     (self.depth_m + 0.0004 * (u as f64 - 128.0)) as f32
