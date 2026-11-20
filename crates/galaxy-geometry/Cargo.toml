@@ -1,0 +1,36 @@
+[package]
+name = "galaxy-geometry"
+version = "0.1.0"
+description = "XRPL Galaxy: galaxy-geometry"
+publish = false
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+galaxy-crypto.workspace = true
+galaxy-evidence.workspace = true
+galaxy-image.workspace = true
+galaxy-protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+ethnum = "=1.5.3"
+libm = "=0.2.16"
+
+[features]
+cli = ["dep:clap", "dep:hex"]
+
+[dependencies.clap]
+workspace = true
+optional = true
+
+[dependencies.hex]
+workspace = true
+optional = true
+
+[[bin]]
+name = "geometry-tool"
+path = "src/bin/geometry-tool.rs"
+required-features = ["cli"]
+
