@@ -5,7 +5,8 @@ import simd
 
 nonisolated enum CaptureIssue: UInt32, CaseIterable, Sendable {
     case missingFrame = 1, tracking = 2, missingDepth = 4, imageFormat = 8
-    case insufficientMotion = 16, motionUnavailable = 32, cameraUnavailable = 64
+    // 16 was "insufficient motion": camera translation no longer gates a capture (spec §8.5 parallax).
+    case motionUnavailable = 32, cameraUnavailable = 64
 
     var message: String {
         switch self {
@@ -13,7 +14,6 @@ nonisolated enum CaptureIssue: UInt32, CaseIterable, Sendable {
         case .tracking: "ARKit tracking was not normal in all three selected frames."
         case .missingDepth: "A selected frame lacked usable 256×192 LiDAR depth and confidence planes."
         case .imageFormat: "A selected frame did not provide the 1920×1440 full-range 420f format."
-        case .insufficientMotion: "Insufficient sideways motion (under 3 mm between the center and a neighboring frame)."
         case .motionUnavailable: "The synchronized 100 Hz CoreMotion window was unavailable or incomplete."
         case .cameraUnavailable: "The camera or unsmoothed LiDAR capture was unavailable."
         }
@@ -26,7 +26,6 @@ nonisolated enum CaptureIssue: UInt32, CaseIterable, Sendable {
         case .tracking: "tracking"
         case .missingDepth: "no depth"
         case .imageFormat: "format"
-        case .insufficientMotion: "low motion"
         case .motionUnavailable: "no IMU"
         case .cameraUnavailable: "camera"
         }

@@ -100,7 +100,7 @@ struct CaptureScreen: View {
         Button(action: capture.capture) {
             ZStack {
                 Circle().stroke(.white, lineWidth: 4).frame(width: 74, height: 74)
-                Circle().fill(capture.canCapture ? motionColor.opacity(0.9) : .gray.opacity(0.5)).frame(width: 60, height: 60)
+                Circle().fill(capture.canCapture ? Color.white.opacity(0.92) : .gray.opacity(0.5)).frame(width: 60, height: 60)
             }
         }
         .disabled(!capture.canCapture)
@@ -140,35 +140,27 @@ struct CaptureScreen: View {
         }
     }
 
-    private enum MotionGrade { case unknown, good, tooSlow, tooFast, rotating }
+    private enum MotionGrade { case unknown, steady, tooFast, rotating }
 
-    /// t− and t+ are chosen up to 0.5 s from t0 (largest displacement), and the policy needs ≥ 3 mm
-    /// on each side: ≥ 8 mm/s of steady sideways motion is enough. Very fast motion breaks tracking.
+    /// Informational only: a capture never requires camera motion. Translation, when present, adds
+    /// parallax evidence (reported by the verifier); very fast motion or rotation can break tracking.
     private var motionGrade: MotionGrade {
         guard let speed = capture.speedMmPerSecond, let turn = capture.rotationDegPerSecond else { return .unknown }
         if speed > 150 { return .tooFast }
-        if turn > 15 { return .rotating }
-        if speed < 8 { return .tooSlow }
-        return .good
+        if turn > 30 { return .rotating }
+        return .steady
     }
 
     private var motionText: String {
         guard let speed = capture.speedMmPerSecond, let turn = capture.rotationDegPerSecond else { return "—" }
-        let value = String(format: "%.0f mm/s %.0f°/s", speed, turn)
-        switch motionGrade {
-        case .tooFast: return value + " fast"
-        case .tooSlow: return value + " slow"
-        case .rotating: return value + " turn"
-        case .good, .unknown: return value
-        }
+        return String(format: "%.0f mm/s %.0f°/s", speed, turn)
     }
 
     private var motionColor: Color {
         switch motionGrade {
-        case .good: .green
-        case .tooSlow, .rotating: .yellow
+        case .steady, .unknown: .white
+        case .rotating: .yellow
         case .tooFast: .red
-        case .unknown: .gray
         }
     }
 

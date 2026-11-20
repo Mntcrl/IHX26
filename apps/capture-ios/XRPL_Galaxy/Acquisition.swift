@@ -296,8 +296,6 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
         if frames.contains(where: { $0.tracking != 2 }) { issues.append(.tracking) }
         if frames.contains(where: { $0.pixels == nil }) { issues.append(.imageFormat) }
         if frames.contains(where: { $0.depth == nil }) { issues.append(.missingDepth) }
-        let minBaseline = min(Self.baseline(minus, window.center), Self.baseline(plus, window.center))
-        if !minBaseline.isFinite || minBaseline < 0.003 { issues.append(.insufficientMotion) }
         let samples = motion.snapshot(start: minus.timestamp, end: plus.timestamp)
         if samples == nil { issues.append(.motionUnavailable) }
         guard !issues.contains(.imageFormat), !issues.contains(.missingDepth), let samples else {
