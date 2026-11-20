@@ -1,0 +1,38 @@
+[package]
+name = "galaxy-xrpl"
+version = "0.1.0"
+description = "XRPL Galaxy: galaxy-xrpl"
+publish = false
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+native = ["dep:clap", "dep:futures-util", "dep:reqwest", "dep:tokio", "dep:tokio-tungstenite"]
+
+[dependencies]
+galaxy-protocol.workspace = true
+ed25519-dalek.workspace = true
+hex.workspace = true
+ripemd.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+bs58 = "=0.5.1"
+zeroize = "=1.9.2"
+time = { version = "=0.3.47", default-features = false, features = ["parsing"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+getrandom.workspace = true
+clap = { workspace = true, optional = true }
+futures-util = { version = "=0.3.34", optional = true, features = ["sink"] }
+reqwest = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["io-util", "macros", "net", "rt", "time"] }
+tokio-tungstenite = { workspace = true, optional = true }
+
+[[bin]]
+name = "xrpl-tool"
+path = "src/bin/xrpl-tool.rs"
+required-features = ["native"]
