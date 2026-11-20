@@ -1,0 +1,11 @@
+node_modules/
+.venv/
+.env
+*.seed
+wallets.json
+evm/out/
+evm/cache/
+crypto/target/
+__pycache__/
+.omp/
+.agents/
