@@ -17,6 +17,10 @@ Format: Context / Decision / Consequences. Ranges per agent are listed in spec Â
 | [0011](0011-field-and-limb-encoding.md) | Field and limb encoding |
 | [0012](0012-sampling-algorithm.md) | Sampling algorithm details |
 | [0013](0013-wire-strictness.md) | Wire strictness rules |
+| [0020](0020-jpeg-reference-decoder.md) | jpeg-v1 reference decoder and cross-target determinism |
+| [0021](0021-arkit-ingest-quantization.md) | ARKit ingest quantization |
+| [0022](0022-bluetooth-noise-meta-layouts.md) | BLUETOOTH / NOISE / META component layouts |
+| [0023](0023-analysis-raster-alignment.md) | Analysis raster alignment |
 | [0030](0030-m-cd-device-camera-axes.md) | Calibration of m_cd (device â†’ CV camera axes) |
 | [0040](0040-circuit-core-composition.md) | Circuit core composition (galaxy-pc-v1m) |
 | [0041](0041-witness-input-builder.md) | Witness input schema and `galaxy-witness` |

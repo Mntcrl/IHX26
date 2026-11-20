@@ -6,7 +6,7 @@ Status: accepted (2026-11-20).
 The system combines several trust sources with different strengths: XRPL consensus, the RPC endpoint used to read it, optional discovery nodes, the Groth16 setup, Apple App Attest, and the physical sensors. The legacy design trusted a project backend and a committee coordinator (recon §7, "Incompatible with a no-coordinator architecture").
 
 ## Decision
-- XRPL Testnet consensus orders and timestamps CAPTURE/PROOF transactions and provides the unpredictable future-ledger challenge (`Lsel = L0 + 5`).
+- XRPL Testnet consensus orders and timestamps CAPTURE/PROOF transactions and supplies the challenge ledger `Lsel = L0 + 5`, whose hash is not known when the CAPTURE is committed. This is a practical sampling source, not a proven unbiased randomness beacon: validators can influence ledger contents, and a prover can abandon unfavourable captures (see [threat model](../security/threat-model.md)).
 - RPC trust is explicit: reports list `rpc_endpoints` and `rpc_trust: remote|local`; a local rippled can be configured for full independence.
 - Discovery nodes (`galaxy-node`) only cache and index; they never decide validity, and node or peer data never affects a verdict (spec §14, §17).
 - The verifying key is trusted only from explicit accepted-circuit configuration (`circuit_id`, `vk_digest`, `policy_id`, registration tx). The development setup is labelled `development-single-party`.
