@@ -259,6 +259,7 @@
 				INFOPLIST_FILE = AmbientConfiguration.plist;
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Bluetooth helps describe the ambient radio environment. Scans store only aggregate signal statistics.";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Fieldnote uses the camera to capture photos with live LiDAR depth sensing.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Sends encrypted proof shares to the verification committee on the local network.";
 				INFOPLIST_KEY_NSMotionUsageDescription = "Motion measurements record how the phone moved around each spatial capture.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Save your captured scans to your photo library.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -296,6 +297,7 @@
 				INFOPLIST_FILE = AmbientConfiguration.plist;
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Bluetooth helps describe the ambient radio environment. Scans store only aggregate signal statistics.";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Fieldnote uses the camera to capture photos with live LiDAR depth sensing.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Sends encrypted proof shares to the verification committee on the local network.";
 				INFOPLIST_KEY_NSMotionUsageDescription = "Motion measurements record how the phone moved around each spatial capture.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Save your captured scans to your photo library.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;

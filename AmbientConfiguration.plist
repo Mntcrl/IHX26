@@ -8,5 +8,7 @@
     <string>$(AMBIENT_HALF_WINDOW_SECONDS)</string>
     <key>AmbientPostWindowSeconds</key>
     <string>$(AMBIENT_POST_WINDOW_SECONDS)</string>
+    <key>POVCoordinatorURL</key>
+    <string>$(POV_COORDINATOR_URL)</string>
 </dict>
 </plist>

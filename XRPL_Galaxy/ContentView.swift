@@ -232,8 +232,9 @@ private final class CameraModel: ObservableObject {
         return value.isFinite && value > 0 ? value : nil
     }
 
-    func capture() {
+    func capture(pov: POVModel) {
         guard !isCapturing else { return }
+        let t0 = pov.freshT0() // T0 must be known before the shutter frame is read
         guard let session, let frame = session.currentFrame, let viewport else {
             announce("Camera is not ready")
             return
@@ -283,6 +284,11 @@ private final class CameraModel: ObservableObject {
                 captures.insert(capture, at: 0)
                 isCapturing = false
                 announce("Saved to Scans")
+                if let t0, let fdepth = capture.depthURL, let json = capture.jsonURL {
+                    Task { await pov.submit(jpegURL: capture.url, fdepthURL: fdepth, jsonURL: json, evidenceRoot: root, t0: t0) }
+                } else {
+                    announce("Saved locally (verification offline)")
+                }
                 async let receipt = captureSession.submit(root: root, window: window)
                 await Self.saveToPhotos(capture.url)
                 if let result = await receipt, result.xrplAnchoringVerified { announce("XRPL anchor verified") }
@@ -905,6 +911,7 @@ private struct ShareSheet: UIViewControllerRepresentable {
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var model = CameraModel()
+    @StateObject private var pov = POVModel()
     @State private var showLibrary = false
     @State private var showSettings = false
 
@@ -941,8 +948,12 @@ struct ContentView: View {
                 Button(model.roomMeshOn ? "Hide reconstructed mesh" : "Show reconstructed mesh") { model.roomMeshOn.toggle() }
                 Button(model.fovOn ? "Hide FOV rays" : "Show FOV rays") { model.fovOn.toggle() }
                 Button(model.showDepth ? "Hide depth map" : "Show depth map") { model.showDepth.toggle() }
+                Button("Verification settings") { pov.showSettings = true }
                 Button("Cancel", role: .cancel) {}
             }
+            .task { await pov.start() }
+            .sheet(isPresented: $pov.showSettings) { POVSettingsSheet(pov: pov) }
+            .sheet(item: $pov.result) { POVResultSheet(pov: pov, attempt: $0) }
         }
     }
 
@@ -954,6 +965,7 @@ struct ContentView: View {
                         .font(.system(size: 13, weight: .bold, design: .rounded))
                         .tracking(2.1)
                     statusPill
+                    POVStatusPill(pov: pov)
                 }
                 Spacer()
                 Button { showSettings = true } label: {
@@ -1041,7 +1053,7 @@ struct ContentView: View {
                 Button { showLibrary = true } label: { libraryThumb }
                     .accessibilityLabel("Open scans")
                 Spacer()
-                Button { model.capture() } label: {
+                Button { model.capture(pov: pov) } label: {
                     ZStack {
                         Circle().stroke(.white.opacity(0.75), lineWidth: 2).frame(width: 74, height: 74)
                         Circle().fill(model.isCapturing ? CameraStyle.lime.opacity(0.6) : .white).frame(width: 60, height: 60)
