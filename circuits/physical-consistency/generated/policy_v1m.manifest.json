@@ -1,6 +1,6 @@
 {
   "generator": "scripts/circuit-gen-policy.mjs",
   "name": "galaxy-pc-v1m",
-  "policy_canonical_sha256": "3a345b5a3b98fc4d9d49d4e5a799ef48dac7843077ca68476b7ffdcc858ecdc5",
-  "policy_id": "ef744a7f28dc606b117dbab34899753a218cd1865b4fc69a9739ac9c10a7afac"
+  "policy_canonical_sha256": "9b45783f60592c51ee2162685f74248af053ce64ba1aed256afce0c05c62b219",
+  "policy_id": "b27f0afc072bd1382d49f2313ed3f4dd7de69a00cae0a517b95ab8d20b8a6aee"
 }

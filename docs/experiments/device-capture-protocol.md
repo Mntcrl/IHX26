@@ -12,8 +12,8 @@ Purpose: collect labelled real GXRW captures for the scene classes of the user b
 
 1. Pick the scene class in the top-left menu (it is remembered between shots).
 2. Frame the subject at 0.3–3 m (depth chip ideally > 50 %).
-3. Slide the phone slowly and steadily sideways, about 2–8 cm/s, without turning it; the motion chip and the shutter turn green at 4–40 mm and ≤ 4° per 250 ms.
-4. Press the shutter while moving and keep moving for one more second (t+ is collected up to 0.5 s after the shutter).
+3. Hold the phone naturally and press the shutter; no deliberate sweep is needed. Normal hand wobble is enough: the policy needs ≥ 0.5 mm of camera displacement on each side of t0 within 100–500 ms, and the app picks the neighbouring frames with the largest displacement. The motion chip is informational (yellow "still" when the phone rests on a support, red when moving too fast for tracking).
+4. Keep framing for about half a second after the press (t+ is collected up to 0.5 s after the shutter).
 5. Every attempt is saved automatically: `Documents/galaxy-fixtures/<uuid>.gxrw` when the raw capture was frozen, and always `<uuid>.label.json` (class, state, reasons, motion and depth summary). Do not retry silently: every attempt counts in the statistics.
 
 After a session: `scripts/ios.sh pull-fixtures raw` copies the exports to `fixtures/real/capture-ios/` (gitignored). Nothing on the phone is deleted by this step.
@@ -36,7 +36,7 @@ Target ≥ 10 captures per class, from several positions and distances. "Expecte
 | 10 | genuine flat wall | plain or textured real wall, no screen | consistent or inconclusive (planar real scene) |
 | 11 | reflective surfaces | mirror, glass cabinet, glossy floor | measure |
 | 12 | low-texture scene | white wall, uniform tabletop | measure (tracking/inconclusive expected) |
-| 13 | low-motion capture | phone held as still as possible while pressing the shutter; also lying still on a desk | INCONCLUSIVE (insufficient motion) |
+| 13 | low-motion capture | (a) hand-held as still as possible; (b) phone resting on a desk or support | (a) passes the 0.5 mm floor (measured ~3 mm); (b) INCONCLUSIVE (no motion) |
 | 14 | dynamic scene | people walking, moving leaves, a fan | measure |
 
 Controlled substitution of committed depth or RGB observations is done offline on copies of these fixtures by the evidence/geometry tests; the app never produces such captures.

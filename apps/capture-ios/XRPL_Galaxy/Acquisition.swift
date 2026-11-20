@@ -279,6 +279,9 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
         (Double(simd_length(a.position - b.position)) * 1_000_000).rounded() / 1_000_000
     }
 
+    /// Mirrors `motion.baseline_min_um` of policies/galaxy-pc-v1m.json (spec §8.7).
+    static let baselineMinMeters = 0.0005
+
     private func freeze() async {
         guard let window = pending, let store, var row = record, row.state == .acquiring else { return }
         pending = nil
@@ -296,6 +299,10 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
         if frames.contains(where: { $0.tracking != 2 }) { issues.append(.tracking) }
         if frames.contains(where: { $0.pixels == nil }) { issues.append(.imageFormat) }
         if frames.contains(where: { $0.depth == nil }) { issues.append(.missingDepth) }
+        // Policy motion floor (spec §8.5, baseline_min_um = 500): normal hand wobble reaches it;
+        // a phone resting on a support does not.
+        let minBaseline = min(Self.baseline(minus, window.center), Self.baseline(plus, window.center))
+        if !minBaseline.isFinite || minBaseline < Self.baselineMinMeters { issues.append(.noMotion) }
         let samples = motion.snapshot(start: minus.timestamp, end: plus.timestamp)
         if samples == nil { issues.append(.motionUnavailable) }
         guard !issues.contains(.imageFormat), !issues.contains(.missingDepth), let samples else {

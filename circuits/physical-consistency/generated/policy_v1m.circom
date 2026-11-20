@@ -40,7 +40,7 @@ function POL_cx_max_q16() { return 10223616; }
 function POL_cy_min_q16() { return 4980736; }
 function POL_cy_max_q16() { return 7602176; }
 function POL_ortho_tol_q60() { return 1125899906842624; }
-function POL_baseline_min_um() { return 3000; }
+function POL_baseline_min_um() { return 500; }
 function POL_rot_max_q30() { return 751619277; }
 function POL_imu_min_samples() { return 5; }
 function POL_imu_dt_max_us() { return 25000; }

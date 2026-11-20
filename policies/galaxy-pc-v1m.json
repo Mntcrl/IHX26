@@ -61,7 +61,7 @@
     "ortho_tol_q60": 1125899906842624
   },
   "motion": {
-    "baseline_min_um": 3000,
+    "baseline_min_um": 500,
     "rot_max_q30": 751619277,
     "imu_min_samples": 5,
     "imu_dt_max_us": 25000,

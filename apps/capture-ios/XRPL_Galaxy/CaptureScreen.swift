@@ -140,26 +140,28 @@ struct CaptureScreen: View {
         }
     }
 
-    private enum MotionGrade { case unknown, steady, tooFast, rotating }
+    private enum MotionGrade { case unknown, steady, resting, tooFast, rotating }
 
-    /// Informational only: a capture never requires camera motion. Translation, when present, adds
-    /// parallax evidence (reported by the verifier); very fast motion or rotation can break tracking.
+    /// Normal hand wobble is enough (policy floor 0.5 mm per side within 0.1–0.5 s, roughly
+    /// ≥ 1 mm/s); only a phone resting on a support is flagged. Very fast motion breaks tracking.
     private var motionGrade: MotionGrade {
         guard let speed = capture.speedMmPerSecond, let turn = capture.rotationDegPerSecond else { return .unknown }
         if speed > 150 { return .tooFast }
         if turn > 30 { return .rotating }
+        if speed < 1 { return .resting }
         return .steady
     }
 
     private var motionText: String {
         guard let speed = capture.speedMmPerSecond, let turn = capture.rotationDegPerSecond else { return "—" }
-        return String(format: "%.0f mm/s %.0f°/s", speed, turn)
+        let value = String(format: "%.1f mm/s %.0f°/s", speed, turn)
+        return motionGrade == .resting ? value + " still" : value
     }
 
     private var motionColor: Color {
         switch motionGrade {
         case .steady, .unknown: .white
-        case .rotating: .yellow
+        case .resting, .rotating: .yellow
         case .tooFast: .red
         }
     }
