@@ -162,7 +162,7 @@ struct POVSettingsSheet: View {
         NavigationStack {
             Form {
                 Section("Committee coordinator") {
-                    TextField("http://10.164.228.104:8080", text: $draftURL)
+                    TextField("http://10.164.228.104:8088", text: $draftURL)
                         .keyboardType(.URL)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()

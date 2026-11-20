@@ -7,7 +7,7 @@ import SwiftUI
 @MainActor
 final class POVModel: ObservableObject {
     static let coordinatorDefaultsKey = "pov.coordinatorURL"
-    static let defaultCoordinatorURL = "http://10.164.228.104:8080"
+    static let defaultCoordinatorURL = "http://10.164.228.104:8088"
     static let defaultRPC = "https://s.altnet.rippletest.net:51234/"
     /// A prefetched T0 older than this at the shutter is not used (C2).
     static let maxT0AgeSeconds: TimeInterval = 20

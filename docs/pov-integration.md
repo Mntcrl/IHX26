@@ -95,7 +95,7 @@ If the Local Network prompt still does not appear (LAN requests fail with `-1009
 Next to the other `?=` variables:
 
 ```make
-POV_COORDINATOR_URL ?= http://10.164.228.104:8080
+POV_COORDINATOR_URL ?= http://10.164.228.104:8088
 ```
 
 and pass it to `xcodebuild` in the `build` target (next to `AMBIENT_POST_WINDOW_SECONDS=…`):
@@ -108,7 +108,7 @@ and pass it to `xcodebuild` in the `build` target (next to `AMBIENT_POST_WINDOW_
 
 1. Unsigned compile check prints `** BUILD SUCCEEDED **`:
    `xcodebuild -target XRPL_Galaxy -sdk iphoneos -configuration Debug CODE_SIGNING_ALLOWED=NO build 2>&1 | grep -E "error:|BUILD (SUCCEEDED|FAILED)"`
-2. `make run POV_COORDINATOR_URL=http://10.164.228.104:8080` installs and launches the app on the iPhone.
+2. `make run POV_COORDINATOR_URL=http://10.164.228.104:8088` installs and launches the app on the iPhone.
 3. Camera settings → "Verification settings" shows a 66-hex-character device public key starting with `02` or `03`
    (Copy puts it on the clipboard). Until the committee coordinator runs on the laptop, the POV status pill shows a
    connection error; that is expected.
