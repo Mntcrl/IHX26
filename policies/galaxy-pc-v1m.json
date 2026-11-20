@@ -1,0 +1,80 @@
+{
+  "name": "galaxy-pc-v1m",
+  "version": 1,
+  "profile": "galaxy-pc-v1m",
+  "structural": {
+    "p": 4294967296,
+    "coefficient_bound": 68719476736,
+    "slots": 16,
+    "central_slots": 8,
+    "blocks_per_slot": 4,
+    "global_hypotheses": 4,
+    "central_hypotheses": 4,
+    "temporal_quadrants": [0, 3],
+    "imu_max": 64
+  },
+  "lidar": {
+    "d_min_mm": 200,
+    "d_max_mm": 5000,
+    "conf_min": 1,
+    "area_min": 64,
+    "eps_log2": 26,
+    "sep_log2": 28,
+    "v_all_min": 128,
+    "v_c_min": 64,
+    "tile_valid_min": 8,
+    "tiles_cov_min": 12,
+    "plane_global_max_pct": 85,
+    "plane_central_max_pct": 80,
+    "tile_out_min": 4,
+    "nonplanar_tiles_min": 6,
+    "nonplanar_tiles_c_min": 3,
+    "strong_min_pct": 10,
+    "strong_tiles_min": 3
+  },
+  "rgb_depth": {
+    "disc_pct": 4,
+    "grad_min_y": 2560,
+    "disc_min": 6,
+    "edge_match_pct": 50
+  },
+  "temporal": {
+    "occ_pm": 50,
+    "dcons_pm": 30,
+    "g_inf_y": 2560,
+    "photo_tol_y": 5120,
+    "t_usable_min": 24,
+    "occ_max_pct": 40,
+    "dok_min_pct": 70,
+    "inf_min": 8,
+    "pok_min_pct": 60
+  },
+  "quality": {
+    "dt_min_us": 80000,
+    "dt_max_us": 600000,
+    "fx_min_q16": 9830400,
+    "fx_max_q16": 17039360,
+    "cx_min_q16": 6553600,
+    "cx_max_q16": 10223616,
+    "cy_min_q16": 4980736,
+    "cy_max_q16": 7602176,
+    "ortho_tol_q60": 1125899906842624
+  },
+  "motion": {
+    "baseline_min_um": 3000,
+    "rot_max_q30": 751619277,
+    "imu_min_samples": 5,
+    "imu_dt_max_us": 25000,
+    "imu_cover_tol_us": 30000,
+    "gyro_tol_urad": 20000,
+    "m_cd": [0, 1, 0, 1, 0, 0, 0, 0, -1],
+    "grav_norm_tol_q40": 109951162778,
+    "grav_cos_milli": 950,
+    "acc_max_mg": 2000
+  },
+  "windows": {
+    "w_cap": 20,
+    "w_proof": 300,
+    "sel_offset": 5
+  }
+}

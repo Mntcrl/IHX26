@@ -1,0 +1,21 @@
+# Example XRPL Devnet configuration (same schema as xrpl-testnet.toml, spec §12).
+# Devnet is reset periodically; refresh inception_ledger with server_info before use.
+
+name = "xrpl-devnet"
+network_id = 2
+json_rpc = "https://s.devnet.rippletest.net:51234/"
+websocket = "wss://s.devnet.rippletest.net:51233/"
+
+# Validated ledger index reported by server_info on s.devnet.rippletest.net
+# at 2026-11-20T19:44Z (network_id 2).
+inception_ledger = 7110286
+
+max_fee_drops = 1000
+allow_mainnet = false
+
+explorer_tx = "https://devnet.xrpl.org/transactions/{hash}"
+explorer_ledger = "https://devnet.xrpl.org/ledgers/{index}"
+
+accepted_app_ids = ["PPS57BF3X3.utcq.XRPL-Galaxy"]
+accepted_attestation_environments = ["development"]
+accepted_circuits = []
