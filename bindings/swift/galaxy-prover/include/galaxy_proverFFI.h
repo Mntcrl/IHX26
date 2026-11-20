@@ -308,6 +308,11 @@ void uniffi_galaxy_prover_fn_free_galaxyprover(uint64_t handle, RustCallStatus *
 uint64_t uniffi_galaxy_prover_fn_constructor_galaxyprover_open(RustBuffer graph_path, RustBuffer zkey_path, uint32_t msm_chunk, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_GALAXY_PROVER_FN_CONSTRUCTOR_GALAXYPROVER_OPEN_PINNED
+#define UNIFFI_FFIDEF_UNIFFI_GALAXY_PROVER_FN_CONSTRUCTOR_GALAXYPROVER_OPEN_PINNED
+uint64_t uniffi_galaxy_prover_fn_constructor_galaxyprover_open_pinned(RustBuffer graph_path, RustBuffer zkey_path, RustBuffer witness_graph_sha256, RustBuffer zkey_sha256, uint32_t msm_chunk, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_GALAXY_PROVER_FN_METHOD_GALAXYPROVER_DOMAIN_SIZE
 #define UNIFFI_FFIDEF_UNIFFI_GALAXY_PROVER_FN_METHOD_GALAXYPROVER_DOMAIN_SIZE
 uint64_t uniffi_galaxy_prover_fn_method_galaxyprover_domain_size(uint64_t ptr, RustCallStatus *_Nonnull out_status
@@ -692,6 +697,12 @@ uint16_t uniffi_galaxy_prover_checksum_constructor_canceltoken_new(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_GALAXY_PROVER_CHECKSUM_CONSTRUCTOR_GALAXYPROVER_OPEN
 #define UNIFFI_FFIDEF_UNIFFI_GALAXY_PROVER_CHECKSUM_CONSTRUCTOR_GALAXYPROVER_OPEN
 uint16_t uniffi_galaxy_prover_checksum_constructor_galaxyprover_open(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_GALAXY_PROVER_CHECKSUM_CONSTRUCTOR_GALAXYPROVER_OPEN_PINNED
+#define UNIFFI_FFIDEF_UNIFFI_GALAXY_PROVER_CHECKSUM_CONSTRUCTOR_GALAXYPROVER_OPEN_PINNED
+uint16_t uniffi_galaxy_prover_checksum_constructor_galaxyprover_open_pinned(void
     
 );
 #endif

@@ -5,10 +5,11 @@
 #
 #   scripts/prover-bench-ios.sh build                 # sync + xcodebuild
 #   scripts/prover-bench-ios.sh install               # install the built app
-#   scripts/prover-bench-ios.sh push <name>...        # copy artifacts to the app's Documents/<name>/
+#   scripts/prover-bench-ios.sh list                  # list Documents/ of the app container (spec §19 before/after)
+#   scripts/prover-bench-ios.sh push <name>...        # copy artifacts to Documents/galaxy-proverbench/<name>/
 #   scripts/prover-bench-ios.sh run <name>[,<name>] [extra app args]   # launch with --autorun, console log
-#   scripts/prover-bench-ios.sh fetch                 # copy Documents/results back and snarkjs-verify
-#   scripts/prover-bench-ios.sh cleanup               # delete artifacts/results from the app container
+#   scripts/prover-bench-ios.sh fetch                 # copy Documents/galaxy-proverbench/results back and snarkjs-verify
+#   scripts/prover-bench-ios.sh cleanup               # fetch, then the app deletes exactly Documents/galaxy-proverbench
 #
 # Artifacts: apps/prover-bench-ios/artifacts/<name>/{<name>.graph.bin,<name>.zkey,input.json,vk.json}.
 # Device access is serialized with /tmp/galaxy-device.lock on the Mac (spec §19).
@@ -22,11 +23,13 @@ APPDIR="$MAC_MIRROR/apps/prover-bench-ios"
 ART_MAC="$MAC_MIRROR/prover-bench-artifacts"
 APP="$APPDIR/build/Release-iphoneos/ProverBench.app"
 RESULTS="$ROOT/apps/prover-bench-ios/artifacts/results"
+# The only device directory this tool writes or deletes (spec §19 device data safety).
+DEV_ROOT="Documents/galaxy-proverbench"
 
 with_device_lock() {
     # Takes the Mac device lock (retrying), runs the command string, releases it.
-    mac_ssh "for i in \$(seq 1 120); do mkdir /tmp/galaxy-device.lock 2>/dev/null && break; sleep 5; done
-             [ -d /tmp/galaxy-device.lock ] || { echo 'device lock busy' >&2; exit 3; }
+    mac_ssh "got=; for i in \$(seq 1 120); do mkdir /tmp/galaxy-device.lock 2>/dev/null && { got=1; break; }; sleep 5; done
+             [ -n \"\$got\" ] || { echo 'device lock busy' >&2; exit 3; }
              trap 'rmdir /tmp/galaxy-device.lock' EXIT
              $1"
 }
@@ -52,6 +55,10 @@ build)
 install)
     with_device_lock "xcrun devicectl device install app --device $DEVICE $(printf %q "$APP") 2>&1 | tail -5"
     ;;
+list)
+    with_device_lock "xcrun devicectl device info files --device $DEVICE --domain-type appDataContainer \
+        --domain-identifier $BUNDLE_ID --subdirectory Documents 2>&1" | tee -a "$ROOT/apps/prover-bench-ios/artifacts/console.log"
+    ;;
 push)
     for name in "$@"; do
         src="$ROOT/apps/prover-bench-ios/artifacts/$name"
@@ -60,6 +67,8 @@ push)
             "$src/$name.graph.bin" "$src/$name.zkey" "$src/input.json" "$MAC_HOST:$ART_MAC/$name/"
         with_device_lock "xcrun devicectl device copy to --device $DEVICE --domain-type appDataContainer \
             --domain-identifier $BUNDLE_ID --source $ART_MAC/$name --destination $DEV_ROOT/$name 2>&1 | tail -3"
+        # Mac disk budget (spec §19): the staging copy is not needed once on the device.
+        mac_ssh "rm -rf $ART_MAC/$name"
     done
     ;;
 run)

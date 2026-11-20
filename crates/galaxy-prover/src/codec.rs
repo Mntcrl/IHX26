@@ -73,7 +73,9 @@ fn get_g2(b: &[u8]) -> Result<G2Affine, ProverError> {
     let y = Fq2::new(get_fq(&b[64..96])?, get_fq(&b[96..128])?);
     let p = G2Affine::new_unchecked(x, y);
     if !p.is_on_curve() || !p.is_in_correct_subgroup_assuming_on_curve() {
-        return Err(invalid("G2 point not on curve or not in the prime-order subgroup"));
+        return Err(invalid(
+            "G2 point not on curve or not in the prime-order subgroup",
+        ));
     }
     Ok(p)
 }
@@ -90,18 +92,33 @@ pub fn encode_proof(proof: &Proof<Bn254>) -> Result<[u8; PROOF_BYTES], ProverErr
 /// Decodes and validates a 256-byte proof.
 pub fn decode_proof(b: &[u8]) -> Result<Proof<Bn254>, ProverError> {
     if b.len() != PROOF_BYTES {
-        return Err(invalid(format!("proof must be {PROOF_BYTES} bytes, got {}", b.len())));
+        return Err(invalid(format!(
+            "proof must be {PROOF_BYTES} bytes, got {}",
+            b.len()
+        )));
     }
-    Ok(Proof { a: get_g1(&b[..64])?, b: get_g2(&b[64..192])?, c: get_g1(&b[192..256])? })
+    Ok(Proof {
+        a: get_g1(&b[..64])?,
+        b: get_g2(&b[64..192])?,
+        c: get_g1(&b[192..256])?,
+    })
 }
 
 /// Encodes a verifying key into the spec §9 VK bytes.
 pub fn encode_vk(vk: &VerifyingKey<Bn254>) -> Result<Vec<u8>, ProverError> {
-    let n_public = vk.gamma_abc_g1.len().checked_sub(1).ok_or_else(|| invalid("empty IC"))?;
+    let n_public = vk
+        .gamma_abc_g1
+        .len()
+        .checked_sub(1)
+        .ok_or_else(|| invalid("empty IC"))?;
     let mut out = Vec::with_capacity(6 + 64 + 3 * 128 + 64 * (n_public + 1));
     out.push(VK_VERSION);
     out.push(CURVE_BN254);
-    out.extend_from_slice(&u32::try_from(n_public).map_err(|_| invalid("n_public"))?.to_be_bytes());
+    out.extend_from_slice(
+        &u32::try_from(n_public)
+            .map_err(|_| invalid("n_public"))?
+            .to_be_bytes(),
+    );
     put_g1(&mut out, &vk.alpha_g1)?;
     put_g2(&mut out, &vk.beta_g2)?;
     put_g2(&mut out, &vk.gamma_g2)?;
@@ -137,8 +154,16 @@ pub fn decode_vk(b: &[u8]) -> Result<VerifyingKey<Bn254>, ProverError> {
     let gamma_g2 = get_g2(&b[at + 128..at + 256])?;
     let delta_g2 = get_g2(&b[at + 256..at + 384])?;
     at += 384;
-    let gamma_abc_g1 = (0..=n_public).map(|_| g1(b, &mut at)).collect::<Result<Vec<_>, _>>()?;
-    Ok(VerifyingKey { alpha_g1, beta_g2, gamma_g2, delta_g2, gamma_abc_g1 })
+    let gamma_abc_g1 = (0..=n_public)
+        .map(|_| g1(b, &mut at))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(VerifyingKey {
+        alpha_g1,
+        beta_g2,
+        gamma_g2,
+        delta_g2,
+        gamma_abc_g1,
+    })
 }
 
 /// Encodes a public input as 32 big-endian bytes.
@@ -160,9 +185,8 @@ pub fn decode_scalar(b: &[u8]) -> Result<Fr, ProverError> {
 
 /// Parses a canonical decimal scalar (no sign, no leading zeros, < r).
 pub fn scalar_from_decimal(s: &str) -> Result<Fr, ProverError> {
-    let canonical = !s.is_empty()
-        && s.bytes().all(|c| c.is_ascii_digit())
-        && (s == "0" || !s.starts_with('0'));
+    let canonical =
+        !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit()) && (s == "0" || !s.starts_with('0'));
     if !canonical {
         return Err(invalid(format!("not a canonical decimal: {s:?}")));
     }
@@ -206,7 +230,10 @@ pub fn proof_to_snarkjs_json(proof: &Proof<Bn254>) -> Result<String, ProverError
 pub fn proof_from_snarkjs_json(json: &str) -> Result<Proof<Bn254>, ProverError> {
     let v: serde_json::Value = serde_json::from_str(json).map_err(|e| invalid(e.to_string()))?;
     let s = |p: &serde_json::Value| -> Result<Fq, ProverError> {
-        fq_from_decimal(p.as_str().ok_or_else(|| invalid("coordinate is not a string"))?)
+        fq_from_decimal(
+            p.as_str()
+                .ok_or_else(|| invalid("coordinate is not a string"))?,
+        )
     };
     let pa = &v["pi_a"];
     let pb = &v["pi_b"];

@@ -44,7 +44,11 @@ pub(crate) struct Phases<'a, 'b> {
 
 impl<'a, 'b> Phases<'a, 'b> {
     pub(crate) fn new(ctl: &'a ProveControl<'b>) -> Self {
-        Self { ctl, timings: Timings::default(), current: None }
+        Self {
+            ctl,
+            timings: Timings::default(),
+            current: None,
+        }
     }
 
     /// Ends the running phase, checks cancellation and starts `phase`.
@@ -133,9 +137,16 @@ fn witness_map(zkey: &Zkey, w: &[Fr]) -> Result<Vec<Fr>, ProverError> {
         .ok_or_else(|| ProverError::InvalidArtifact("unsupported domain size".into()))?;
     let mut a = vec![Fr::zero(); n];
     let mut b = vec![Fr::zero(); n];
-    rayon::join(|| zkey.accumulate_matrix(0, w, &mut a), || zkey.accumulate_matrix(1, w, &mut b));
+    rayon::join(
+        || zkey.accumulate_matrix(0, w, &mut a),
+        || zkey.accumulate_matrix(1, w, &mut b),
+    );
     // C·w = A·w ∘ B·w for a satisfying witness (snarkjs does not store C).
-    let mut c: Vec<Fr> = a.par_iter().zip(b.par_iter()).map(|(x, y)| *x * y).collect();
+    let mut c: Vec<Fr> = a
+        .par_iter()
+        .zip(b.par_iter())
+        .map(|(x, y)| *x * y)
+        .collect();
 
     // Shift to the odd coset: g = primitive 2n-th root of unity.
     let g = Radix2EvaluationDomain::<Fr>::new(2 * n)
@@ -146,9 +157,12 @@ fn witness_map(zkey: &Zkey, w: &[Fr]) -> Result<Vec<Fr>, ProverError> {
         Radix2EvaluationDomain::<Fr>::distribute_powers_and_mul_by_const(v, g, Fr::ONE);
         domain.fft_in_place(v);
     }
-    a.par_iter_mut().zip(b.par_iter()).zip(c.par_iter()).for_each(|((x, y), z)| {
-        *x = *x * y - z;
-    });
+    a.par_iter_mut()
+        .zip(b.par_iter())
+        .zip(c.par_iter())
+        .for_each(|((x, y), z)| {
+            *x = *x * y - z;
+        });
     Ok(a)
 }
 
@@ -198,7 +212,11 @@ pub(crate) fn prove_with_witness(
 
     phases.start(Phase::Finalize)?;
     let g_c = g_a * s + g1_b * r - delta_g1 * (r * s) + l_acc + h_acc;
-    let proof: Proof<Bn254> = Proof { a: g_a.into_affine(), b: g2_b.into_affine(), c: g_c.into_affine() };
+    let proof: Proof<Bn254> = Proof {
+        a: g_a.into_affine(),
+        b: g2_b.into_affine(),
+        c: g_c.into_affine(),
+    };
     if proof.a.xy().is_none() || proof.b.xy().is_none() || proof.c.xy().is_none() {
         return Err(ProverError::SelfCheck("proof element at infinity".into()));
     }

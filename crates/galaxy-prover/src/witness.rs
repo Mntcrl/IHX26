@@ -28,9 +28,16 @@ impl WitnessGraph {
         let map = unsafe { Mmap::map(&file) }
             .map_err(|e| ProverError::Io(format!("mmap {}: {e}", path.display())))?;
         if map.len() < 16 {
-            return Err(ProverError::InvalidArtifact("witness graph: file too short".into()));
+            return Err(ProverError::InvalidArtifact(
+                "witness graph: file too short".into(),
+            ));
         }
         Ok(Self { map })
+    }
+
+    /// The mapped file bytes.
+    pub fn bytes(&self) -> &[u8] {
+        &self.map
     }
 
     /// Size of the graph file in bytes.
@@ -75,7 +82,9 @@ pub fn parse_wtns(b: &[u8]) -> Result<Vec<Fr>, ProverError> {
             .map(|s| u64::from_le_bytes(s.try_into().expect("8 bytes")) as usize)
             .ok_or_else(|| bad("truncated"))?;
         let start = pos + 12;
-        let body = b.get(start..start + len).ok_or_else(|| bad("truncated section"))?;
+        let body = b
+            .get(start..start + len)
+            .ok_or_else(|| bad("truncated section"))?;
         match id {
             1 => {
                 let n8 = rd_u32(start)? as usize;

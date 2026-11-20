@@ -5,7 +5,9 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use crate::{codec, Phase, ProveControl, Progress, Prover, ProverConfig, ProverError};
+use crate::{
+    codec, ArtifactDigests, Phase, Progress, ProveControl, Prover, ProverConfig, ProverError,
+};
 
 /// Phase notifications delivered to Swift (on the proving thread).
 #[uniffi::export(with_foreign)]
@@ -92,12 +94,44 @@ pub struct GalaxyProver {
 impl GalaxyProver {
     /// Opens a witness graph and a snarkjs zkey. `msm_chunk` = 0 selects the default.
     #[uniffi::constructor]
-    pub fn open(graph_path: String, zkey_path: String, msm_chunk: u32) -> Result<Arc<Self>, ProverError> {
+    pub fn open(
+        graph_path: String,
+        zkey_path: String,
+        msm_chunk: u32,
+    ) -> Result<Arc<Self>, ProverError> {
         let mut cfg = ProverConfig::default();
         if msm_chunk > 0 {
             cfg.msm_chunk = msm_chunk as usize;
         }
         let inner = Prover::open_with_config(Path::new(&graph_path), Path::new(&zkey_path), cfg)?;
+        Ok(Arc::new(Self { inner }))
+    }
+
+    /// Opens the artifacts and checks their SHA-256 against the circuit descriptor's
+    /// `witness_graph_sha256` / `zkey_sha256` (32 bytes each); mismatch is `InvalidArtifact`.
+    /// `msm_chunk` = 0 selects the default.
+    #[uniffi::constructor]
+    pub fn open_pinned(
+        graph_path: String,
+        zkey_path: String,
+        witness_graph_sha256: Vec<u8>,
+        zkey_sha256: Vec<u8>,
+        msm_chunk: u32,
+    ) -> Result<Arc<Self>, ProverError> {
+        let digest = |v: &[u8]| {
+            <[u8; 32]>::try_from(v)
+                .map_err(|_| ProverError::InvalidEncoding("SHA-256 digest must be 32 bytes".into()))
+        };
+        let digests = ArtifactDigests {
+            witness_graph_sha256: digest(&witness_graph_sha256)?,
+            zkey_sha256: digest(&zkey_sha256)?,
+        };
+        let mut cfg = ProverConfig::default();
+        if msm_chunk > 0 {
+            cfg.msm_chunk = msm_chunk as usize;
+        }
+        let inner =
+            Prover::open_pinned(Path::new(&graph_path), Path::new(&zkey_path), &digests, cfg)?;
         Ok(Arc::new(Self { inner }))
     }
 
@@ -136,11 +170,17 @@ impl GalaxyProver {
         let (proof, public, timings) = self.inner.prove_ark(&inputs_json, &ctl)?;
         Ok(ProofResult {
             proof: codec::encode_proof(&proof)?.to_vec(),
-            public_inputs: public.iter().map(|v| codec::encode_scalar(v).to_vec()).collect(),
+            public_inputs: public
+                .iter()
+                .map(|v| codec::encode_scalar(v).to_vec())
+                .collect(),
             public_inputs_decimal: public.iter().map(codec::to_decimal).collect(),
             phases: Phase::ALL
                 .iter()
-                .map(|p| PhaseTiming { phase: p.name().to_owned(), seconds: timings.get(*p) })
+                .map(|p| PhaseTiming {
+                    phase: p.name().to_owned(),
+                    seconds: timings.get(*p),
+                })
                 .collect(),
             witness_seconds: timings.witness(),
             prove_seconds: timings.prove(),
@@ -152,7 +192,11 @@ impl GalaxyProver {
 
 /// Verifies a 256-byte proof against spec §9 VK bytes and 32-byte public inputs.
 #[uniffi::export]
-pub fn verify_proof(vk_bytes: Vec<u8>, public_inputs: Vec<Vec<u8>>, proof: Vec<u8>) -> Result<bool, ProverError> {
+pub fn verify_proof(
+    vk_bytes: Vec<u8>,
+    public_inputs: Vec<Vec<u8>>,
+    proof: Vec<u8>,
+) -> Result<bool, ProverError> {
     let public = public_inputs
         .iter()
         .map(|b| <[u8; 32]>::try_from(b.as_slice()))

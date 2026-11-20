@@ -862,6 +862,24 @@ public static func `open`(graphPath: String, zkeyPath: String, msmChunk: UInt32)
 })
 }
     
+    /**
+     * Opens the artifacts and checks their SHA-256 against the circuit descriptor's
+     * `witness_graph_sha256` / `zkey_sha256` (32 bytes each); mismatch is `InvalidArtifact`.
+     * `msm_chunk` = 0 selects the default.
+     */
+public static func openPinned(graphPath: String, zkeyPath: String, witnessGraphSha256: Data, zkeySha256: Data, msmChunk: UInt32)throws  -> GalaxyProver  {
+    return try  FfiConverterTypeGalaxyProver_lift(try rustCallWithError(FfiConverterTypeProverError_lift) {
+        uniffiCallStatus in
+    uniffi_galaxy_prover_fn_constructor_galaxyprover_open_pinned(
+        FfiConverterString.lower(graphPath),
+        FfiConverterString.lower(zkeyPath),
+        FfiConverterData.lower(witnessGraphSha256),
+        FfiConverterData.lower(zkeySha256),
+        FfiConverterUInt32.lower(msmChunk),uniffiCallStatus
+    )
+})
+}
+    
 
     
     /**
@@ -1758,6 +1776,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_galaxy_prover_checksum_constructor_galaxyprover_open() != 58443) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_galaxy_prover_checksum_constructor_galaxyprover_open_pinned() != 33477) {
         return InitializationResult.apiChecksumMismatch
     }
 

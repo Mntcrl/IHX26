@@ -31,6 +31,7 @@ use ark_bn254::{Bn254, Fr};
 use ark_groth16::{Proof, VerifyingKey};
 
 pub use groth16::ProverConfig;
+use sha2::{Digest, Sha256};
 
 use crate::groth16::Phases;
 use crate::witness::WitnessGraph;
@@ -116,7 +117,10 @@ impl Phase {
     }
 
     fn index(self) -> usize {
-        Phase::ALL.iter().position(|p| *p == self).expect("phase listed")
+        Phase::ALL
+            .iter()
+            .position(|p| *p == self)
+            .expect("phase listed")
     }
 }
 
@@ -181,6 +185,15 @@ pub struct ProofOutput {
     pub timings: Timings,
 }
 
+/// Pinned artifact digests from the circuit descriptor (spec §9).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArtifactDigests {
+    /// SHA-256 of the witness graph file (`witness_graph_sha256`).
+    pub witness_graph_sha256: [u8; 32],
+    /// SHA-256 of the proving key file (`zkey_sha256`).
+    pub zkey_sha256: [u8; 32],
+}
+
 /// Loaded proving artifacts: witness graph + proving key (both memory-mapped).
 pub struct Prover {
     graph: WitnessGraph,
@@ -202,7 +215,39 @@ impl Prover {
     ) -> Result<Self, ProverError> {
         let graph = WitnessGraph::open(graph_path)?;
         let zkey = Zkey::open(zkey_path)?;
-        Ok(Self { graph, zkey, config })
+        Ok(Self {
+            graph,
+            zkey,
+            config,
+        })
+    }
+
+    /// Opens artifacts and checks them against the circuit descriptor's
+    /// `witness_graph_sha256` and `zkey_sha256` (spec §9). The digests are computed
+    /// over the mapped bytes the prover then uses; a mismatch is `InvalidArtifact`.
+    pub fn open_pinned(
+        graph_path: &Path,
+        zkey_path: &Path,
+        digests: &ArtifactDigests,
+        config: ProverConfig,
+    ) -> Result<Self, ProverError> {
+        let prover = Self::open_with_config(graph_path, zkey_path, config)?;
+        for (what, bytes, want) in [
+            (
+                "witness graph",
+                prover.graph.bytes(),
+                &digests.witness_graph_sha256,
+            ),
+            ("zkey", prover.zkey.bytes(), &digests.zkey_sha256),
+        ] {
+            let got: [u8; 32] = Sha256::digest(bytes).into();
+            if &got != want {
+                return Err(ProverError::InvalidArtifact(format!(
+                    "{what}: SHA-256 does not match the circuit descriptor"
+                )));
+            }
+        }
+        Ok(prover)
     }
 
     /// Number of public inputs of the circuit.
@@ -232,7 +277,11 @@ impl Prover {
     }
 
     /// Full proof: witness → Groth16 → self-verification.
-    pub fn prove(&self, inputs_json: &str, ctl: &ProveControl<'_>) -> Result<ProofOutput, ProverError> {
+    pub fn prove(
+        &self,
+        inputs_json: &str,
+        ctl: &ProveControl<'_>,
+    ) -> Result<ProofOutput, ProverError> {
         let (proof, public, timings) = self.prove_ark(inputs_json, ctl)?;
         Ok(ProofOutput {
             proof: codec::encode_proof(&proof)?,
@@ -257,7 +306,9 @@ impl Prover {
         let ok = groth16::verify_proof(self.zkey.verifying_key(), &public, &proof)?;
         phases.finish();
         if !ok {
-            return Err(ProverError::SelfCheck("proof does not verify against the zkey verifying key".into()));
+            return Err(ProverError::SelfCheck(
+                "proof does not verify against the zkey verifying key".into(),
+            ));
         }
         Ok((proof, public, phases.timings))
     }
@@ -266,14 +317,25 @@ impl Prover {
 /// Verifies a 256-byte proof against spec §9 VK bytes and 32-byte big-endian
 /// public inputs. Malformed encodings are errors; a well-formed proof that
 /// does not verify returns `Ok(false)`.
-pub fn verify(vk_bytes: &[u8], public_inputs: &[[u8; 32]], proof: &[u8]) -> Result<bool, ProverError> {
+pub fn verify(
+    vk_bytes: &[u8],
+    public_inputs: &[[u8; 32]],
+    proof: &[u8],
+) -> Result<bool, ProverError> {
     let vk = codec::decode_vk(vk_bytes)?;
-    let public = public_inputs.iter().map(|b| codec::decode_scalar(b)).collect::<Result<Vec<_>, _>>()?;
+    let public = public_inputs
+        .iter()
+        .map(|b| codec::decode_scalar(b))
+        .collect::<Result<Vec<_>, _>>()?;
     let proof = codec::decode_proof(proof)?;
     groth16::verify_proof(&vk, &public, &proof)
 }
 
 /// Verifies arkworks values directly.
-pub fn verify_ark(vk: &VerifyingKey<Bn254>, public: &[Fr], proof: &Proof<Bn254>) -> Result<bool, ProverError> {
+pub fn verify_ark(
+    vk: &VerifyingKey<Bn254>,
+    public: &[Fr],
+    proof: &Proof<Bn254>,
+) -> Result<bool, ProverError> {
     groth16::verify_proof(vk, public, proof)
 }

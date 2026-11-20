@@ -28,7 +28,10 @@ fixtures/real/
 # Circuit build outputs and setup material
 *.ptau
 *.zkey
+# Small development-setup fixtures read by `cargo test -p galaxy-prover`.
 !test-vectors/prover/fixture.zkey
+!test-vectors/prover/fixture_zkey_new.zkey
+!test-vectors/prover/dev_9.ptau
 *.wtns
 circuits/build/
 # Large circuit artifacts stay out of git (digests are pinned in the committed

@@ -1808,6 +1808,19 @@ dependencies = [
 [[package]]
 name = "galaxy-cli"
 version = "0.1.0"
+dependencies = [
+ "clap",
+ "galaxy-image",
+ "galaxy-node",
+ "galaxy-protocol",
+ "galaxy-verifier",
+ "galaxy-xrpl",
+ "hex",
+ "reqwest",
+ "serde_json",
+ "tokio",
+ "url",
+]
 
 [[package]]
 name = "galaxy-crypto"
@@ -1858,9 +1871,12 @@ dependencies = [
  "galaxy-crypto",
  "galaxy-image",
  "getrandom 0.4.3",
+ "hex",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
  "thiserror 2.0.21",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -1960,6 +1976,7 @@ dependencies = [
  "num-bigint",
  "rayon",
  "serde_json",
+ "sha2 0.11.1",
  "thiserror 2.0.21",
  "uniffi",
 ]
@@ -1968,6 +1985,10 @@ dependencies = [
 name = "galaxy-verifier"
 version = "0.1.0"
 dependencies = [
+ "ark-bn254 0.6.0",
+ "ark-groth16",
+ "ark-relations 0.6.0",
+ "ark-std 0.6.0",
  "ed25519-dalek",
  "galaxy-attestation",
  "galaxy-crypto",
@@ -1975,6 +1996,7 @@ dependencies = [
  "galaxy-protocol",
  "galaxy-xrpl",
  "hex",
+ "png",
  "serde",
  "serde_json",
  "sha2 0.11.1",
@@ -2004,11 +2026,13 @@ dependencies = [
 name = "galaxy-witness"
 version = "0.1.0"
 dependencies = [
+ "ark-ff 0.6.0",
  "galaxy-crypto",
  "galaxy-evidence",
  "galaxy-geometry",
  "galaxy-image",
  "galaxy-protocol",
+ "galaxy-prover",
  "hex",
  "serde_json",
  "thiserror 2.0.21",

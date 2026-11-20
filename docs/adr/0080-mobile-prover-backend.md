@@ -63,8 +63,8 @@ linked by Xcode on the Mac.
 - UniFFI surface behind feature `uniffi` (re-exported by galaxy-ffi).
 
 ## Measurements
-(Filled from real runs; see below. Desktop: Linux x86_64, 8 CPUs, shared with
-other agents — timings are upper bounds.)
+Recorded in `docs/protocol/prover.md` §Measurements (real runs only; desktop:
+Linux x86_64, 8 CPUs shared with other agents — timings are upper bounds).
 
 ## Consequences
 - No C/C++ in the proving stack; reproducible Linux builds; no JIT.

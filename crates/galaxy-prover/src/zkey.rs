@@ -179,12 +179,43 @@ impl Zkey {
         let hs = sec(9)?;
         expect_len(hs, domain_size * G1_BYTES, 9)?;
 
-        let header = ZkeyHeader { n_vars, n_public, domain_size, n_coefs };
-        let vk = VerifyingKey { alpha_g1, beta_g2, gamma_g2, delta_g2, gamma_abc_g1 };
-        let coefs = Section { offset: s4.offset + 4, len: s4.len - 4 };
-        let zkey = Self { map, header, vk, beta_g1, delta_g1, coefs, a, b1, b2, c, h: hs };
+        let header = ZkeyHeader {
+            n_vars,
+            n_public,
+            domain_size,
+            n_coefs,
+        };
+        let vk = VerifyingKey {
+            alpha_g1,
+            beta_g2,
+            gamma_g2,
+            delta_g2,
+            gamma_abc_g1,
+        };
+        let coefs = Section {
+            offset: s4.offset + 4,
+            len: s4.len - 4,
+        };
+        let zkey = Self {
+            map,
+            header,
+            vk,
+            beta_g1,
+            delta_g1,
+            coefs,
+            a,
+            b1,
+            b2,
+            c,
+            h: hs,
+        };
         zkey.check_coefficients()?;
         Ok(zkey)
+    }
+
+    /// The mapped file bytes.
+    pub fn bytes(&self) -> &[u8] {
+        &self.map
     }
 
     /// Header values.
@@ -264,7 +295,9 @@ impl Zkey {
         let s = self.section(q);
         let raw = &self.map[s.offset + start * G1_BYTES..s.offset + (start + n) * G1_BYTES];
         out.clear();
-        raw.par_chunks_exact(G1_BYTES).map(unchecked_g1).collect_into_vec(out);
+        raw.par_chunks_exact(G1_BYTES)
+            .map(unchecked_g1)
+            .collect_into_vec(out);
     }
 
     /// Decodes G2 points `[start, start + n)` of the B2 section.
@@ -272,7 +305,9 @@ impl Zkey {
         let s = self.b2;
         let raw = &self.map[s.offset + start * G2_BYTES..s.offset + (start + n) * G2_BYTES];
         out.clear();
-        raw.par_chunks_exact(G2_BYTES).map(unchecked_g2).collect_into_vec(out);
+        raw.par_chunks_exact(G2_BYTES)
+            .map(unchecked_g2)
+            .collect_into_vec(out);
     }
 }
 
@@ -303,7 +338,10 @@ struct Cursor<'a> {
 
 impl<'a> Cursor<'a> {
     fn at(buf: &'a [u8], s: Section) -> Self {
-        Self { buf: &buf[..s.offset + s.len], pos: s.offset }
+        Self {
+            buf: &buf[..s.offset + s.len],
+            pos: s.offset,
+        }
     }
 
     fn take(&mut self, n: usize) -> Result<&'a [u8], ProverError> {
@@ -332,7 +370,10 @@ fn expect_len(s: Section, want: usize, id: u32) -> Result<(), ProverError> {
     if s.len == want {
         Ok(())
     } else {
-        Err(bad(format!("section {id} has {} bytes, expected {want}", s.len)))
+        Err(bad(format!(
+            "section {id} has {} bytes, expected {want}",
+            s.len
+        )))
     }
 }
 
@@ -384,7 +425,9 @@ fn checked_g2(b: &[u8]) -> Result<G2Affine, ProverError> {
     }
     let p = G2Affine::new_unchecked(x, y);
     if !p.is_on_curve() || !p.is_in_correct_subgroup_assuming_on_curve() {
-        return Err(bad("G2 point not on curve or not in the prime-order subgroup"));
+        return Err(bad(
+            "G2 point not on curve or not in the prime-order subgroup",
+        ));
     }
     Ok(p)
 }
@@ -392,19 +435,28 @@ fn checked_g2(b: &[u8]) -> Result<G2Affine, ProverError> {
 /// Bulk query points are decoded without curve checks (performance); a
 /// corrupted proving key yields a proof that fails the mandatory self-check.
 #[inline]
-fn unchecked_g1(b: &[u8]) -> G1Affine {
+pub(crate) fn unchecked_g1(b: &[u8]) -> G1Affine {
     if b.iter().all(|&v| v == 0) {
         return G1Affine::zero();
     }
-    G1Affine::new_unchecked(Fq::new_unchecked(bigint_le(&b[..32])), Fq::new_unchecked(bigint_le(&b[32..64])))
+    G1Affine::new_unchecked(
+        Fq::new_unchecked(bigint_le(&b[..32])),
+        Fq::new_unchecked(bigint_le(&b[32..64])),
+    )
 }
 
 #[inline]
-fn unchecked_g2(b: &[u8]) -> G2Affine {
+pub(crate) fn unchecked_g2(b: &[u8]) -> G2Affine {
     if b.iter().all(|&v| v == 0) {
         return G2Affine::zero();
     }
-    let x = Fq2::new(Fq::new_unchecked(bigint_le(&b[..32])), Fq::new_unchecked(bigint_le(&b[32..64])));
-    let y = Fq2::new(Fq::new_unchecked(bigint_le(&b[64..96])), Fq::new_unchecked(bigint_le(&b[96..128])));
+    let x = Fq2::new(
+        Fq::new_unchecked(bigint_le(&b[..32])),
+        Fq::new_unchecked(bigint_le(&b[32..64])),
+    );
+    let y = Fq2::new(
+        Fq::new_unchecked(bigint_le(&b[64..96])),
+        Fq::new_unchecked(bigint_le(&b[96..128])),
+    );
     G2Affine::new_unchecked(x, y)
 }

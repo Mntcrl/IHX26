@@ -22,6 +22,9 @@ cd "$ROOT"
 TARGET=aarch64-apple-ios
 OUT="$ROOT/bindings/swift/galaxy-prover"
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target/MobileProver}"
+# Absolute: the bindgen stub include path is used from the build script's own cwd.
+mkdir -p "$CARGO_TARGET_DIR"
+CARGO_TARGET_DIR="$(cd "$CARGO_TARGET_DIR" && pwd)"
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
 export IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-17.0}"
 # Size/speed for the device library (workspace has no release profile overrides).

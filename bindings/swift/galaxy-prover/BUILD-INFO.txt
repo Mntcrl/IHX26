@@ -1,9 +1,9 @@
-built: 2026-11-20T19:24:36Z on Linux x86_64
-git: 993c19050e0483f386c704bd7d601a0bec3939c5 (dirty)
+built: 2026-11-20T21:47:35Z on Linux x86_64
+git: 53c6a85c43e3708aff379c1dbd468baa5c145698 (dirty)
 rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07)
 target: aarch64-apple-ios IPHONEOS_DEPLOYMENT_TARGET=17.0 lto=fat codegen-units=1
-daf433167096a64a5fccea7cc3ff6345fbbc65b2257e419746f15fb0efcf4b01  ios-arm64/libgalaxy_prover.a
-34998580282340160b3cb90607a48dfbbfb4580cfe02388597761e4194cb32d7  swift/galaxy_prover.swift
-ec525ba7cbc61f7cebbe713af74f47e39834948e35058be6064d1a4cafa8fb6a  include/galaxy_proverFFI.h
+b055d47926158475f50fcbcc0f8db145ec3041886f678a75986db3fd034d2a7a  ios-arm64/libgalaxy_prover.a
+5d0af5512d2d29431a92cce02950405b94b9b5c56ba63c4920da50d0c30c3e78  swift/galaxy_prover.swift
+ba93b819902b9f7f3a84c36d06c452dca7362e39f261faa2f274446113460a24  include/galaxy_proverFFI.h
 18a012d10b0e363a5397bd580b7c76d49a224a790b50f11b7d8cea30cd961b51  include/module.modulemap
-ios-arm64/libgalaxy_prover.a 7597816 bytes
+ios-arm64/libgalaxy_prover.a 7605584 bytes
