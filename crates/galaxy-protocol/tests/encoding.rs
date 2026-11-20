@@ -48,3 +48,33 @@ fn impossible_policy_contract_is_rejected() {
     bad.structural.slots = 17;
     assert!(bad.validate().is_err());
 }
+
+#[test]
+fn canonical_json_and_policy_decoders_never_panic() {
+    let policy: Policy = serde_json::from_slice(include_bytes!("../../../policies/galaxy-pc-v1m.json")).unwrap();
+    let canonical = policy.canonical_json().unwrap();
+    let mut state = 0x243f_6a88_85a3_08d3u64;
+    let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    for len in 0..canonical.len() {
+        assert!(canonical_json::validate(&canonical[..len]).is_err(), "prefix {len} accepted");
+    }
+    for _ in 0..2000 {
+        let mut m = canonical.clone();
+        let i = (next() as usize) % m.len();
+        m[i] = next() as u8;
+        // Any accepted mutation must already be in canonical form, and policies parse without panicking.
+        if canonical_json::validate(&m).is_ok() {
+            let value: Value = serde_json::from_slice(&m).unwrap();
+            assert_eq!(canonical_json::to_vec(&value).unwrap(), m);
+        }
+        if let Ok(p) = serde_json::from_slice::<Policy>(&m) {
+            let _ = p.validate();
+            let _ = p.id();
+        }
+    }
+}

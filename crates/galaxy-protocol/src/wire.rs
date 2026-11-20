@@ -49,6 +49,11 @@ impl MemoKind {
             Self::Revoke => "galaxy/v1/revoke", Self::Node => "galaxy/v1/node",
         }
     }
+
+    /// Parses an exact Galaxy v1 MemoType string; anything else (other case, whitespace, other versions) is `None`.
+    pub fn from_memo_type(memo_type: &str) -> Option<Self> {
+        memo_type.parse().ok()
+    }
 }
 
 impl std::fmt::Display for MemoKind {

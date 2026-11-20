@@ -72,7 +72,8 @@ const circuitManifest = {
 };
 const circuitManifestBytes = m => cat(u8(1), u32(m.network), m.bundle_id, u32(m.bundle_len), u16(m.chunk_total),
   u32(m.first_chunk_ledger), u32(m.last_chunk_ledger), m.circuit_id, m.policy_id, m.vk_digest);
-const circuitBundle = { descriptor_json: Buffer.from('{"name":"tiny","n_public":3}'), vk_bytes: fill(710, 52), policy_json: Buffer.from('{"name":"galaxy-pc-v1m","version":1}') };
+// Bytewise key order: "n_public" < "name" because '_' (0x5F) < 'a' (0x61).
+const circuitBundle = { descriptor_json: Buffer.from('{"n_public":3,"name":"tiny"}'), vk_bytes: fill(710, 52), policy_json: Buffer.from('{"name":"galaxy-pc-v1m","version":1}') };
 const circuitBundleBytes = b => cat('GXCB', u8(1), u32(b.descriptor_json.length), b.descriptor_json, u32(b.vk_bytes.length), b.vk_bytes, u32(b.policy_json.length), b.policy_json);
 
 // ---------- §10 REVOKE / NODE ----------
@@ -155,7 +156,7 @@ const rejectCases = [
   reject('CircuitManifest', 'truncated', circuitManifestBytes(circuitManifest).subarray(0, 146)),
   reject('CircuitManifest', 'bundle_len > chunk_total * 800', circuitManifestBytes({ ...circuitManifest, bundle_len: 5601 })),
   reject('CircuitBundle', 'descriptor with whitespace', circuitBundleBytes({ ...circuitBundle, descriptor_json: Buffer.from('{"name": "tiny"}') })),
-  reject('CircuitBundle', 'descriptor keys unsorted', circuitBundleBytes({ ...circuitBundle, descriptor_json: Buffer.from('{"n_public":3,"name":"tiny"}') })),
+  reject('CircuitBundle', 'descriptor keys not in bytewise order', circuitBundleBytes({ ...circuitBundle, descriptor_json: Buffer.from('{"name":"tiny","n_public":3}') })),
   reject('CircuitBundle', 'policy is an array', circuitBundleBytes({ ...circuitBundle, policy_json: Buffer.from('[1]') })),
   reject('CircuitBundle', 'empty vk bytes', circuitBundleBytes({ ...circuitBundle, vk_bytes: Buffer.alloc(0) })),
   reject('CircuitBundle', 'trailing byte', cat(circuitBundleBytes(circuitBundle), u8(0))),
@@ -171,7 +172,7 @@ emit('wire.json', 'Galaxy v1 memo and bundle encodings built field by field in N
 // ---------- §3 identifiers ----------
 const rgb = fill(2 * 3 * 3, 80);
 const policyJson = Buffer.from('{"name":"galaxy-pc-v1m","version":1}');
-const descriptorJson = Buffer.from('{"name":"tiny","n_public":3}');
+const descriptorJson = Buffer.from('{"n_public":3,"name":"tiny"}');
 const regArgs = { network_id: 1, reg_ledger_index: 22480390, reg_ledger_hash: h32(42), reg_nonce: h32(43), key_id: h32(41), account_id: fill(20, 9) };
 const devPk = h32(90);
 const vkBytes = fill(710, 52);
