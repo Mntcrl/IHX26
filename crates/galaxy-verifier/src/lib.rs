@@ -2,9 +2,8 @@
 
 mod circuit;
 mod pipeline;
-mod report;
-#[cfg(any(test, feature = "recorded"))]
 pub mod recorded;
+mod report;
 
 use galaxy_protocol::{network::NetworkConfig, Hash32};
 use galaxy_xrpl::LedgerSource;
@@ -84,5 +83,44 @@ pub trait LookupSource {
     ) -> impl Future<Output = Result<LookupResult, LookupError>>;
 }
 
-#[cfg(test)]
-mod tests;
+/// Maximum size of one node lookup response body (bytes).
+pub const MAX_LOOKUP_RESPONSE_BYTES: usize = 1024 * 1024;
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NodeLookupResponse {
+    candidates: Vec<NodeRef>,
+    ranges: Vec<LedgerRange>,
+    incomplete: bool,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NodeRef {
+    manifest_tx: String,
+    proof_tx: Option<String>,
+}
+
+/// Parse the body of `GET {node}/v1/photos/{photo_id}?network_id={n}`:
+/// `{"candidates": [{"manifest_tx", "proof_tx"|null}], "ranges": [{"min", "max"}], "incomplete": bool}`.
+/// The result is an untrusted hint list; every candidate is verified from XRPL.
+pub fn parse_lookup_response(body: &[u8]) -> Result<LookupResult, LookupError> {
+    if body.len() > MAX_LOOKUP_RESPONSE_BYTES {
+        return Err(LookupError("oversized node response".into()));
+    }
+    let response: NodeLookupResponse =
+        serde_json::from_slice(body).map_err(|_| LookupError("malformed node response".into()))?;
+    let hash = |text: &str| {
+        let mut out = [0u8; 32];
+        hex::decode_to_slice(text, &mut out).map_err(|_| LookupError("malformed transaction hash in node response".into()))?;
+        Ok::<_, LookupError>(out)
+    };
+    let candidates = response
+        .candidates
+        .iter()
+        .map(|entry| {
+            Ok(Refs { manifest_tx: hash(&entry.manifest_tx)?, proof_tx: entry.proof_tx.as_deref().map(hash).transpose()? })
+        })
+        .collect::<Result<_, LookupError>>()?;
+    Ok(LookupResult { candidates, ranges: response.ranges, incomplete: response.incomplete })
+}

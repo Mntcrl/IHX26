@@ -10,3 +10,21 @@ rust-version.workspace = true
 [[bin]]
 name = "galaxy"
 path = "src/main.rs"
+
+[features]
+default = []
+# `galaxy node run|sync|status|peers` (delegates to the galaxy-node library).
+node = ["dep:galaxy-node"]
+
+[dependencies]
+galaxy-image.workspace = true
+galaxy-protocol.workspace = true
+galaxy-verifier.workspace = true
+galaxy-xrpl = { workspace = true, features = ["native"] }
+galaxy-node = { path = "../galaxy-node", optional = true }
+clap = { workspace = true, features = ["env"] }
+hex.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
+url = "=2.5.8"

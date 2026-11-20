@@ -391,7 +391,11 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
         if self.network() == 0 && !self.ctx.config.allow_mainnet {
             return Err(Stop::unsupported(check, "Mainnet is disabled in this network config"));
         }
-        let info = self.ctx.ledger.server_info().await.map_err(|err| Stop::from_rpc(check, &err, false))?;
+        let info = self.ctx.ledger.server_info().await.map_err(|err| match err {
+            // The endpoint serves another network: a property of the RPC, not of any record.
+            XrplError::Network => Stop::unavailable(check, "RPC endpoint does not serve the configured network"),
+            err => Stop::from_rpc(check, &err, false),
+        })?;
         if info.network_id != self.network() {
             return Err(Stop::unavailable(check, format!(
                 "RPC endpoint serves NetworkID {}, not the configured {} (NetworkID {})",
@@ -429,8 +433,11 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
 
     async fn exact_proof(&mut self, hash: Hash32) -> Result<(), Stop> {
         let info = self.server_info().await?;
-        let tx = self.tx(&hash, "proof.found").await?
-            .ok_or_else(|| missing_ref(self.ctx.config.inception_ledger, &info, "proof.found", "PROOF"))?;
+        let inception = self.ctx.config.inception_ledger;
+        let Some(tx) = self.tx(&hash, "proof.found").await? else {
+            self.report.note_range("PROOF search coverage", inception, info.validated_ledger);
+            return Err(missing_ref(inception, &info, "proof.found", "PROOF"));
+        };
         let envelope = decode_kind(&tx, MemoKind::Proof, "proof.binding")?;
         let proof = ProofMemo::decode(&envelope.data).map_err(|err| Stop::invalid("proof.binding", err.to_string()))?;
         self.capture(Refs { manifest_tx: proof.manifest_tx, proof_tx: Some(hash) }, None, &info, Some(tx)).await
@@ -608,7 +615,15 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
             return Err(Stop::invalid("capture.account_binding", "DEVICE registration account differs from the CAPTURE account"));
         }
         self.report.note_range("DEVICE chunks", manifest.first_chunk_ledger, manifest.last_chunk_ledger);
-        self.report.pass(check, format!("DEVICE manifest validated in ledger {}", fetched.manifest_ledger));
+        let reg = self.header(manifest.reg_ledger_index, check).await?;
+        if reg.hash != manifest.reg_ledger_hash {
+            return Err(Stop::invalid(check, format!(
+                "DEVICE registration names ledger {} with a hash that differs from the validated ledger", manifest.reg_ledger_index,
+            )));
+        }
+        self.report.pass(check, format!(
+            "DEVICE manifest validated in ledger {}; registration ledger {} hash matches", fetched.manifest_ledger, manifest.reg_ledger_index,
+        ));
         let bundle = DeviceBundle::decode(&fetched.bytes).map_err(|err| Stop::invalid("registration.bundle", err.to_string()))?;
         self.report.pass("registration.bundle", "Device bundle reassembled from validated chunks; bundle_id and manifest fields match");
         let close_time = self.header(fetched.manifest_ledger, "registration.attestation").await?.close_time;
@@ -678,7 +693,7 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
                     continue;
                 }
                 let here = (entry.ledger_index, entry.transaction_index);
-                match MemoKind::from_str_opt(&envelope.kind) {
+                match MemoKind::from_memo_type(&envelope.kind) {
                     Some(MemoKind::Capture) if here < position => {
                         let Ok(other) = CaptureMemo::decode(&envelope.data) else { continue };
                         if other.core.registration_tx != *registration_tx { continue; }
@@ -838,6 +853,7 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
         let mut selected: Option<(LedgerTx, ProofOutcome)> = None;
         let mut first_invalid: Option<ProofOutcome> = None;
         let mut exact_rejection: Option<ProofOutcome> = None;
+        let mut first_rejected: Option<ProofOutcome> = None;
         let mut listed = Vec::new();
         for tx in candidates {
             let outcome = self.evaluate_proof(&tx, statement, circuit, latest);
@@ -853,7 +869,11 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
                 }
                 Verdict::Rejected => {
                     listed.push(candidate(tx.hash, refs.manifest_tx, outcome_copy(&outcome)));
-                    if exact_mode { exact_rejection = Some(outcome); }
+                    if exact_mode {
+                        exact_rejection = Some(outcome);
+                    } else if first_rejected.is_none() {
+                        first_rejected = Some(outcome);
+                    }
                 }
             }
         }
@@ -893,6 +913,10 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
                 self.report.summary = format!("PROOF failed verification: {summary}");
             }
             return Ok(());
+        }
+        // Show why the earliest rejected candidate was not usable; the state stays PENDING/INCONCLUSIVE.
+        if let Some(outcome) = first_rejected {
+            for check in outcome.checks { self.report.set_check(check); }
         }
         if window_open {
             self.report.set("proof.found", Status::Unavailable, format!(

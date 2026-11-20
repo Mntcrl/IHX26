@@ -1,0 +1,43 @@
+# XRPL Galaxy network configuration (spec §12, ADR 0009). Parsed strictly by
+# galaxy_protocol::network::NetworkConfig (unknown keys are rejected).
+# accepted_circuits / accepted_app_ids / accepted_attestation_environments are the
+# verifier's explicit trust anchors; they are never taken from the ledger or from peers.
+
+name = "xrpl-testnet"
+network_id = 1
+json_rpc = "https://s.altnet.rippletest.net:51234/"
+websocket = "wss://s.altnet.rippletest.net:51233/"
+# Optional: a local rippled that the operator trusts (queried before json_rpc).
+# trusted_local_rippled = "http://127.0.0.1:5005/"
+
+# Validated ledger index reported by server_info on s.altnet.rippletest.net
+# when this file was written (2026-11-20T19:44Z, network_id 1). Verifiers and
+# nodes never scan for Galaxy transactions below this ledger.
+inception_ledger = 1000
+
+max_fee_drops = 1000
+allow_mainnet = false
+
+explorer_tx = "https://testnet.xrpl.org/transactions/{hash}"
+explorer_ledger = "https://testnet.xrpl.org/ledgers/{index}"
+
+# App Attest relying party: TEAMID.bundle.id of the capture app.
+accepted_app_ids = ["PPS57BF3X3.utcq.XRPL-Galaxy"]
+
+# Testnet accepts both App Attest environments; the environment is always reported.
+# (Dev-unattested credentials have no environment and can never reach VERIFIED.)
+accepted_attestation_environments = ["development", "production"]
+
+# Empty until the circuit is registered on Testnet (CIRCUIT manifest tx). Entry shape:
+# [[accepted_circuits]]
+# circuit_id = "<64 hex>"
+# vk_digest = "<64 hex>"
+# policy_id = "<64 hex>"
+# registration_tx = "<64 hex CIRCUIT manifest tx hash>"
+
+# Offline test vector: development circuit (tests/support), never a real trust anchor.
+[[accepted_circuits]]
+circuit_id = "25a81465fb1485c13cc6cd3caf619be94b9158060c2690514bbb778e78f07295"
+vk_digest = "c373151bf141b1487dac74687c508262bebfd8151a2fec0ac11cb2ac194909dc"
+policy_id = "ef744a7f28dc606b117dbab34899753a218cd1865b4fc69a9739ac9c10a7afac"
+registration_tx = "2725282B055A85FCCDBE2FCCF1DC180DC893D6A3B406FE799386605688F07D08"
