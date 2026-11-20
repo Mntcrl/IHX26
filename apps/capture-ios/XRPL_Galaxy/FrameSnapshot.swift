@@ -18,6 +18,26 @@ nonisolated enum CaptureIssue: UInt32, CaseIterable, Sendable {
         case .cameraUnavailable: "The camera or unsmoothed LiDAR capture was unavailable."
         }
     }
+
+    /// Compact label for the capture screen; full messages stay in the record and the label sidecar.
+    var short: String {
+        switch self {
+        case .missingFrame: "no frame"
+        case .tracking: "tracking"
+        case .missingDepth: "no depth"
+        case .imageFormat: "format"
+        case .insufficientMotion: "low motion"
+        case .motionUnavailable: "no IMU"
+        case .cameraUnavailable: "camera"
+        }
+    }
+
+    static func short(for reason: String) -> String {
+        if let issue = allCases.first(where: { $0.message == reason }) { return issue.short }
+        if reason.hasPrefix("No frame") { return "no frame" }
+        if reason.hasPrefix("Acquisition was interrupted") { return "interrupted" }
+        return "error"
+    }
 }
 
 nonisolated struct FrameSnapshot: Sendable {

@@ -5,17 +5,16 @@ Purpose: collect labelled real GXRW captures for the scene classes of the user b
 ## Setup
 
 1. Build and install the Debug capture app: `scripts/ios.sh install` (holds `/tmp/galaxy-device.lock` on the Mac only for the install).
-2. On the phone: open XRPL Galaxy and hold it in landscape with the top edge of the phone (camera side) to your left, i.e. the camera-native orientation; the UI only allows this orientation. Allow camera, motion and Bluetooth when asked (Bluetooth is optional).
-3. Open **Developer** to check: camera "Tracking normal", video format 1920×1440 @ 30 fps, depth coverage, CoreMotion "Receiving", current baseline.
+2. On the phone: open XRPL Galaxy in portrait or landscape (both are supported; the committed raster is always the sensor-native landscape image and the label records `ui_orientation`). Allow camera, motion and Bluetooth when asked (Bluetooth is optional).
+3. Overlay toggles (bottom row): tile grid (8×6 commitment tiles, central stratum in cyan), LiDAR dots (Turbo colour = depth 0.2–5 m, size = confidence), rays from the principal point, colorized depth map, level/horizon line, top-down motion trail (last 2 s, 10 mm grid), ARKit feature points. They are display-only and never enter the committed data.
 
 ## Taking one capture
 
-1. Frame the subject at 0.3–3 m (LiDAR range; depth coverage ideally > 50 %).
-2. Start moving the phone slowly and steadily sideways (parallel to the subject), about 3–6 cm per second; keep the subject in view.
-3. While moving, press the shutter once and keep moving for one more second (t+ is collected up to 0.5 s after the shutter).
-4. Read the result: CANONICALIZING (raw frozen, no issue) or INCONCLUSIVE with reasons. Do not retry silently: every attempt counts in the statistics.
-5. Developer → **Export last raw capture** (writes `Documents/galaxy-fixtures/<uuid>.gxrw`).
-6. Note the label in the log sheet below immediately (capture UUID, scene class, distance, lighting, motion, anything unusual).
+1. Pick the scene class in the top-left menu (it is remembered between shots).
+2. Frame the subject at 0.3–3 m (depth chip ideally > 50 %).
+3. Slide the phone slowly and steadily sideways, about 2–8 cm/s, without turning it; the motion chip and the shutter turn green at 4–40 mm and ≤ 4° per 250 ms.
+4. Press the shutter while moving and keep moving for one more second (t+ is collected up to 0.5 s after the shutter).
+5. Every attempt is saved automatically: `Documents/galaxy-fixtures/<uuid>.gxrw` when the raw capture was frozen, and always `<uuid>.label.json` (class, state, reasons, motion and depth summary). Do not retry silently: every attempt counts in the statistics.
 
 After a session: `scripts/ios.sh pull-fixtures raw` copies the exports to `fixtures/real/capture-ios/` (gitignored). Nothing on the phone is deleted by this step.
 

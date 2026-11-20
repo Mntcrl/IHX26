@@ -73,6 +73,8 @@ nonisolated struct CaptureLabel: Encodable, Sendable {
     let rawExported: Bool
     let motion: MotionSummary
     let depthCoverage: Double?
+    /// Interface orientation while shooting; the GXRW raster is always the sensor-native landscape image.
+    let uiOrientation: String
     let appBuild: String
 
     enum CodingKeys: String, CodingKey {
@@ -84,6 +86,7 @@ nonisolated struct CaptureLabel: Encodable, Sendable {
         case rawExported = "raw_exported"
         case motion
         case depthCoverage = "depth_coverage"
+        case uiOrientation = "ui_orientation"
         case appBuild = "app_build"
     }
 }

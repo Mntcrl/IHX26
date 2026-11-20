@@ -16,6 +16,7 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
     }
 
     let preview = ARSCNView(frame: .zero)
+    let overlay = OverlayModel()
     var record: CaptureRecord?
     private(set) var cameraStatus = "Waiting for camera"
     private(set) var videoFormat = "Not selected"
@@ -24,6 +25,7 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
     private(set) var depthCoverage: Double?
     private(set) var baselineMillimeters: Double?
     private(set) var rotationDegrees: Double?
+    private(set) var trackingNormal = false
     private(set) var attempts = 0
     private(set) var exported = 0
     /// Experiment label for the next attempt; persisted so a session of one scene class needs no re-selection.
@@ -46,7 +48,7 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
     @ObservationIgnored private var requestingPermission = false
     @ObservationIgnored private var firstFrameTime: Double?
     @ObservationIgnored private var probeTriggered = false
-    @ObservationIgnored private var attempt: (label: SceneLabel, coverage: Double?)?
+    @ObservationIgnored private var attempt: (label: SceneLabel, coverage: Double?, orientation: String)?
     @ObservationIgnored private var attemptMotion = MotionSummary()
     private let staticProbe: Bool
 
@@ -142,6 +144,7 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
         depthCoverage = nil
         baselineMillimeters = nil
         rotationDegrees = nil
+        overlay.reset()
         imuStatus = "Not collecting"
         bluetoothStatus = "Not scanning"
         if pending != nil {
@@ -166,10 +169,15 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
             rotationDegrees = PoseMath.rotationDeg(previous.transform, snapshot.transform)
         } else { baselineMillimeters = nil; rotationDegrees = nil }
         history.append(snapshot)
+        trackingNormal = snapshot.tracking == 2
         cameraStatus = snapshot.tracking == 2 ? "Tracking normal" : "Tracking: \(snapshot.trackingReason)"
         depthCoverage = snapshot.depth?.coverage()
         imuStatus = motion.status
         bluetoothStatus = bluetooth.status
+        let orientation = preview.window?.windowScene?.effectiveGeometry.interfaceOrientation ?? .landscapeRight
+        overlay.update(frame: frame, snapshot: snapshot, viewport: preview.bounds.size, orientation: orientation)
+        let wanted: SCNDebugOptions = overlay.showFeatures ? [ARSCNDebugOptions.showFeaturePoints] : []
+        if preview.debugOptions != wanted { preview.debugOptions = wanted }
         if var window = pending {
             let delta = timestamp - window.center.timestamp
             if (0.1...0.5).contains(delta),
@@ -215,10 +223,10 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
             try store.save(row)
             record = row
             attempts += 1
-            attempt = (sceneLabel, depthCoverage)
+            attempt = (sceneLabel, depthCoverage, Self.orientationName(preview.window?.windowScene?.effectiveGeometry.interfaceOrientation))
             attemptMotion = MotionSummary()
         } catch {
-            notice = "Could not save the capture record in protected storage."
+            notice = "Storage error"
             return
         }
         guard let center = history.last, (0...0.12).contains(now - center.timestamp) else {
@@ -336,22 +344,29 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
             } catch CaptureStore.Failure.alreadyExported {
                 rawExported = true
             } catch {
-                notice = "Could not export the protected raw capture."
+                notice = "Export failed"
             }
         }
         let label = CaptureLabel(captureId: row.id, sceneClass: current.label, claimedTimeMs: row.claimedTimeMs,
                                  state: row.state, reasons: row.reasons, rawExported: rawExported,
                                  motion: attemptMotion, depthCoverage: current.coverage,
+                                 uiOrientation: current.orientation,
                                  appBuild: Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown")
         attemptMotion = MotionSummary()
         do {
             try store.writeLabel(label)
-            if notice == nil {
-                notice = rawExported ? "Saved raw capture + label (\(current.label.title))."
-                                     : "Saved label of an attempt without raw capture (\(current.label.title))."
-            }
         } catch {
-            notice = "Could not write the capture label."
+            notice = "Label write failed"
+        }
+    }
+
+    private static func orientationName(_ orientation: UIInterfaceOrientation?) -> String {
+        switch orientation {
+        case .portrait: "portrait"
+        case .portraitUpsideDown: "portrait-upside-down"
+        case .landscapeLeft: "landscape-left"
+        case .landscapeRight: "landscape-right"
+        default: "unknown"
         }
     }
 
@@ -361,7 +376,7 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
             try row.transition(to: state, reasons: reasons)
             try store.save(row)
             record = row
-        } catch { notice = "Could not persist the capture result. Reopen the app to recover it." }
+        } catch { notice = "Storage error" }
         if let row = record, row.state == state { publishAttempt(row, rawAvailable: false) }
         if staticProbe {
             print("GXCAPTURE \(state.rawValue): \(reasons.joined(separator: "; ")); no raw capture")
