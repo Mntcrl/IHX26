@@ -1,0 +1,20 @@
+[package]
+name = "galaxy-witness"
+version = "0.1.0"
+description = "XRPL Galaxy: galaxy-witness"
+publish = false
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+galaxy-crypto.workspace = true
+galaxy-evidence.workspace = true
+galaxy-geometry.workspace = true
+galaxy-protocol.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+galaxy-image.workspace = true
+hex.workspace = true

@@ -1,0 +1,22 @@
+[
+  {
+    "name": "powersOfTau28_hez_final_20.ptau",
+    "power": 20,
+    "url": "https://circom.info/powersOfTau28_hez_final_20.ptau",
+    "size": 1208042648,
+    "sha256": "159d3f938d941e06767d99f30b9fe59a245400a4aae138cf8e411732d7a2f6cd",
+    "blake2b": "89a66eb5590a1c94e3f1ee0e72acf49b1669e050bb5f93c73b066b564dca4e0c7556a52b323178269d64af325d8fdddb33da3a27c34409b821de82aa2bf1a27b",
+    "published_checksum_source": "https://github.com/iden3/snarkjs/blob/22003fbcde78608be902520661832db7933d279e/README.md (Powers of Tau table, blake2b column)",
+    "verified": true
+  },
+  {
+    "name": "powersOfTau28_hez_final_21.ptau",
+    "power": 21,
+    "url": "https://circom.info/powersOfTau28_hez_final_21.ptau",
+    "size": 2416002200,
+    "sha256": "cdc7c94a6635bc91466d8c7d96faefe1d17ecc98a3596a748ca1e6c895f8c2b4",
+    "blake2b": "9aef0573cef4ded9c4a75f148709056bf989f80dad96876aadeb6f1c6d062391f07a394a9e756d16f7eb233198d5b69407cca44594c763ab4a5b67ae73254678",
+    "published_checksum_source": "https://github.com/iden3/snarkjs/blob/22003fbcde78608be902520661832db7933d279e/README.md (Powers of Tau table, blake2b column)",
+    "verified": true
+  }
+]
