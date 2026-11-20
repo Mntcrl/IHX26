@@ -1,0 +1,7 @@
+module galaxy_proverFFI {
+    header "galaxy_proverFFI.h"
+    export *
+    use "Darwin"
+    use "_Builtin_stdbool"
+    use "_Builtin_stdint"
+}

@@ -1,0 +1,40 @@
+[package]
+name = "galaxy-prover"
+version = "0.1.0"
+description = "XRPL Galaxy: galaxy-prover"
+publish = false
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+# UniFFI surface for Swift (apps/prover-bench-ios, re-exported by galaxy-ffi).
+uniffi = ["dep:uniffi"]
+# Host-only: the uniffi-bindgen binary used by scripts/prover-ios-lib.sh.
+uniffi-cli = ["uniffi", "uniffi/cli"]
+
+[dependencies]
+ark-bn254 = { workspace = true, features = ["std"] }
+ark-ec = { workspace = true, features = ["std", "parallel"] }
+ark-ff = { workspace = true, features = ["std", "parallel"] }
+ark-groth16 = { workspace = true, features = ["std"] }
+# Not in [workspace.dependencies] yet; same arkworks 0.6 line, pinned exactly.
+ark-poly = { version = "=0.6.0", default-features = false, features = ["std", "parallel"] }
+circom-witnesscalc = "=0.3.0"
+getrandom = { workspace = true }
+memmap2 = "=0.9.12"
+num-bigint = { workspace = true }
+rayon = "=1.12.0"
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+uniffi = { workspace = true, optional = true }
+
+[[bin]]
+name = "galaxy-prover"
+path = "src/bin/galaxy-prover.rs"
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["uniffi-cli"]

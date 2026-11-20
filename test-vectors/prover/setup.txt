@@ -1,0 +1,12 @@
+ceremony: development-single-party (test fixture, NOT for production)
+circom: circom compiler 2.2.3; build-circuit: unknown
+ptau: powersOfTau28_hez_final_20.ptau sha256 159d3f938d941e06767d99f30b9fe59a245400a4aae138cf8e411732d7a2f6cd
+r1cs: from build-circuit --r1cs, sha256 debc568bc5d20dc7038f048b8feabe1a3c5048a79d290e2e5ddd8b5df0fd6710
+fixture.circom 859 bytes sha256 33d88906649628af7dbf8fb892e94693b9fada756ac0eb95501847cc94f967f1
+fixture.graph.bin 26690 bytes sha256 19fe900dd05bc36e630e6c2e43e1423710ef981427ff7afaa2c3b5a39886043a
+fixture.zkey 213957 bytes sha256 fdd79342027ddb5c16edda2113c434e2bcd638e25ecd61b84b64fd33d87a1625
+vk.json 6768 bytes sha256 0105fd611d8abce1faab41602c4d77de09eac5d574b410e13f4dcc3c2a61a875
+vk.bin 1926 bytes sha256 a2ae94f12554a1170b1333d8c078d2862c6506e4c5a3ee6c54237743a92c509c
+input.json 1897 bytes sha256 3f02c623242b8447d49e3118c3914fa25b5468613e52df09022fe8a0447db020
+snarkjs_proof.json 804 bytes sha256 eaba6b6a66dea606d522c23f10c38416e54b64d9dbc94bb703cf6de3f86c7789
+snarkjs_public.json 1794 bytes sha256 78cf18c587572447337366443e6628ca40d52f33d78fb73abe17ee1a07f3469f
