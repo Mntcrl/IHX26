@@ -35,3 +35,24 @@ Visual inspection of a sample: the "laptop screen" and "screen among objects" ca
 - Recapture configurations not yet captured: monitor or laptop showing a full-screen photograph of a 3-D scene filling most of the frame (frontal and tilted 20–45°), printed photograph (table, wall), screen showing a 3-D photograph with real objects in front filling 40–70 % of the frame, projected image.
 - Missing classes: outdoor, low-texture; only one hand-held low-motion capture; no phone-resting-on-support capture (needed to confirm the 0.5 mm floor rejects it).
 - Calibration candidates for the next policy revision (with these data): rgb_depth thresholds (dominant false-negative cause on 3-D scenes), gyro_tol_urad, reflective-surface behaviour.
+
+## Session 2 (23:10–23:20) and curated calibration set
+
+Pull at 23:20: 101 GXRW + 123 labels (device and PC lists identical). Session 2: 46 attempts with the 0.5 mm floor build, 45 frozen without issue, 1 "no motion".
+
+Curation (`fixtures/real/calibration/manifest.json`, private; class folders hard-link the GXRW files for `geometry-tool calibrate`): every capture was reviewed on contact sheets. Rules: label sidecar required (2 pre-label captures excluded); captures rejected only by the former 3 mm rule are re-qualified when both sides reach 0.5 mm; below-floor captures go to `no-motion`; labels corrected where the image contradicts them (a room labelled "laptop screen", a printed photo labelled "laptop screen", laptops on desks moved to `genuine-scene-with-screen`, phones lying on a table moved to `screen-on-flat-surface`). 99 captures included.
+
+| curated class (captures) | PASS / evaluations (8 challenges each) | notes |
+|---|---|---|
+| genuine-3d (44) | 249 / 352 (70.7 %) | false-negative causes: rgb_depth sole 64, geometry 9, temporal 7 |
+| genuine-scene-with-screen (10) | 47 / 80 | real desks containing laptops/phones |
+| dynamic (3) | 17 / 24 | |
+| screen-recapture (14) | 5 / 112 (4.5 %) | all 5 from one capture: laptop screen filling ~90 % of the frame at 0.23–0.29 m (close to d_min 200 mm); every other capture 0/8 |
+| printed-photo (6) | 1 / 48 | 4 of 6 prints were held closer than 0.2 m (no valid depth): rejected for missing depth, not by planarity; re-shoot at 0.3–0.6 m |
+| screen-on-flat-surface (10) | 13 / 80 | real phone lying on a real table (low-information, mostly planar scene) |
+| flat-wall (5) | 0 / 40 | |
+| reflective (5) | 2 / 40 | |
+| no-motion (1) | 0 / 8 | motion_ok false as intended |
+| genuine-3d-low-motion (1) | 2 / 8 | |
+
+Calibration candidates with these data: rgb_depth thresholds (main false-negative cause), d_min_mm / distance-dependent planarity tolerance (the only recapture false-accept is at ~0.25 m), gyro_tol_urad (observed residual ≤ 1.9 mrad vs 20 mrad tolerance). Still to capture with the phone: printed photos at 0.3–0.6 m, a large monitor showing a 3-D photograph (frontal and tilted), projected image, outdoor scenes, more phone-resting captures.
