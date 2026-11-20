@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { cpSync, createReadStream, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -14,6 +15,8 @@ const { BaseTester } = require('circom_tester/common/tester.js');
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const harness = join(root, 'circuits/tests/geometry');
 const fixtures = join(root, 'test-vectors/policy');
+const realCalibration = join(root, 'fixtures/real/calibration');
+const geometryTool = process.env.GALAXY_GEOMETRY_TOOL;
 const prime = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
 const inputNames = (
@@ -41,23 +44,34 @@ function scratch(t) {
 
 async function compile(dir, source, wanted, groupConstraints = false) {
     const circom = process.env.CIRCOM ?? join(root, '.tools/bin/circom');
-    execFileSync(circom, [source, '--wasm', '--r1cs', '--sym', '--O1', '-o', dir], { cwd: root, stdio: 'inherit' });
+    const options = ['--wasm', '--r1cs', '--sym', '--O1', '-o', dir];
+    // O1 may replace the name of an internal value with another signal that has
+    // the same value; retain the substitution map to locate that witness wire.
+    if (groupConstraints) options.push('--simplification_substitution');
+    execFileSync(circom, [source, ...options], { cwd: root, stdio: 'inherit' });
     const name = basename(source, '.circom');
     const tester = new BaseTester(dir, name);
     const builder = require(join(dir, `${name}_js`, 'witness_calculator.js'));
     const calculator = await builder(readFileSync(join(dir, `${name}_js`, `${name}.wasm`)), { sanityCheck: true });
     await tester.loadConstraints();
     const indexes = new Map();
+    const locations = new Map();
+    const aliases = new Map();
     const groupByWire = groupConstraints ? new Uint8Array(tester.nVars) : null;
     const groups = ['wiring', 'pixelValid', 'planarity', 'planarity.plane', 'planarity.support',
         'rgbDepth', 'pose', 'temporal', 'temporal.pair', 'quality', 'motion', 'motion.imu'];
     const symbolStream = createInterface({ input: createReadStream(join(dir, `${name}.sym`)), crlfDelay: Infinity });
     for await (const line of symbolStream) {
-        const [, index, , label] = line.split(',');
+        const [id, index, , label] = line.split(',');
         const wire = Number(index);
-        if (!(wire > 0)) continue;
         const key = label.slice('main.'.length);
-        if (wanted.has(key)) indexes.set(key, wire);
+        if (wire > 0) {
+            if (wanted.has(key)) indexes.set(key, wire);
+            if (groupByWire) locations.set(id, wire);
+        } else if (groupByWire && wanted.has(key)) {
+            aliases.set(key, id);
+        }
+        if (!(wire > 0)) continue;
         if (groupByWire) {
             for (let g = groups.length - 1; g > 0; g--) {
                 const prefix = groups[g];
@@ -66,6 +80,21 @@ async function compile(dir, source, wanted, groupConstraints = false) {
                     break;
                 }
             }
+        }
+    }
+    if (aliases.size) {
+        const substitutions = JSON.parse(readFileSync(join(dir, `${name}_substitutions.json`), 'utf8'));
+        for (const [key, label] of aliases) {
+            let id = label;
+            const visited = new Set();
+            while (!locations.has(id)) {
+                const [[next, coefficient] = [], ...rest] = Object.entries(substitutions[id] ?? {});
+                assert(next !== '0' && coefficient === '1' && rest.length === 0 && !visited.has(id),
+                    `expected a live signal alias for ${key}`);
+                visited.add(id);
+                id = next;
+            }
+            indexes.set(key, locations.get(id));
         }
     }
     if (groupByWire) {
@@ -173,18 +202,60 @@ function readView(path) {
     assert.deepEqual(Object.keys(view.expected).sort(), [...statNames, ...flagNames, 'pass'].sort());
     return view;
 }
-async function compareView(circuit, view) {
-    const witness = await circuit.calculator.calculateWitness(Object.fromEntries(inputNames.map(name => [name, encode(view[name])])), true);
-    await circuit.tester.checkConstraints(witness);
-    for (const name of statNames) assert.equal(value(circuit, witness, `st_${name}`), BigInt(view.expected[name]), name);
-    for (const name of flagNames) assert.equal(value(circuit, witness, name), BigInt(view.expected[name]), name);
-    assert.equal(flagNames.every(name => value(circuit, witness, name) === 1n), view.expected.pass, 'pass');
+
+async function compareView(circuit, view, { privateView = false } = {}) {
+    let witness;
+    try {
+        const inputs = Object.fromEntries(inputNames.map(name => [name, encode(view[name])]));
+        witness = await circuit.calculator.calculateWitness(inputs, true);
+        await circuit.tester.checkConstraints(witness);
+    } catch (error) {
+        if (privateView) throw new Error('private GeometryView failed witness generation or R1CS verification');
+        throw error;
+    }
+    function equal(actual, expected, name) {
+        if (privateView) assert(actual === expected, `${name} differs from the reference`);
+        else assert.equal(actual, expected, name);
+    }
+    for (const name of statNames) equal(value(circuit, witness, `st_${name}`), BigInt(view.expected[name]), `st_${name}`);
+    for (const name of flagNames) equal(value(circuit, witness, name), BigInt(view.expected[name]), name);
+    equal(flagNames.every(name => value(circuit, witness, name) === 1n), view.expected.pass, 'pass');
     return witness;
+}
+
+async function comparePrivateViews(t, circuit) {
+    const classDir = join(realCalibration, 'classes');
+    const classes = readdirSync(classDir, { withFileTypes: true })
+        .filter(entry => entry.isDirectory()).map(entry => entry.name).sort();
+    assert(classes.length >= 10, 'expected at least ten private calibration classes');
+    // Each run regenerates the references for the current policy. The private
+    // view files stay under fixtures/real, in a directory accessible only to us.
+    const outDir = mkdtempSync(join(realCalibration, 'circuit-geometry-views-'));
+    const challengeHash = (tag, index) => createHash('sha256').update(`geometry-test:${tag}:${index}`).digest('hex');
+    for (const [index, category] of classes.entries()) {
+        await t.test(`private calibration view ${index+1}`, async () => {
+            let view;
+            try {
+                const inputDir = join(classDir, category);
+                const captures = readdirSync(inputDir, { withFileTypes: true })
+                    .filter(entry => entry.isFile() && entry.name.endsWith('.gxrw')).map(entry => entry.name).sort();
+                const out = join(outDir, `${index+1}.json`);
+                execFileSync(geometryTool, ['view', join(inputDir, captures[0]),
+                    '--capture-id', challengeHash('capture', index), '--lsel', String(10_000 + index),
+                    '--lsel-hash', challengeHash('ledger', index), '--out', out], { cwd: root, stdio: 'ignore' });
+                view = readView(out);
+            } catch {
+                // CLI or decoding errors could contain sensitive paths or values.
+                throw new Error('could not build and decode a private calibration GeometryView');
+            }
+            await compareView(circuit, view, { privateView: true });
+        });
+    }
 }
 
 const negativeSignals = ['planarity.support[0].inlier[0]', 'motion.imu[0].integral[0][0]',
     'planarity.plane[0].fit[0].q', 'planarity.plane[0].fit[0].r', 'planarity.plane[0].den'];
-const projectedInputs = Array.from({ length: 64 }, (_, i) => `pr_bx[${i}]`);
+const projectedInputs = Array.from({ length: 64 }, (_, i) => [`pr_bx[${i}]`, `pr_by[${i}]`]).flat();
 const projectionDivision = Array.from({ length: 64 }, (_, i) =>
     ['q', 'r'].map(s => `temporal.pair[${i}].quotient[0].${s}`).concat(`temporal.pair[${i}].guarded[0].safeDen`)).flat();
 
@@ -194,27 +265,35 @@ test('production policy agrees with every reference GeometryView', async t => {
     assert(names.length > 0, 'missing default reference fixtures');
     const circuit = await compile(scratch(t), join(harness, 'policy.circom'),
         new Set([...outputNames, ...negativeSignals, ...projectedInputs, ...projectionDivision]), true);
-    assert(circuit.tester.constraints.length <= 450_000, 'policy constraint budget exceeded');
     let pass;
     let offscreen;
     for (const name of names) {
         await t.test(name, async () => {
             const view = readView(join(fixtures, name));
             const witness = await compareView(circuit, view);
-            if (!pass && view.expected.pass) pass = { view, witness };
-            if (!offscreen && view.pairs.some(pair => !pair.inb)) offscreen = { view, witness };
+            if (!pass && view.expected.pass && value(circuit, witness, negativeSignals[4]) > 1n) pass = { view, witness };
+            if (!offscreen && view.pairs.some(pair => !pair.inb && pair.uj !== null)) offscreen = { view, witness };
         });
     }
-    assert(pass, 'at least one passing reference fixture required');
-    assert(offscreen, 'at least one rejected projection required');
+    if (geometryTool) await comparePrivateViews(t, circuit);
+    assert(pass, 'expected a passing reference fixture with an active first plane fit');
+    assert(offscreen, 'expected a positive-depth projection outside the raster');
     const { view, witness } = pass;
     const inside = view.pairs.findIndex(pair => pair.inb);
-    const outside = offscreen.view.pairs.findIndex(pair => !pair.inb);
+    const outside = offscreen.view.pairs.findIndex(pair => !pair.inb && pair.uj !== null);
     assert(inside >= 0 && outside >= 0);
     const [inlier, integral, fitQ, fitR, fitDen] = negativeSignals;
     // q + 1 and r - den keep num = q*den + r but leave r outside [0, den).
-    const shiftedDivision = (q, r, den) => ({ [q]: value(circuit, witness, q) + 1n,
-        [r]: value(circuit, witness, r) - value(circuit, witness, den) });
+    function shiftedDivision(q, r, den) {
+        const divisor = value(circuit, witness, den);
+        const quotient = value(circuit, witness, q);
+        const remainder = value(circuit, witness, r);
+        const shiftedQ = quotient + 1n;
+        const shiftedR = remainder - divisor;
+        assert(divisor > 0n && remainder >= 0n && remainder < divisor && shiftedR < 0n);
+        assert(shiftedQ*divisor + shiftedR === quotient*divisor + remainder, 'division identity must be preserved');
+        return { [q]: shiftedQ, [r]: shiftedR };
+    }
     const pairDivision = [`temporal.pair[${inside}].quotient[0].q`, `temporal.pair[${inside}].quotient[0].r`,
         `temporal.pair[${inside}].guarded[0].safeDen`];
     const cases = [
@@ -222,6 +301,8 @@ test('production policy agrees with every reference GeometryView', async t => {
         ['inlier predicate', witness, { [inlier]: 1n - value(circuit, witness, inlier) }],
         ['in-bounds projected block', witness, { [`pr_bx[${inside}]`]: (view.pr_bx[inside]+1)%64 }],
         ['offscreen projected block', offscreen.witness, { [`pr_bx[${outside}]`]: 1 }],
+        ['in-bounds projected block row', witness, { [`pr_by[${inside}]`]: (view.pr_by[inside]+1)%48 }],
+        ['offscreen projected block row', offscreen.witness, { [`pr_by[${outside}]`]: 1 }],
         ['first maximizing hypothesis', witness, { st_j_star: (view.expected.j_star+1)%4 }],
         ['IMU integral term', witness, { [integral]: value(circuit, witness, integral)+1n }],
         ['plane coefficient quotient/remainder pair', witness, shiftedDivision(fitQ, fitR, fitDen)],

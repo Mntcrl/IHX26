@@ -1,7 +1,6 @@
 pragma circom 2.2.2;
 
 include "../../components/geometry/gadgets.circom";
-include "../../components/geometry/policy_v1m.circom";
 
 template GeometryGadgetTest() {
     signal input x;
@@ -29,6 +28,7 @@ template GeometryGadgetTest() {
     signal output absLe;
     signal output absGe;
     component a = GeoAbs(8);
+    a.in <== x;
     band0 <== GeoInterval(8,0)(x);
     band7 <== GeoInterval(8,7)(x);
     band8 <== GeoInterval(8,8)(x);
