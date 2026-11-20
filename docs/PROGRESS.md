@@ -1,102 +1,93 @@
 # XRPL Galaxy — Progress
 
-Status values: DONE (demonstrated, evidence linked), PARTIAL (some evidence, gaps listed), INCOMPLETE (not demonstrated; reason given). Measurements below come only from real runs; anything else is labelled [INFERENCE].
+Status values: DONE (demonstrated, evidence linked), PARTIAL (some evidence, gaps listed), IN PROGRESS (code exists, not yet demonstrated), INCOMPLETE (not demonstrated; reason given). Measurements come only from real runs; anything else is labelled [INFERENCE].
 
-Normative spec: [`docs/protocol/galaxy-v1-spec.md`](protocol/galaxy-v1-spec.md). Plan: [`docs/PLAN.md`](PLAN.md). Decisions: [`docs/adr/`](adr/README.md).
+Normative spec: [`docs/protocol/galaxy-v1-spec.md`](protocol/galaxy-v1-spec.md). Plan: [`docs/PLAN.md`](PLAN.md). Decisions: [`docs/adr/`](adr/README.md). Incidents: [`docs/incidents/`](incidents/).
+
+Last update: 2026-11-20 21:45 CET (orchestrator).
 
 ## Modules
 
-Ownership per spec §1 and §20.
-
-| Module | Owner | Status | Evidence |
+| Module | Owner | Status | Evidence / notes |
 |---|---|---|---|
-| Root workspace, Makefile, toolchain, docs skeleton | Scaffold / orchestrator | not-started | |
-| `crates/galaxy-protocol` | ProtocolCrypto | not-started | |
-| `crates/galaxy-crypto` | ProtocolCrypto | not-started | |
-| `crates/galaxy-image` | ImageEvidence | not-started | |
-| `crates/galaxy-evidence` | ImageEvidence | not-started | |
-| `crates/galaxy-geometry` | Geometry | not-started | |
-| `crates/galaxy-witness` | CircuitCore | not-started | |
-| `crates/galaxy-attestation` | Attestation | not-started | |
-| `crates/galaxy-xrpl` | XRPL | not-started | |
-| `crates/galaxy-prover` | MobileProver | not-started | |
-| `crates/galaxy-verifier` | Verifier | not-started | |
-| `crates/galaxy-cli` (`galaxy`) | Verifier | not-started | |
-| `crates/galaxy-node` (`galaxy-node`) | Node | not-started | |
-| `crates/galaxy-wasm` | WebVerifier | not-started | |
-| `crates/galaxy-ffi` | IOS (phase 2) | not-started | |
-| `circuits/` core (public inputs, sampling, openings, commitments, PASS, dev setup, artifacts) | CircuitCore | not-started | |
-| `circuits/` geometry (§8.2–§8.5 policy math, generated policy constants) | CircuitGeo | not-started | |
-| `apps/capture-ios/` | IOS | not-started | |
-| `apps/prover-bench-ios/` | MobileProver | not-started | |
-| `apps/verifier-web/` | WebVerifier | not-started | |
-| `bindings/swift/` | IOS + MobileProver | not-started | |
-| `bindings/wasm/` | WebVerifier | not-started | |
-| `policies/` | ProtocolCrypto (calibration via orchestrator) | not-started | |
-| `test-vectors/` | producing agent per area | not-started | |
-| `fixtures/synthetic/` | Geometry | not-started | |
-| `deployments/` | ProtocolCrypto (network config), Node (docker compose) | not-started | |
-| `docs/security/` | Security | not-started | |
+| Root workspace, Makefile, toolchain, docs skeleton | Scaffold / orchestrator | DONE | commit 66b4749; `make doctor` exits 0; circom 2.2.3, snarkjs 0.7.6, wasm-bindgen 0.2.130, ptau 2^20/2^21 blake2b-verified (`circuits/ptau.lock.json`) |
+| `crates/galaxy-protocol` | ProtocolCrypto | IN PROGRESS | commit ac08964 (wip) |
+| `crates/galaxy-crypto` | ProtocolCrypto | IN PROGRESS | commit ac08964 (wip); Poseidon vectors vs circomlibjs, trees, sampling, public inputs |
+| `crates/galaxy-image` | ImageEvidence | IN PROGRESS | commit c34897e (wip); JPEG reference decoder switched to zune-jpeg (jpeg-decoder spawns threads unconditionally) |
+| `crates/galaxy-evidence` | ImageEvidence | IN PROGRESS | commit c34897e (wip) |
+| `crates/galaxy-geometry` | Geometry | IN PROGRESS | commit bfd575f (wip) |
+| `crates/galaxy-witness` | CircuitCore | IN PROGRESS | commit 65caa70 (wip) |
+| `circuits/` core + geometry | CircuitCore / CircuitGeo | IN PROGRESS | commit 65caa70; `main_v1m.circom` compiles (circom 2.2.3 `--O2`): 905,931 constraints, 22 public inputs, 3,481 private inputs |
+| `crates/galaxy-attestation` | Attestation | IN PROGRESS | commit b499654 (wip) |
+| `crates/galaxy-xrpl` | XRPL | IN PROGRESS | commit 7abda62 (wip); codec checked against 256 real Testnet transactions |
+| `crates/galaxy-prover` | MobileProver | IN PROGRESS | commit a3618d6 (wip); iOS static library cross-compiled on Linux |
+| `crates/galaxy-verifier`, `galaxy-cli` | Verifier | IN PROGRESS | commit 9335e2d (wip; does not compile yet) |
+| `crates/galaxy-node` | Node | IN PROGRESS | commit 9335e2d (wip) |
+| `crates/galaxy-wasm`, `apps/verifier-web` | WebVerifier | IN PROGRESS | commit 9335e2d (wip) |
+| `crates/galaxy-ffi` | IOS | not started | |
+| `apps/capture-ios/` | IOS | IN PROGRESS | commit acf43fc (wip); POV/backend code removed; GUI-session build runner signs builds |
+| `apps/prover-bench-ios/` | MobileProver | PARTIAL | commit a3618d6; 500k benchmark proved on device (see Measurements) |
+| `docs/security/` | Security | not started | |
 
 ## Acceptance criteria (brief §25)
 
 | # | Criterion | Status | Reason / evidence |
 |---|---|---|---|
-| 1 | Launch XRPL Galaxy on the physical iPhone 13 Pro Max | INCOMPLETE | not started |
-| 2 | Capture a synchronized photograph with actual LiDAR and complementary sensor evidence | INCOMPLETE | not started |
-| 3 | Generate the canonical image and evidence commitments | INCOMPLETE | not started |
-| 4 | Authenticate the capture using the implemented attestation mechanism | INCOMPLETE | not started |
-| 5 | Publish a validated CAPTURE transaction to XRPL Testnet | INCOMPLETE | not started |
-| 6 | Derive the sampling challenge from the prescribed future ledger | INCOMPLETE | not started |
-| 7 | Generate a real Groth16 proof locally on the iPhone | INCOMPLETE | not started |
+| 1 | Launch XRPL Galaxy on the physical iPhone 13 Pro Max | PARTIAL | the restructured capture app was built (GUI-session runner), installed and launched on the device 2026-11-20 20:43; full Galaxy flow not yet integrated |
+| 2 | Capture a synchronized photograph with actual LiDAR and complementary sensor evidence | PARTIAL | two raw GXRW captures (t−/t0/t+ RGB, depth, confidence, poses, IMU) exported from the device to `fixtures/real/capture-ios/` (private, gitignored); IMU↔ARKit timestamp offset −3.1 / −5.0 ms |
+| 3 | Generate the canonical image and evidence commitments | IN PROGRESS | Rust ingest/commitment code exists; not yet run on the real captures |
+| 4 | Authenticate the capture using the implemented attestation mechanism | PARTIAL | App Attest works on the device without the entitlement (development environment): isSupported, generateKey, attestKey (5,830 B), generateAssertion (141/142 B); verifier-side validation in progress |
+| 5 | Publish a validated CAPTURE transaction to XRPL Testnet | INCOMPLETE | XRPL submission code exists; no Galaxy CAPTURE published yet |
+| 6 | Derive the sampling challenge from the prescribed future ledger | IN PROGRESS | sampling implemented + vectors; no live run yet |
+| 7 | Generate a real Groth16 proof locally on the iPhone | PARTIAL | benchmark circuit (500k constraints) proved on device; Galaxy circuit not yet |
 | 8 | Verify the proof locally before publication | INCOMPLETE | not started |
 | 9 | Publish a validated PROOF transaction | INCOMPLETE | not started |
-| 10 | Export the certified photograph with embedded XRPL references | INCOMPLETE | not started |
-| 11 | Open the photograph in the public verification application running on another device | INCOMPLETE | not started |
-| 12 | Retrieve the required public cryptographic material | INCOMPLETE | not started |
-| 13 | Independently verify the photograph and proof | INCOMPLETE | not started |
-| 14 | Display the correct verification result | INCOMPLETE | not started |
-| 15 | Modify the photograph and demonstrate verification failure | INCOMPLETE | not started |
-| 16 | Remove Galaxy metadata without changing the canonical raster and recover the proof through photo identifier lookup | INCOMPLETE | not started |
-| 17 | Stop all Galaxy discovery nodes and demonstrate verification through embedded XRPL references | INCOMPLETE | not started |
-| 18 | Demonstrate that an ordinary unregistered photograph is classified as NOT_FOUND, not fake | INCOMPLETE | not started |
-| 19 | Reference engine and circuit reject or decline to certify representative screen-recapture cases according to the calibrated policy | INCOMPLETE | not started |
-| 20 | Report actual transaction counts, memo sizes, latency, constraints, proving memory and fees | INCOMPLETE | not started |
+| 10 | Export the certified photograph with embedded XRPL references | INCOMPLETE | XMP embed code in progress |
+| 11 | Open the photograph in the public verification application on another device | INCOMPLETE | web app in progress |
+| 12 | Retrieve the required public cryptographic material | INCOMPLETE | |
+| 13 | Independently verify the photograph and proof | INCOMPLETE | |
+| 14 | Display the correct verification result | INCOMPLETE | |
+| 15 | Modify the photograph and demonstrate verification failure | INCOMPLETE | |
+| 16 | Remove Galaxy metadata and recover the proof through photo identifier lookup | INCOMPLETE | |
+| 17 | Stop all Galaxy discovery nodes and verify through embedded XRPL references | INCOMPLETE | |
+| 18 | Ordinary unregistered photograph classified as NOT_FOUND, not fake | INCOMPLETE | |
+| 19 | Reference engine and circuit decline to certify representative screen-recapture cases | INCOMPLETE | synthetic scenario suite in progress; no physical screen experiments yet (need the user handling the phone) |
+| 20 | Report actual transaction counts, memo sizes, latency, constraints, proving memory and fees | PARTIAL | constraints and benchmark proving measured (below); XRPL numbers pending |
 
 The two-transaction target (CAPTURE + PROOF per photo) must be confirmed by measurement (criterion 20).
 
 ## Measurements
 
-None yet. Each entry must name the command, device/host, date and raw output location.
-
 | Quantity | Value | Source |
 |---|---|---|
-| Transactions per certified photo | — | |
-| CAPTURE / PROOF memo size (serialized blob) | — | |
-| Fees per photo (drops) | — | |
-| Capture → CAPTURE validated latency | — | |
-| L0 + 5 → PROOF validated latency | — | |
-| Circuit constraints (`galaxy-pc-v1m`) | — | |
-| On-device proving time / peak memory (iPhone 13 Pro Max) | — | |
-| Browser verification time | — | |
+| Circuit constraints (`galaxy-pc-v1m`, `main_v1m.circom`, circom 2.2.3 `--O2`) | 905,931 (22 public inputs, 3,481 private inputs) | CircuitCore2 compile 2026-11-20 ~21:05 |
+| On-device proving, benchmark circuit 500k constraints (iPhone 13 Pro Max, iOS 27.2.1) | witness 0.29 s + prove 3.4 s = 3.7 s; peak phys_footprint 462–542 MB; thermal nominal; proofs verified by snarkjs on Linux | `apps/prover-bench-ios/artifacts/results/` (gitignored), 2026-11-20 20:38 |
+| Desktop snarkjs `groth16 setup` feasibility at ~1M constraints (13 GB Linux box) | not feasible (`r1cs info` alone ~5 GB RSS; setup estimated ~10 GB) → Rust low-memory development setup | MobileProver 2026-11-20 20:44 |
+| App Attest artefact sizes (development environment) | attestation object 5,830 B; assertions 141 / 142 B | IOS2 device run 2026-11-20 20:44 |
+| Transactions per certified photo | — | pending |
+| CAPTURE / PROOF memo size (serialized blob) | — | pending |
+| Fees per photo (drops) | — | pending |
+| Latencies (submit → validated, L0 → Lsel, Lsel → PROOF) | — | pending |
+| Browser verification time | — | pending |
 
 ## Known limitations
 
-- None recorded yet beyond the blockers below.
+- **Measured weakness of v1m (synthetic, [docs/experiments/synthetic-v1m.md](experiments/synthetic-v1m.md)):** depth taken from another scene with the same RGB passes v1m in 16/20 seeds, as often as genuine room scenes. The RGB–LiDAR edge check is satisfied by textures with edges everywhere, and the temporal photometric check (any pixel of the opened 4×4 block within tolerance) cannot discriminate depth when parallax is sub-pixel at the 256×192 analysis resolution (simulated hand baselines 2–15 mm). arch.docx §07 expects this case to fail; v1m does not reliably achieve it. Candidate v2 changes (new policy/circuit ids, not implemented): larger minimum baseline, exact predicted-pixel photometric checks on more candidates, full-resolution RGB patch commitments, edge-coincidence statistics against a control offset.
+- Other synthetic results: flat wall, monitors (frontal/tilted/curved), print, pure rotation, static camera, low texture, reflective surfaces, dynamic scenes and foreign IMU are rejected in 20/20 seeds; a centre monitor surrounded by objects passes 2/20, swapped t−/t+ 1/20, RGB from another viewpoint 4–5/20; genuine synthetic rooms pass 16/20 (the 4 failures have baselines < 3 mm).
+- **Real captures ([docs/experiments/real-captures-v1m.md](experiments/real-captures-v1m.md)):** the device→camera gyro axis matrix `m_cd` was calibrated from both captures (RMS 33 mrad vs 157 mrad for the initial value; gravity cosines 0.991/0.993) → policy id `ef744a7f…afac`. Capture #2 does not pass (0/17 challenges): it moved 26° and 15 cm in 267 ms at ~0.3 m, outside the motion envelope; the temporal reprojection chain is not yet validated on real data. Small-motion captures of 3D scenes at 0.5–3 m are needed to validate conventions and calibrate gyro_tol / rot_max / baseline.
+- App Attest runs in the development environment (free/personal team, development-signed build); production attestation needs a paid team and an App Store/TestFlight-distributed build.
+- Trusted setup is development single-party only (not production-trusted); a multi-party phase-2 ceremony is required before any production use.
+- Physical consistency is a property of committed sensor data under a public policy, not proof that a scene is real; a fully synthetic but internally consistent sensor dataset can satisfy it if the acquisition pipeline is compromised.
 
 ## Deviations
 
-Deviations from `arch.docx` are normative in [spec §18](protocol/galaxy-v1-spec.md#18-deviations-from-archdocx-each-has-an-adr); each has an ADR in [`docs/adr/`](adr/README.md).
+Normative in [spec §18](protocol/galaxy-v1-spec.md#18-deviations-from-archdocx-each-has-an-adr); each has an ADR in [`docs/adr/`](adr/README.md).
 
-## Blockers
+## Blockers and operational issues
 
-Copied from the 2026-11-20 reconnaissance.
-
-- Xcode reports "iOS 26.5 is not installed" platform component → scheme/destination builds fail; only `-target` builds resolve. iPhone runs iOS 27.2.1 while SDK/Xcode is 26.5/26.6.
-- Latest Makefile-layout product `build/Debug-iphoneos/XRPL_Galaxy.app` (17:02) is unsigned; last signed product is from 14:11.
-- Provisioning profiles expire 2026-11-27 (7-day team profiles) and lack the App Attest entitlement.
-- Mac: 8 GB RAM, 8.8 GiB free disk (96 % used); Rust has no iOS targets; circom/snarkjs absent.
-- Linux: no `wasm32-unknown-unknown`, wasm-pack/bindgen/opt, circom, snarkjs. (Phase 0 installs the Rust targets, circom, snarkjs and wasm-bindgen-cli repo-locally; see `make doctor`.)
-- Hermez ptau URL (`storage.googleapis.com/zkevm/ptau/…_20.ptau`) returns 403; S3 hermez mirror also 403. (Phase 0 resolution recorded in `circuits/ptau.lock.json`.)
-- Mac working tree has 17 uncommitted deletions (backend/docs/tests); Mac repo has no remotes and `receive.denyCurrentBranch` unset (pushes to checked-out `main` would be refused).
-- External POV repo (`pov/src/planarity.rs`, `pov/setup`, `pov/testdata`) not found under Mac `~/Workspace/IXH26` nor Linux `/home/ivan`.
+- Subagent model limits: GPT 6.2 Sol usage limit reached 2026-11-20 ~20:40 (reset ≈ 5 h later); Anthropic account rate limit hit at ~20:55 with 13 concurrent agents → work continues in waves of ≤ 5 agents.
+- Mac link: SSH over Wi-Fi drops intermittently (ping RTT 60–1650 ms); `scripts/lib-mac.sh` retries with backoff and multiplexing.
+- Code signing over SSH fails (`errSecInternalComponent`, keychain locked in SSH sessions; no Xcode account configured) → builds are signed by a GUI-session LaunchAgent runner (`apps/capture-ios/tools/`). No new bundle ids can be provisioned (no Xcode account), so the prover benchmark temporarily reuses `utcq.XRPL-Galaxy`.
+- Xcode 26.6 / iOS SDK 26.5: scheme/destination builds fail ("iOS 26.5 is not installed"); `-target` builds work. iPhone runs iOS 27.2.1.
+- 7-day provisioning profiles expire 2026-11-27.
+- Device data incident 2026-11-20 20:40 (capture app Documents deleted by a benchmark cleanup): [report](incidents/2026-11-20-device-container-deletion.md); mandatory rules in spec §19.

@@ -31,12 +31,23 @@ fixtures/real/
 !test-vectors/prover/fixture.zkey
 *.wtns
 circuits/build/
-circuits/artifacts/**
-!circuits/artifacts/*.json
-!circuits/artifacts/*.md
+# Large circuit artifacts stay out of git (digests are pinned in the committed
+# descriptors); small public material (descriptor JSON, VK bytes, bundles,
+# manifests) under circuits/artifacts/ is committed.
+circuits/artifacts/**/*.r1cs
+circuits/artifacts/**/*.sym
+circuits/artifacts/**/*.wasm
+circuits/artifacts/**/*_js/
+circuits/artifacts/**/*_cpp/
+circuits/artifacts/**/*.graph.bin
+circuits/artifacts/**/*.pk
+circuits/artifacts/**/*.ark
 
 # Generated bindings and web output
 bindings/swift/**/lib*.a
 bindings/wasm/pkg/
 apps/verifier-web/dist/
 apps/prover-bench-ios/artifacts/
+
+# circom_tester / witness calculator debug logs written to the cwd
+log_input_signals*.txt

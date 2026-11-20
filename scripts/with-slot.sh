@@ -66,6 +66,16 @@ while [ -z "$slot" ]; do
 done
 
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
+# Rayon-based tools (galaxy-prover, arkworks) default to one thread per CPU; keep
+# them bounded so concurrent heavy jobs do not oversubscribe the 8-CPU host.
+export RAYON_NUM_THREADS="${RAYON_NUM_THREADS:-4}"
+
+# Guard against runaway thread creation: on 2026-11-20 a leaking job reached
+# 16k threads and exhausted the user's pid budget (fork failures for every
+# process of the session). RLIMIT_NPROC counts all of this user's threads, so
+# the cap must stay well above normal usage (~1-2k) while failing a runaway
+# job long before the cgroup limit (~36k). Override with GALAXY_NPROC_LIMIT.
+ulimit -u "${GALAXY_NPROC_LIMIT:-12000}" 2>/dev/null || true
 
 # The command must not inherit the lock descriptors (a daemon it spawns would keep the slot).
 if [ -n "$heavy_fd" ]; then
