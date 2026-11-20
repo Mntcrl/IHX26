@@ -873,14 +873,49 @@ fn verified_json(cred: &VerifiedCredential) -> Json {
 }
 
 #[test]
-fn real_device_assertions_sign_sha256_of_nonce() {
+fn real_device_registration_and_assertions_share_key() {
     use p256::ecdsa::signature::hazmat::PrehashVerifier;
     let d = DeviceFixture::load();
     let device = d.bundle();
-    let key = p256::ecdsa::VerifyingKey::from_sec1_bytes(&leaf_point(&device.attestation)).unwrap();
-    for assertion in &d.assertions {
-        let mut decoded = decode(&unhex(&assertion.assertion_cbor_hex));
-        let client_data_hash = sha256(&[&unhex(&assertion.client_data_hex)]);
+    let cred = verify_registration(
+        &device,
+        &manifest(&device),
+        d.verify_at_unix_seconds,
+        &AcceptedAttestation {
+            app_ids: vec![d.app_id.clone()],
+            environments: vec![AttestationEnv::Development],
+        },
+    )
+    .unwrap();
+    assert_eq!(cred.class(), AttestationClass::AppleDevelopment);
+    assert_eq!(cred.key_id(), &device.key_id);
+    let CredentialPublicKey::AppleP256(key) = cred.public_key() else {
+        panic!("verified development credential must carry a P-256 key");
+    };
+    let [first, second] = d.assertions.as_slice() else {
+        panic!("device fixture must hold two assertions");
+    };
+    for (assertion, counter) in [(first, 1), (second, 2)] {
+        assert_eq!(assertion.counter, counter);
+        let assertion_bytes = unhex(&assertion.assertion_cbor_hex);
+        let client_data = unhex(&assertion.client_data_hex);
+        let core299: &[u8; 299] = client_data
+            .strip_prefix(b"GALAXY/ASSERT/v1\0")
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let client_data_hash = assertion_client_data_hash(core299);
+        assert_eq!(client_data_hash, sha256(&[&client_data]));
+        assert_eq!(
+            apple::verify_assertion(&assertion_bytes, cred.app_id(), &client_data_hash, key),
+            Ok(counter)
+        );
+        // The probe signed placeholder bytes, not a publishable CAPTURE core.
+        assert_eq!(
+            verify_capture_assertion(&cred, core299, &assertion_bytes),
+            Err(AttestError::CaptureCore)
+        );
+        let mut decoded = decode(&assertion_bytes);
         let auth = field(&mut decoded, "authenticatorData")
             .as_bytes()
             .unwrap()
