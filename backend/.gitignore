@@ -1,0 +1,4 @@
+node_modules/
+*.sqlite*
+.env*
+__pycache__/
