@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>AmbientBackendURL</key>
+    <string>$(AMBIENT_BACKEND_URL)</string>
+    <key>AmbientHalfWindowSeconds</key>
+    <string>$(AMBIENT_HALF_WINDOW_SECONDS)</string>
+    <key>AmbientPostWindowSeconds</key>
+    <string>$(AMBIENT_POST_WINDOW_SECONDS)</string>
+    <key>POVCoordinatorURL</key>
+    <string>$(POV_COORDINATOR_URL)</string>
+</dict>
+</plist>

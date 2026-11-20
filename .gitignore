@@ -9,3 +9,7 @@ crypto/target/
 __pycache__/
 .omp/
 .agents/
+build/
+xcuserdata/
+DerivedData/
+.DS_Store
