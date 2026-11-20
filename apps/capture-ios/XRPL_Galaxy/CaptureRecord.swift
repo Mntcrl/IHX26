@@ -118,16 +118,30 @@ nonisolated struct CaptureStore: Sendable {
 
     func hasRaw(_ record: CaptureRecord) -> Bool { FileManager.default.fileExists(atPath: url(record).path) }
 
-    func export(_ record: CaptureRecord) throws {
-        guard hasRaw(record) else { throw Failure.noRawCapture }
+    /// Local export directory pulled by `scripts/ios.sh pull-fixtures raw`.
+    func fixturesDirectory() throws -> URL {
         let dir = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask,
                                              appropriateFor: nil, create: true)
             .appending(path: "galaxy-fixtures", directoryHint: .isDirectory)
         try ProtectedFiles.directory(dir)
+        return dir
+    }
+
+    func export(_ record: CaptureRecord) throws {
+        guard hasRaw(record) else { throw Failure.noRawCapture }
         // The source and destination are local protected files; no share sheet or cloud export.
         // An earlier export of the same capture is never overwritten.
-        let destination = dir.appending(path: "\(record.id.uuidString).gxrw")
+        let destination = try fixturesDirectory().appending(path: "\(record.id.uuidString).gxrw")
         guard !FileManager.default.fileExists(atPath: destination.path) else { throw Failure.alreadyExported }
         try ProtectedFiles.create(Data(contentsOf: url(record), options: .mappedIfSafe), at: destination)
+    }
+
+    /// Writes the experiment label sidecar of one attempt; an existing sidecar is never replaced.
+    func writeLabel(_ label: CaptureLabel) throws {
+        let destination = try fixturesDirectory().appending(path: "\(label.captureId.uuidString).label.json")
+        guard !FileManager.default.fileExists(atPath: destination.path) else { throw Failure.alreadyExported }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+        try ProtectedFiles.create(encoder.encode(label), at: destination)
     }
 }

@@ -23,6 +23,13 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
     private(set) var bluetoothStatus = "Not scanning"
     private(set) var depthCoverage: Double?
     private(set) var baselineMillimeters: Double?
+    private(set) var rotationDegrees: Double?
+    private(set) var attempts = 0
+    private(set) var exported = 0
+    /// Experiment label for the next attempt; persisted so a session of one scene class needs no re-selection.
+    var sceneLabel: SceneLabel = SceneLabel(rawValue: UserDefaults.standard.string(forKey: "galaxy.sceneLabel") ?? "") ?? .unlabelled {
+        didSet { UserDefaults.standard.set(sceneLabel.rawValue, forKey: "galaxy.sceneLabel") }
+    }
     private(set) var clockSummary: String?
     private(set) var notice: String?
     private(set) var lastRaw: CaptureRecord?
@@ -39,6 +46,8 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
     @ObservationIgnored private var requestingPermission = false
     @ObservationIgnored private var firstFrameTime: Double?
     @ObservationIgnored private var probeTriggered = false
+    @ObservationIgnored private var attempt: (label: SceneLabel, coverage: Double?)?
+    @ObservationIgnored private var attemptMotion = MotionSummary()
     private let staticProbe: Bool
 
     override init() {
@@ -132,6 +141,7 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
         firstFrameTime = nil
         depthCoverage = nil
         baselineMillimeters = nil
+        rotationDegrees = nil
         imuStatus = "Not collecting"
         bluetoothStatus = "Not scanning"
         if pending != nil {
@@ -153,7 +163,8 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
         let previous = nearest(in: history, target: timestamp - 0.25, lower: timestamp - 0.5, upper: timestamp - 0.1)
         if let previous {
             baselineMillimeters = Self.baseline(snapshot, previous) * 1_000
-        } else { baselineMillimeters = nil }
+            rotationDegrees = PoseMath.rotationDeg(previous.transform, snapshot.transform)
+        } else { baselineMillimeters = nil; rotationDegrees = nil }
         history.append(snapshot)
         cameraStatus = snapshot.tracking == 2 ? "Tracking normal" : "Tracking: \(snapshot.trackingReason)"
         depthCoverage = snapshot.depth?.coverage()
@@ -203,6 +214,9 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
             try row.transition(to: .acquiring)
             try store.save(row)
             record = row
+            attempts += 1
+            attempt = (sceneLabel, depthCoverage)
+            attemptMotion = MotionSummary()
         } catch {
             notice = "Could not save the capture record in protected storage."
             return
@@ -233,6 +247,7 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
     private func freeze() async {
         guard let window = pending, let store, var row = record, row.state == .acquiring else { return }
         pending = nil
+        attemptMotion = Self.motionSummary(window)
         let bluetooth = bluetooth.freeze(center: window.center.timestamp, until: CACurrentMediaTime())
         guard let minus = window.minus, let plus = window.plus else {
             var reasons = [CaptureIssue.missingFrame.message]
@@ -286,10 +301,57 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
             notice = "The capture was frozen. Reopen the app to recover its record."
             return
         }
+        publishAttempt(row, rawAvailable: true)
         if staticProbe {
-            exportLastRaw()
             print("GXCAPTURE \(row.state.rawValue): \(row.reasons.joined(separator: "; ")); \(notice ?? "no export result")")
             exitDiagnostic()
+        }
+    }
+
+    private static func motionSummary(_ window: Pending) -> MotionSummary {
+        var summary = MotionSummary()
+        let center = window.center.transform
+        if let minus = window.minus {
+            summary.baselineMinusMm = PoseMath.baselineMm(minus.transform, center)
+            summary.rotationMinusDeg = PoseMath.rotationDeg(minus.transform, center)
+        }
+        if let plus = window.plus {
+            summary.baselinePlusMm = PoseMath.baselineMm(plus.transform, center)
+            summary.rotationPlusDeg = PoseMath.rotationDeg(plus.transform, center)
+        }
+        return summary
+    }
+
+    /// Exports the frozen raw capture (if any) and writes the label sidecar of the attempt to
+    /// Documents/galaxy-fixtures, for every attempt, so experiment statistics include failures.
+    private func publishAttempt(_ row: CaptureRecord, rawAvailable: Bool) {
+        guard let store, let current = attempt else { return }
+        attempt = nil
+        var rawExported = false
+        if rawAvailable {
+            do {
+                try store.export(row)
+                rawExported = true
+                exported += 1
+            } catch CaptureStore.Failure.alreadyExported {
+                rawExported = true
+            } catch {
+                notice = "Could not export the protected raw capture."
+            }
+        }
+        let label = CaptureLabel(captureId: row.id, sceneClass: current.label, claimedTimeMs: row.claimedTimeMs,
+                                 state: row.state, reasons: row.reasons, rawExported: rawExported,
+                                 motion: attemptMotion, depthCoverage: current.coverage,
+                                 appBuild: Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown")
+        attemptMotion = MotionSummary()
+        do {
+            try store.writeLabel(label)
+            if notice == nil {
+                notice = rawExported ? "Saved raw capture + label (\(current.label.title))."
+                                     : "Saved label of an attempt without raw capture (\(current.label.title))."
+            }
+        } catch {
+            notice = "Could not write the capture label."
         }
     }
 
@@ -300,6 +362,7 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
             try store.save(row)
             record = row
         } catch { notice = "Could not persist the capture result. Reopen the app to recover it." }
+        if let row = record, row.state == state { publishAttempt(row, rawAvailable: false) }
         if staticProbe {
             print("GXCAPTURE \(state.rawValue): \(reasons.joined(separator: "; ")); no raw capture")
             exitDiagnostic()
