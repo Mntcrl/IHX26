@@ -12,11 +12,13 @@
 //! purpose unless `evaluate_tx_response` reported `Expired` (for a CAPTURE the
 //! app decides whether a new capture still fits its deadline).
 
-use crate::keys::{decode_family_seed, encode_family_seed, Wallet};
+#[cfg(any(test, not(target_arch = "wasm32")))]
+use crate::keys::encode_family_seed;
+use crate::keys::{decode_family_seed, Wallet};
 use crate::ledger::{parse_server_info, take_http_result};
 use crate::submission::{self, Autofill, PendingTx, ResultClass, TxState};
-use crate::transaction::{AccountSet, Memo};
-use crate::{codec, Error};
+use crate::transaction::{decode_galaxy_object, AccountSet, Memo};
+use crate::Error;
 use serde_json::{json, Value};
 use zeroize::Zeroizing;
 
@@ -194,26 +196,23 @@ fn record_of(p: PendingTx) -> SignedRecord {
 }
 
 /// Re-validates a persisted record (hash, window, fee cap, network) before use.
-fn pending_of(network: &NetworkParams, record: &SignedRecord) -> Result<PendingTx, MobileError> {
+fn pending_of(network: &NetworkParams, record: SignedRecord) -> Result<PendingTx, MobileError> {
     network.check()?;
     let mut hash = [0u8; 32];
     if record.hash_hex.len() != 64 || hex::decode_to_slice(&record.hash_hex, &mut hash).is_err() {
         return Err(Error::Invalid("invalid record hash").into());
     }
-    let pending = PendingTx { purpose: record.purpose.clone(), hash, blob: record.blob.clone(), network_id: record.network_id,
+    let pending = PendingTx { purpose: record.purpose, hash, blob: record.blob, network_id: record.network_id,
         first_possible_ledger: record.first_possible_ledger, last_ledger: record.last_ledger };
-    pending.verify(network.network_id)?;
-    let fee = codec::decode(&pending.blob)?["Fee"].as_str().and_then(|fee| fee.parse::<u64>().ok());
-    if !fee.is_some_and(|fee| fee > 0 && fee <= network.max_fee_drops) {
-        return Err(Error::Invalid("persisted transaction fee exceeds configured cap").into());
-    }
+    let decoded = pending.check_fee(network.network_id, network.max_fee_drops)?;
+    decode_galaxy_object(&decoded)?;
     Ok(pending)
 }
 
 /// `submit` body for exactly the persisted blob; refused once the validated
 /// ledger reached `last_ledger` (the transaction can no longer apply).
 pub fn submit_request(network: NetworkParams, record: SignedRecord, validated_ledger: u32) -> Result<String, MobileError> {
-    let pending = pending_of(&network, &record)?;
+    let pending = pending_of(&network, record)?;
     if validated_ledger >= pending.last_ledger {
         return Err(Error::Invalid("refusing to submit against an already closed last ledger").into());
     }
@@ -221,7 +220,7 @@ pub fn submit_request(network: NetworkParams, record: SignedRecord, validated_le
 }
 
 pub fn evaluate_submit_response(network: NetworkParams, record: SignedRecord, body: String) -> Result<SubmitOutcome, MobileError> {
-    let pending = pending_of(&network, &record)?;
+    let pending = pending_of(&network, record)?;
     let result = take_http_result(serde_json::from_str(&body)?)?;
     let outcome = submission::evaluate_submit(&pending, &result)?;
     Ok(SubmitOutcome { engine_result: outcome.code, class: outcome.class })
@@ -229,14 +228,14 @@ pub fn evaluate_submit_response(network: NetworkParams, record: SignedRecord, bo
 
 /// `tx` lookup body; pass the same `validated_ledger` to [`evaluate_tx_response`].
 pub fn tx_request(network: NetworkParams, record: SignedRecord, validated_ledger: u32) -> Result<String, MobileError> {
-    let pending = pending_of(&network, &record)?;
+    let pending = pending_of(&network, record)?;
     Ok(rpc_body("tx", submission::tx_lookup_params(&pending, validated_ledger)))
 }
 
 /// The tx hash is recomputed from the returned blob and must equal the record;
 /// `validated`, ledger index and result are trusted from the RPC.
 pub fn evaluate_tx_response(network: NetworkParams, record: SignedRecord, validated_ledger: u32, body: String) -> Result<TxStatus, MobileError> {
-    let pending = pending_of(&network, &record)?;
+    let pending = pending_of(&network, record)?;
     let result = take_http_result(serde_json::from_str(&body)?)?;
     Ok(match submission::evaluate_tx_lookup(&pending, validated_ledger, &result)? {
         TxState::Pending => TxStatus::Pending,
@@ -251,6 +250,7 @@ pub fn evaluate_tx_response(network: NetworkParams, record: SignedRecord, valida
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codec;
 
     const NET: NetworkParams = NetworkParams { network_id: 1, allow_mainnet: false, max_fee_drops: 1000 };
 
@@ -287,6 +287,11 @@ mod tests {
         let mut tampered = record.clone();
         tampered.blob[10] ^= 1;
         assert!(submit_request(NET, tampered, 400).is_err());
+        let mut tampered = record.clone();
+        tampered.purpose.clear();
+        assert!(submit_request(NET, tampered, 400).is_err());
+        assert!(matches!(submit_request(NetworkParams { network_id: 0, ..NET }, record.clone(), 400), Err(MobileError::Network)));
+        assert!(submit_request(NetworkParams { max_fee_drops: 11, ..NET }, record.clone(), 400).is_err());
         let outcome = evaluate_submit_response(NET, record.clone(),
             ok(json!({"engine_result":"terQUEUED","tx_blob":hex::encode_upper(&record.blob)}))).unwrap();
         assert_eq!(outcome.class, ResultClass::Retry);
@@ -299,12 +304,14 @@ mod tests {
         assert!(evaluate_tx_response(NET, record.clone(), 411, not_found(false)).is_err());
         assert_eq!(evaluate_tx_response(NET, record.clone(), 411, not_found(true)).unwrap(), TxStatus::Expired);
         // TransactionIndex 3, empty AffectedNodes, TransactionResult tesSUCCESS.
-        let meta = "201C00000003F8F1031000";
-        let validated = ok(json!({"tx_blob":hex::encode_upper(&record.blob),"meta_blob":meta,"validated":true,
-            "ledger_index":403,"hash":record.hash_hex,"close_time_iso":"2026-11-20T20:00:00Z"}));
-        match evaluate_tx_response(NET, record, 405, validated) {
-            Ok(TxStatus::Validated { ledger_index: 403, success: true, .. }) => {}
-            other => panic!("unexpected {other:?}"),
-        }
+        let mut validated = json!({"tx_blob":hex::encode_upper(&record.blob),"meta_blob":"201C00000003F8F1031000",
+            "validated":true,"ledger_index":403,"hash":record.hash_hex,"close_time_iso":"2026-11-20T20:00:00Z"});
+        assert_eq!(evaluate_tx_response(NET, record.clone(), 405, ok(validated.clone())).unwrap(),
+            TxStatus::Validated { ledger_index: 403, transaction_index: 3, transaction_result: "tesSUCCESS".into(), success: true });
+        validated["meta_blob"] = json!("201C00000003F8F103107D"); // tecNO_DST_INSUF_XRP
+        assert_eq!(evaluate_tx_response(NET, record.clone(), 405, ok(validated.clone())).unwrap(),
+            TxStatus::Validated { ledger_index: 403, transaction_index: 3, transaction_result: "tecNO_DST_INSUF_XRP".into(), success: false });
+        validated["hash"] = json!("00".repeat(32));
+        assert!(evaluate_tx_response(NET, record, 405, ok(validated)).is_err());
     }
 }

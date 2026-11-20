@@ -54,7 +54,7 @@ Remote endpoint (default, `s.altnet.rippletest.net`): a dishonest or compromised
 
 `LedgerSource` (spec §13): `tx(hash) → Option<LedgerTx>` (blob, meta blob, TransactionResult, TransactionIndex, ledger index, validated, close time), `ledger_header(index)` (hash, parent hash, close time, validated), `account_tx(account, min, max, marker, limit)` (validated range, opaque marker), `server_info()` (network id, complete_ledgers, validated ledger). `RpcLedger<T: RpcTransport>` implements it over any transport (WASM uses a JS callback); `RpcClient` is the native transport. `RpcClient::ledger_transactions(index)` returns a validated ledger header with all its binary transactions sorted by TransactionIndex (node backfill).
 
-`RpcClient` (feature `native`): HTTPS only (HTTP only for loopback rippled); redirects never followed; no proxy; connect timeout 5 s, request timeout 15 s; response caps 64 KiB (preflight), 8 MiB (commands), 32 MiB (ledger backfill), enforced with and without `Content-Length`; endpoints tried in order for read commands; a `submit` is never retried on another endpoint (an ambiguous write is resolved by the submission state machine).
+`RpcClient` (feature `native`): HTTPS only (HTTP only for loopback rippled); redirects never followed; no proxy; connect timeout 5 s, request timeout 15 s; response caps 64 KiB (preflight), 8 MiB (commands), 32 MiB (ledger backfill), enforced with and without `Content-Length`. Read transport failures and `ledger`/`tx` history misses try the next endpoint; a complete `searched_all: true` transaction search is definitive for its queried range. Use a single endpoint for a paginated `account_tx` scan because markers are server-specific. A `submit` is never retried on another endpoint (an ambiguous write is resolved by the submission state machine).
 
 `Subscription` (WebSocket, `wss://` only, message/frame cap 4 MiB): `server_info` network check, then `subscribe` to `ledger` + `transactions`. The first event after every (re)connection is `Connected { ledger_index, ledger_hash }` (the validated tip); notifications received before the subscribe acknowledgement are buffered and delivered after it. Events: `LedgerClosed` (index, hash, close time, transaction count) and `Transaction` notices (hash, ledger, TransactionIndex, result, untrusted Galaxy memo hint; only validated transactions). A disconnect, an idle stream (45 s), a malformed message or a network mismatch returns `Err`; the next `next_event` reconnects after 1 s, rotating endpoints, and the caller must backfill from its last durable checkpoint to the new tip (no events are synthesized or replayed across a gap). Live check (2026-11-20, `native::tests::testnet_ws_tip_matches_http_backfill`): the subscription tip and the next `ledgerClosed` (ledger 22482048, 26 transactions) matched HTTP backfills (hash, close time, transaction count; all 26 transaction notices present with equal TransactionIndex and result).
 
@@ -93,8 +93,8 @@ Retrieval (`fetch_bundle_in(source, manifest_tx, network, allow_mainnet, namespa
 | `bundle_id` / `total` mismatch, `index ≥ total` | `Invalid` |
 | Two different payloads for the same index (conflicting duplicate) | `Invalid`; identical duplicates are ignored |
 | Gap (missing index) or first/last chunk ledger differs from the manifest | `Invalid` |
-| Collected bytes exceed `bundle_len`; `bundle_len` > 1 MiB; inconsistent chunk bounds | `Invalid` |
-| SHA-256 digest ≠ `bundle_id` | `Invalid` |
+| Collected bytes exceed `bundle_len`; `bundle_len` > 1 MiB; inconsistent chunk bounds | Rejected |
+| `ids::bundle_id` (domain-separated SHA-256) ≠ the manifest's `bundle_id` | `Invalid` |
 | Bundle content ≠ manifest (device key/env/account/registration ledger; circuit id, policy id, vk digest) | `Invalid` |
 | Manifest not found or chunk ledgers outside `complete_ledgers` | `HistoryUnavailable` |
 | Network mismatch / mainnet without opt-in | `Network` |
@@ -113,11 +113,11 @@ Signed AccountSet with `Fee`, `Sequence`, `LastLedgerSequence`, ed25519 signing 
 | CAPTURE, dev-unattested (299 + 2 + 65) | 366 | 418 | 564 |
 | PROOF (361) | 361 | 411 | 557 |
 
-Overhead: blob = MemoData + 196 B for `galaxy/v1/capture` (17-byte MemoType), + 194 B for `galaxy/v1/proof`; the measured `galaxy/test/measure` transactions (18-byte MemoType) carry + 199/200 B and agree with these figures (e.g. 751 B MemoData → 951 B blob on Testnet vs 949 B offline with the 2-byte-shorter type).
+Overhead: blob = MemoData + 196 B for `galaxy/v1/capture` (17-byte MemoType), + 194 B for `galaxy/v1/proof`; the measured `galaxy/test/measure` transactions (19-byte MemoType) carry + 199/200 B (e.g. 751 B MemoData → 951 B blob on Testnet vs 949 B offline with the 2-byte-shorter type).
 
-### Testnet run (2026-11-20, wallet `rPCCnEjNBPizcDL11LRzhGmzfEmiXxwhNR`, `xrpl-tool --wallet <name> measure --interrupt|--live --run-id xrpl4a`)
+### Testnet fee and latency run (2026-11-20, wallet `rPCCnEjNBPizcDL11LRzhGmzfEmiXxwhNR`, run ID `xrpl4a`)
 
-All with MemoType `galaxy/test/measure`, fee from `fee.open_ledger_fee`, cap 1000 drops. Latency = first `submit` call to the poll that observed the validated result (poll interval 0.9 s; each poll performs a `server_info` network check and a `tx` lookup, each preceded by the per-request HTTP network preflight, so ~4 HTTPS round trips per poll).
+All with MemoType `galaxy/test/measure`, fee from `fee.open_ledger_fee`, cap 1000 drops. Latency = first `submit` call to the poll that observed validation (poll interval 0.9 s; one `server_info` call for the validated head and one `tx` lookup with its own `server_info` preflight, three HTTPS requests per poll).
 
 | # | Tx hash | Ledger | MemoData | Memos | Blob | Fee (drops) | Submit → validated (ms) |
 |---:|---|---:|---:|---:|---:|---:|---:|
@@ -134,20 +134,37 @@ All with MemoType `galaxy/test/measure`, fee from `fee.open_ledger_fee`, cap 100
 
 Latency over the 10 transactions: min 4293 ms, median 6545 ms, mean 7097 ms, max 10438 ms. Fee: 10 drops (base fee) for every size up to 1101 B; the Testnet open-ledger fee was never above the base fee during the run. MemoData lengths 192/193 cross the VL one-byte/two-byte length boundary (Memos grows by 2 B instead of 1 B).
 
-Scenarios in the same run:
+Repeat run `xrpl5-recovery-1795214301`: 10/10 validated at 10 drops each with the same byte counts. Submit-to-validated latency: min 4125 ms, median 6285 ms, mean 6491 ms, max 8965 ms. Duplicate resubmission returned `tefPAST_SEQ`; the expired test blob returned `tefMAX_LEDGER` after the complete search, and the failed Payment validated with `tecNO_DST_INSUF_XRP` (not success).
 
-- **Interrupted submission recovery.** `measure --interrupt` prepared, persisted and submitted `552747B14E16B78C1D579FB6FA10288141778BDD3C6B22CE1FBB8F05D0330EE8` (engine `tesSUCCESS`, LastLedgerSequence 22481973) and exited without polling. The next `measure --live` reloaded the journal, `prepare` returned the identical blob (checked byte for byte), `run` found it validated in ledger 22481955 with `tesSUCCESS`; nothing was re-signed.
+Testnet submission scenarios:
+
+- **Interrupted after sending.** The earlier version of `measure --interrupt` prepared, persisted and submitted `552747B14E16B78C1D579FB6FA10288141778BDD3C6B22CE1FBB8F05D0330EE8` (engine `tesSUCCESS`, LastLedgerSequence 22481973) and exited without polling. The next `measure --live` reloaded the journal and found the original hash validated in ledger 22481955 with `tesSUCCESS`; nothing was re-signed.
+- **Interrupted before sending.** The current `measure --interrupt` exited after persisting `CE7C2D4EEBEAE5DF5A853897856BEC0CCF9F4956CAFC9DFFD310B5C98433D086` (LastLedgerSequence 22483541), without calling `submit`. A second process (`measure --live` with the same run ID) reported `pending_at_restart: true`, broadcast the same persisted blob, and observed `tesSUCCESS` in ledger 22483524. The validated blob matched the journal byte for byte.
 - **Duplicate submission.** Transaction #0 was submitted twice; the second submit of the same blob returned `tefPAST_SEQ` (the Sequence was already consumed by the first copy), and the transaction was validated once.
 - **LastLedgerSequence expiry.** `D2265375A5826B5B2F9144454E878A8F4B76F17D3FD8DDEE31D38BAED95800A7` was signed and persisted with deadline = validated + 3 (LastLedgerSequence 22481986) and not submitted. `poll` reported `Expired` only after the validated ledger passed 22481986 and the bounded `tx` lookup returned `searched_all: true`. Submitting the old blob afterwards (deliberate bypass of the guard, test only) returned `tefMAX_LEDGER`.
 - **tec result.** A 1-drop Payment to a fresh unfunded address, `1A7C578BA06F5B71D5DC4D26C7C839ADB3B649DFC7436135ECE1795F3A12F54A`, validated in ledger 22481991 with `tecNO_DST_INSUF_XRP`, classified `ClaimedFee`, `success = false`.
 
 ### Registry round trip on Testnet (2026-11-20, `tests/testnet_registry.rs`, `galaxy/test/*` MemoTypes)
 
-`GALAXY_XRPL_TESTNET_WALLET=<name> cargo test -p galaxy-xrpl --features native --test testnet_registry -- --ignored --nocapture` → `1 passed` (73 s).
+`GALAXY_XRPL_TESTNET_WALLET=<name> cargo test -p galaxy-xrpl --features native --test testnet_registry -- --ignored --nocapture` → `1 passed` (176.98 s including negative cases).
 
-- Test CIRCUIT bundle (random 2000-byte vk, test descriptor/policy), 2099 B → 3 chunks: `8DA3E6C8D01C28DA457127DAC952EE89FBEFFC2C52A8208C9F4818D77677C83E`, `99EEF8D87E87F44B8E50400465E2291F0C6B88538A9552D0E9A25D3371189BD4`, `3F82C7025ACF61BDCC4E889DFF872E5937ED707E016166B01CE84B645CCBD324`; manifest `13CF7E559D38CB4F9843A634F17BAC9B1D9EACC24FCE2A729B89E1A4407C36B4` (ledger 22482012). Publish time 41.9 s (4 serial validated transactions).
-- Development-unattested DEVICE bundle (fresh ed25519 key, real validated registration ledger 22482013, random nonce), 206 B → 1 chunk `00F5C945ABC9BB05E6DEDACBFD52281855D95D3B262129CBE6C64FDBDEAA97A9`; manifest `1085F0245412ED2DABA5895E35F95535AFB8B7BDC22B7593EBF41F33333D134A` (ledger 22482020). Publish time 23.1 s.
-- Both bundles were fetched back from the manifest hashes with every §10 rule and equal the published bytes; fetching them with the `galaxy/v1/*` namespace is rejected.
+- Test CIRCUIT bundle (random 2000-byte test payload in the VK field, not a usable verifying key), 2099 B → 3 chunks: `C6A47734807DBD92F6795DCF3ABE80DEE73CC4E11B7F69E35977AC4840CA1B22`, `C64105DBD2DCC832640F848BD6A46E1B9D370F3BF871189D9761D9C43FFAA90F`, `5F08AED37B2318E187DB0D5B1B8BB9E15B058E2D500297D7723E5F40924FD115`; manifest `9FE23AEDFFC66FE959EDCAE7AF07A3051F0D0A9537753851D106558E339AA747` (ledger 22483525). Publish time 39.36 s.
+- Development-unattested DEVICE bundle (fresh ed25519 key, validated registration ledger 22483527, random nonce), 206 B → 1 chunk `BCEE231AAF73AD30C40124ADB85417F0E5D79CA7204E3F927C7589F39785B85D`; manifest `976090AF7D58C6D6A031FDE4729DE830FF78057C09610DC4094B1CD5349E4E6B` (ledger 22483533). Publish time 20.89 s.
+- Both bundles were fetched from their manifest hashes and matched the original bytes. Neither was accepted under the `galaxy/v1/*` namespace.
+
+The retriever rejected these validated `galaxy/test/*` manifests:
+
+| Condition | Manifest tx hash |
+|---|---|
+| Conflicting duplicate | `BED5FFCA2F48EB415F3232AEF054C411A018F6627AD1F25588B9295D40A6EA34` |
+| Chunk index ≥ total | `6538969EA402E41E9FD41A2954E36FD8C599AC3771E3E020EA301775E9D59B94` |
+| Bundle digest mismatch | `A5666EA29B03735CDDA15022E2DE27E78A3F9B7814117C3593B222E2D4C33538` |
+| Failed chunk transaction (`tecNO_DST_INSUF_XRP`) | `FF3C975CDEF0DFB95E92018AB11333F9950FAA3EFC6776B5867D503010459D09` |
+| Missing chunk | `6E866396E3A29EC473416857A7718E23394664C41C43B292D175239E21E5762F` |
+| Wrong bundle ID | `E6B632E4D66798F4A96359EEF5395DDAE7EB8AFE4D5CD02FC83A6F211C146BBD` |
+| Oversize bundle | `76D71C31EC98A56A03B37D50AC4E7D3AF946BAF9C8CB52EE8A1CA060025D7A6B` |
+
+An honest validated `account_tx` cannot return an unvalidated row or an AccountSet from a different account. The test exercises those two checks by altering the first CIRCUIT chunk row of an otherwise live Testnet response; both were rejected without submitting an altered row.
 
 Explorer: `https://testnet.xrpl.org/transactions/<hash>`.
 
@@ -164,9 +181,10 @@ Explorer: `https://testnet.xrpl.org/transactions/<hash>`.
 | `publish-bundle <device\|circuit> <file> --namespace <v1\|test>` | Chunk txs then manifest tx (resumable journal in `~/.config/galaxy/tx-store/<wallet>/`) |
 | `fetch-bundle <manifest-tx> [-o file] [--namespace v1\|test]` | §10 retrieval |
 | `measure` | Offline sizes of v1 records |
-| `measure --live --run-id <id>` / `measure --interrupt --run-id <id>` | Testnet run above (`galaxy/test/*` only) |
+| `measure --interrupt --run-id <id>` then `measure --live --run-id <id>` | Persist a signed transaction without submitting; the next process loads and broadcasts that blob, then runs the latency/fee experiments. Testnet and `galaxy/test/*` only. |
 
 ## Tests
 
 - Offline: `cargo test -p galaxy-xrpl --features native` (codec vectors, keys, Galaxy decode, submission state machine with crash recovery and rebroadcast, registry rejection rules, HTTP client caps/redirects/endpoint checks, WebSocket preflight/buffering/reconnect against local servers, mobile surface).
 - Network (`--ignored`): `codec_crosscheck::captured_testnet_corpus` (needs `XRPL_TESTNET_CORPUS`), `native::tests::testnet_ws_tip_matches_http_backfill`, `testnet_registry` (needs `GALAXY_XRPL_TESTNET_WALLET`).
+- Portability: `cargo clippy --offline -p galaxy-xrpl --all-targets --all-features -- -D warnings` and Rust builds for `wasm32-unknown-unknown` and `aarch64-apple-ios` passed. The iOS build verifies Rust cross-compilation, not Swift linkage or a device run.

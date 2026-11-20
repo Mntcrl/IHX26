@@ -132,6 +132,13 @@ async fn reconstruct_pages_and_reject_conflicts_gaps_and_untrusted_records() {
     history.chunk1.transaction_result = "tecFAILED_PROCESSING".into();
     assert!(fetch(&history).await.is_err());
     history.chunk1 = chunk1;
+    manifest.vk_digest[0] ^= 1;
+    history.manifest = record(&wallet, MemoKind::Circuit, &manifest.encode(), 103);
+    assert!(fetch(&history).await.unwrap_err().to_string().contains("circuit manifest differs from bundle"));
+    manifest.vk_digest[0] ^= 1;
+    manifest.bundle_len -= 1;
+    history.manifest = record(&wallet, MemoKind::Circuit, &manifest.encode(), 103);
+    assert!(fetch(&history).await.unwrap_err().to_string().contains("exceed manifest length"));
     manifest.bundle_len = 1024 * 1024 + 1;
     history.manifest = record(&wallet, MemoKind::Circuit, &manifest.encode(), 103);
     assert!(fetch(&history).await.is_err());

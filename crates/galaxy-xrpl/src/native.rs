@@ -132,6 +132,7 @@ impl RpcTransport for RpcClient {
             HTTP_RESPONSE_CAP
         };
         let mut last_error = Error::Network;
+        let mut missing_history = None;
         for url in &self.urls {
             // Do not reuse a previous NetworkID on a DNS, proxy, or server
             // reconfiguration. Check the target for each operation.
@@ -147,14 +148,17 @@ impl RpcTransport for RpcClient {
                 return Ok(probe);
             }
             match self.call(url, method, &params, cap).await {
-                Ok(result) => return Ok(result), // including XRPL command errors
+                Ok(result) if history_miss(method, &result) => {
+                    missing_history.get_or_insert(result);
+                }
+                Ok(result) => return Ok(result),
                 Err(err) if is_read(method) => last_error = err,
                 // A submit may have reached the server; never retry a write
                 // here. Recovery belongs to the submission state machine.
                 Err(err) => return Err(err),
             }
         }
-        Err(last_error)
+        missing_history.ok_or(last_error)
     }
 }
 
@@ -181,6 +185,14 @@ fn check_network(result: &Value, expected: u32) -> Result<(), Error> {
         return Err(Error::Network);
     }
     Ok(())
+}
+
+fn history_miss(method: &str, result: &Value) -> bool {
+    match (method, result["error"].as_str()) {
+        ("ledger", Some("lgrNotFound")) => true,
+        ("tx", Some("txnNotFound")) => result["searched_all"] != true,
+        _ => false,
+    }
 }
 
 fn is_read(method: &str) -> bool {
@@ -516,6 +528,25 @@ mod tests {
         wrong_task.await.unwrap();
         right_task.await.unwrap();
         assert!(check_network(&json!({"info": {"validated_ledger": {"seq": 1}}}), 0).is_err());
+    }
+
+    #[tokio::test]
+    async fn http_tries_another_endpoint_for_missing_history() {
+        for (method, code) in [("tx", "txnNotFound"), ("ledger", "lgrNotFound")] {
+            let (missing, missing_task) = http_fixture(vec![
+                ("server_info", http_ok(server_info(1))),
+                (method, http_ok(json!({"status": "error", "error": code}))),
+            ]).await;
+            let available = json!({"status": "success"});
+            let (archive, archive_task) = http_fixture(vec![
+                ("server_info", http_ok(server_info(1))),
+                (method, http_ok(available.clone())),
+            ]).await;
+            let client = RpcClient::new([missing, archive], 1, false).unwrap();
+            assert_eq!(client.request(method, json!({})).await.unwrap(), available);
+            missing_task.await.unwrap();
+            archive_task.await.unwrap();
+        }
     }
 
     #[tokio::test]

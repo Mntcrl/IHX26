@@ -25,6 +25,7 @@ pub struct PendingTx {
 
 impl PendingTx {
     fn check(&self, purpose: &str, network_id: u32) -> Result<Value, Error> {
+        check_purpose(purpose)?;
         if self.purpose != purpose || self.network_id != network_id
             || self.first_possible_ledger == 0
             || self.last_ledger.checked_sub(self.first_possible_ledger).is_none_or(|n| n >= 20)
@@ -40,6 +41,15 @@ impl PendingTx {
             }
         {
             return Err(Error::Invalid("persisted transaction bounds do not match blob"));
+        }
+        Ok(decoded)
+    }
+
+    pub(crate) fn check_fee(&self, network_id: u32, max_fee_drops: u64) -> Result<Value, Error> {
+        let decoded = self.check(&self.purpose, network_id)?;
+        let fee = decoded["Fee"].as_str().and_then(|fee| fee.parse::<u64>().ok());
+        if !fee.is_some_and(|fee| fee > 0 && fee <= max_fee_drops) {
+            return Err(Error::Invalid("persisted transaction fee exceeds configured cap"));
         }
         Ok(decoded)
     }
@@ -139,6 +149,9 @@ pub struct Autofill {
 /// `LastLedgerSequence = min(validated + 20, deadline)`; fails once the
 /// deadline is not after the validated ledger.
 pub fn last_ledger_for(validated_ledger: u32, deadline: Option<u32>) -> Result<u32, Error> {
+    if validated_ledger == 0 {
+        return Err(Error::Invalid("cannot autofill without a validated ledger"));
+    }
     let last_ledger = validated_ledger.saturating_add(20).min(deadline.unwrap_or(u32::MAX));
     if last_ledger <= validated_ledger { return Err(Error::Invalid("transaction deadline already passed")); }
     Ok(last_ledger)
@@ -221,7 +234,6 @@ impl PendingTx {
     /// Builds the journal record of a freshly signed transaction (the caller
     /// persists it durably before the first submit).
     pub fn new(purpose: &str, signed: crate::transaction::SignedTransaction, network_id: u32, autofill: &Autofill) -> Result<Self, Error> {
-        check_purpose(purpose)?;
         let pending = Self { purpose: purpose.to_owned(), hash: signed.hash, blob: signed.blob, network_id,
             first_possible_ledger: autofill.first_possible_ledger, last_ledger: autofill.last_ledger_sequence };
         pending.check(purpose, network_id)?;
@@ -324,11 +336,7 @@ impl<'a, R: RpcTransport, S: TxStore> Submitter<'a, R, S> {
     /// Submit exactly the persisted blob. Submission engine results are
     /// provisional, even `tesSUCCESS`; call `state` or `run` for a final outcome.
     pub async fn submit_saved(&self, pending: &PendingTx) -> Result<SubmitResult, Error> {
-        let decoded = pending.check(&pending.purpose, self.network_id)?;
-        let fee = decoded["Fee"].as_str().and_then(|fee| fee.parse::<u64>().ok());
-        if !fee.is_some_and(|fee| fee > 0 && fee <= self.max_fee_drops) {
-            return Err(Error::Invalid("persisted transaction fee exceeds configured cap"));
-        }
+        pending.check_fee(self.network_id, self.max_fee_drops)?;
         let stored = self.store.load(&pending.purpose)?;
         if stored.as_ref() != Some(pending) { return Err(Error::Invalid("tx is not the persisted transaction for this purpose")); }
         if self.validated_ledger().await? >= pending.last_ledger {

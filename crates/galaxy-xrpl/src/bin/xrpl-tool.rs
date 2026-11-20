@@ -44,7 +44,7 @@ enum Command {
     Measure {
         #[arg(long, conflicts_with = "interrupt")]
         live: bool,
-        /// Submit and exit before polling. Run --live with the same run ID to recover.
+        /// Persist the signed blob and exit before submit. Resume with --live and the same run ID.
         #[arg(long)]
         interrupt: bool,
         #[arg(long, default_value = "phase1")]
@@ -147,15 +147,16 @@ async fn measure_live(args: &Args, config: &NetworkConfig, run_id: &str, interru
     let memo = Memo { kind: "galaxy/test/interrupted", data: run_id.as_bytes() };
     if interrupt {
         let p = sm.prepare(&purpose, &wallet, memo, None).await?;
-        let submit = sm.submit_saved(&p).await?;
-        return show_json(&json!({"interrupted_after_submit":hex::encode_upper(p.hash),"engine_result":submit.code,"last_ledger":p.last_ledger}));
+        return show_json(&json!({"interrupted_before_submit":hex::encode_upper(p.hash),"last_ledger":p.last_ledger}));
     }
     if let Some(saved) = store.load(&purpose)? {
         let p = sm.prepare(&purpose, &wallet, memo, None).await?;
         if p != saved { return Err(Error::Invalid("recovery failed to reuse original blob")); }
+        let pending_at_restart = matches!(sm.state(&p).await?, TxState::Pending);
         let tx = final_tx(sm.run(&p, delay).await?)?;
         if tx.transaction_result != "tesSUCCESS" { return Err(Error::Invalid("recovered transaction did not succeed")); }
-        show_json(&json!({"recovered":hex::encode_upper(tx.hash),"validated_ledger":tx.ledger_index,"result":tx.transaction_result}))?;
+        show_json(&json!({"recovered":hex::encode_upper(tx.hash),"pending_at_restart":pending_at_restart,
+            "validated_ledger":tx.ledger_index,"result":tx.transaction_result}))?;
     }
     for (index, len) in [1, 32, 65, 191, 192, 193, 361, 751, 839, 901].into_iter().enumerate() {
         let data = vec![index as u8; len];
