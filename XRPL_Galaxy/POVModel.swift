@@ -148,8 +148,10 @@ final class POVModel: ObservableObject {
         if !busy { step = message }
     }
 
+    /// Builds the signed manifest and the sealed shares for one saved capture (C2, C3, C6).
+    /// `app` is `pov-ios/1` on the iPhone; `tests/check-pov-parity.sh` passes `pov-sim/1`.
     nonisolated static func buildRequest(jpegURL: URL, fdepthURL: URL, jsonURL: URL, evidenceRoot: String,
-                                         t0: T0, config: ConfigResponse) throws -> CaptureRequest {
+                                         t0: T0, config: ConfigResponse, app: String = "pov-ios/1") throws -> CaptureRequest {
         let jpeg = try Data(contentsOf: jpegURL)
         let scan = try POVDepth.load(fdepthURL: fdepthURL, jsonURL: jsonURL)
         let encoded = POVDepth.encode(depth: scan.depth, conf: scan.conf)
@@ -157,7 +159,7 @@ final class POVModel: ObservableObject {
         let key = try POVCrypto.deviceKey()
         let manifest = Manifest(
             v: 1,
-            app: "pov-ios/1",
+            app: app,
             committee: config.committee_account,
             t0: t0,
             captured_at: ISO8601DateFormatter().string(from: Date()),

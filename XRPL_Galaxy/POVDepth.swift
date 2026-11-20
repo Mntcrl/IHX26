@@ -9,7 +9,8 @@ nonisolated enum POVDepth {
     static let gridWidth = 64
     static let gridHeight = 48
     static let k = 3072
-    static let fdepthBytes = 16 + 256 * 192 * 4 // 196,620
+    static let fdepthHeader = 12                  // "FLDP" + u32 LE width + u32 LE height
+    static let fdepthBytes = fdepthHeader + 256 * 192 * 4 // 196,620
     static let confBytes = 256 * 192            // 49,152
     static let shareBytesPerNode = 3 * 3072 * 8 // 73,728
     static let p: UInt64 = (1 << 61) - 1
@@ -27,7 +28,7 @@ nonisolated enum POVDepth {
         guard u32(4) == UInt32(depthWidth), u32(8) == UInt32(depthHeight) else { throw POVError.badScan("depth size") }
         var depth = [Float32](repeating: 0, count: depthWidth * depthHeight)
         for i in 0..<depth.count {
-            depth[i] = Float32(bitPattern: u32(16 + 4 * i))
+            depth[i] = Float32(bitPattern: u32(fdepthHeader + 4 * i))
         }
 
         let json = try JSONSerialization.jsonObject(with: Data(contentsOf: jsonURL))
