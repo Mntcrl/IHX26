@@ -13,10 +13,15 @@ GRAPH="$ROOT/.tools/bin/build-circuit"
 SNARKJS="$ROOT/$LIB/.bin/snarkjs"
 export PATH="$ROOT/.tools/bin:$PATH"
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target/CircuitCore}"
+PROVER="$CARGO_TARGET_DIR/release/galaxy-prover"
+CEREMONY=development-single-party
 
 fail() { echo "circuit: $*" >&2; exit 1; }
 sha() { sha256sum -- "$1" | cut -d' ' -f1; }
 require_file() { [[ -s "$1" ]] || fail "missing or empty $1"; }
+# galaxy-witness development tool (examples/circuit_tool.rs); release build for
+# the full R1CS check.
+tool() { scripts/with-slot.sh cargo run --release --locked -q -p galaxy-witness --example circuit_tool -- "$@"; }
 
 # Run only after obtaining the heavy slot so the measurement is current. The
 # machine is shared: require 2 GiB of free RAM and 8 GiB of RAM plus swap.
@@ -81,14 +86,30 @@ witness_graph_sha256 main_v1m.graph.bin
 EOF
 }
 
-setup() {
-    check_memory
-    check_build
+# Development setup with galaxy-prover's low-memory tool
+# (crates/galaxy-prover/src/dev_setup.rs): `snarkjs groth16 setup` needs about
+# 10 GB for this circuit, more than the shared build machine has. Like
+# `snarkjs zkey new` the tool consumes the verified phase-1 Lagrange powers of
+# the pinned ptau; phase 2 is a single party (delta from the OS RNG inside the
+# process, then dropped). Not production-trusted
+# (docs/adr/0043-groth16-setup-ceremony.md).
+prover_digest() {
+    { find crates/galaxy-prover/src -type f -print; printf '%s\n' crates/galaxy-prover/Cargo.toml Cargo.lock; } |
+        sort -u | xargs -d '\n' sha256sum -- | sha256sum | cut -d' ' -f1
+}
+
+build_prover() {
+    scripts/with-slot.sh cargo build --locked --release -q -p galaxy-prover --bin galaxy-prover
+    require_file "$PROVER"
+}
+
+# Pinned, checksum-verified phase-1 file with capacity for the circuit.
+verified_ptau() {
     local count power entry name ptau
     count=$(jq -er .n_constraints "$OUT/r1cs-info.json")
     power=${GALAXY_PTAU_POWER:-20}
     [[ "$power" =~ ^(20|21)$ ]] || fail 'GALAXY_PTAU_POWER must be 20 or 21'
-    (( count + 22 < (1 << power) )) || fail "capacity of pinned power $power is too small for $count constraints + 22 public inputs"
+    (( count + 22 + 1 <= (1 << power) )) || fail "capacity of pinned power $power is too small for $count constraints + 22 public inputs"
     entry=$(jq -ce --argjson n "$power" '.[] | select(.power == $n and .verified == true)' circuits/ptau.lock.json)
     name=$(jq -er .name <<< "$entry")
     ptau="$ROOT/.tools/ptau/$name"
@@ -96,37 +117,97 @@ setup() {
     [[ "$(stat -c %s "$ptau")" == "$(jq -er .size <<< "$entry")" ]] || fail 'ptau size mismatch'
     [[ "$(sha "$ptau")" == "$(jq -er .sha256 <<< "$entry")" ]] || fail 'ptau SHA-256 mismatch'
     [[ "$(b2sum -- "$ptau" | cut -d' ' -f1)" == "$(jq -er .blake2b <<< "$entry")" ]] || fail 'ptau published BLAKE2b mismatch'
+    printf '%s %s\n' "$name" "$(jq -er .sha256 <<< "$entry")"
+}
+
+setup() {
+    check_memory
+    check_build
+    require_file "$PROVER"
+    local r1cs_sha zkey_sha log ptau_name ptau_sha
+    read -r ptau_name ptau_sha < <(verified_ptau)
+    [[ -n "$ptau_sha" ]] || fail 'ptau verification failed'
+    r1cs_sha=$(jq -er .r1cs_sha256 "$OUT/build.json")
     tmp=$(mktemp -d "$BUILD/setup.XXXXXXXX")
     trap 'rm -rf -- "$tmp"' EXIT
-    export FORCE_COLOR=0 TERM=dumb
+    log="$tmp/setup-transcript.log"
     echo 'Development single-party setup only; do not trust its keys in production.' >&2
-    "$SNARKJS" groth16 setup "$OUT/main_v1m.r1cs" "$ptau" "$tmp/initial.zkey" 2>&1 | tee "$tmp/setup-transcript.log"
-    require_file "$tmp/initial.zkey"
-    # Supply entropy over a pipe: no environment/argv or on-disk secret.
-    { od -An -v -tx1 -N64 /dev/urandom | tr -d ' \n'; printf '\n'; } |
-      "$SNARKJS" zkey contribute "$tmp/initial.zkey" "$tmp/main_v1m.zkey" --name=development-single-party 2>&1 |
-      tee -a "$tmp/setup-transcript.log"
+    {
+        echo 'GALAXY Groth16 setup transcript'
+        echo "ceremony: $CEREMONY"
+        echo 'tool: galaxy-prover dev-setup (crates/galaxy-prover/src/dev_setup.rs)'
+        echo "tool_source_sha256: $(prover_digest)"
+        echo "tool_binary_sha256: $(sha "$PROVER")"
+        echo "phase1: $ptau_name sha256 $ptau_sha (Lagrange powers consumed as by snarkjs zkey new)"
+        echo 'phase2: single party; delta sampled from the OS RNG inside the process and dropped; no further contributions'
+        echo "r1cs: main_v1m.r1cs sha256 $r1cs_sha"
+    } > "$log"
+    "$PROVER" dev-setup --r1cs "$OUT/main_v1m.r1cs" --ptau "$ROOT/.tools/ptau/$ptau_name" --ptau-sha256 "$ptau_sha" \
+        --out "$tmp/main_v1m.zkey" 2>&1 | tee -a "$log"
     require_file "$tmp/main_v1m.zkey"
-    rm -f -- "$tmp/initial.zkey"
-    "$SNARKJS" zkey verify "$OUT/main_v1m.r1cs" "$ptau" "$tmp/main_v1m.zkey" 2>&1 | tee -a "$tmp/setup-transcript.log"
-    "$SNARKJS" zkey export verificationkey "$tmp/main_v1m.zkey" "$tmp/verification_key.json"
-    jq -n --arg ptau "$name" --arg ptau_sha "$(jq -er .sha256 <<< "$entry")" \
-      --arg transcript "$(sha "$tmp/setup-transcript.log")" --arg zkey "$(sha "$tmp/main_v1m.zkey")" \
-      --arg r1cs "$(jq -er .r1cs_sha256 "$OUT/build.json")" \
-      '{ptau_name:$ptau,ptau_sha256:$ptau_sha,setup_transcript_sha256:$transcript,zkey_sha256:$zkey,r1cs_sha256:$r1cs}' > "$tmp/setup.json"
+    zkey_sha=$(sha "$tmp/main_v1m.zkey")
+    echo "zkey: main_v1m.zkey sha256 $zkey_sha" >> "$log"
+    FORCE_COLOR=0 TERM=dumb "$SNARKJS" zkey export verificationkey "$tmp/main_v1m.zkey" "$tmp/verification_key.json" >&2
+    echo "verification_key.json sha256 $(sha "$tmp/verification_key.json")" >> "$log"
+    jq -n --arg ceremony "$CEREMONY" --arg ptau "$ptau_name" --arg ptau_sha "$ptau_sha" --arg transcript "$(sha "$log")" \
+      --arg zkey "$zkey_sha" --arg r1cs "$r1cs_sha" \
+      '{ceremony:$ceremony,ptau_name:$ptau,ptau_sha256:$ptau_sha,setup_transcript_sha256:$transcript,zkey_sha256:$zkey,r1cs_sha256:$r1cs}' \
+      > "$tmp/setup.json"
     rm -f -- "$OUT/setup.json" "$MANIFEST"
-    mv -f -- "$tmp/main_v1m.zkey" "$tmp/verification_key.json" "$tmp/setup-transcript.log" "$OUT/"
+    mv -f -- "$tmp/main_v1m.zkey" "$tmp/verification_key.json" "$log" "$OUT/"
     mv -f -- "$tmp/setup.json" "$OUT/"
 }
 
-export_bundle() {
+check_setup() {
     check_build
     require_file "$OUT/setup.json"
     [[ "$(jq -er .r1cs_sha256 "$OUT/build.json")" == "$(jq -er .r1cs_sha256 "$OUT/setup.json")" ]] || fail 'setup r1cs mismatch'
     [[ "$(sha "$OUT/main_v1m.zkey")" == "$(jq -er .zkey_sha256 "$OUT/setup.json")" ]] || fail 'zkey digest mismatch'
     [[ "$(sha "$OUT/setup-transcript.log")" == "$(jq -er .setup_transcript_sha256 "$OUT/setup.json")" ]] || fail 'setup transcript digest mismatch'
-    scripts/with-slot.sh cargo run --locked -q -p galaxy-witness --example circuit_tool -- \
-        bundle "$OUT" "$MANIFEST" policies/galaxy-pc-v1m.json
+}
+
+export_bundle() {
+    check_setup
+    require_file "$PROVER"
+    tool bundle "$OUT" "$MANIFEST" policies/galaxy-pc-v1m.json
+    # Independent VK encoding: galaxy-prover reads the zkey directly, galaxy-crypto
+    # the snarkjs verification_key.json export. The bytes must be identical.
+    tmp=$(mktemp -d "$BUILD/export.XXXXXXXX")
+    trap 'rm -rf -- "$tmp"' EXIT
+    "$PROVER" vk --zkey "$OUT/main_v1m.zkey" --out "$tmp/vk.bin"
+    cmp -- "$tmp/vk.bin" "$OUT/verification_key.bin" || fail 'galaxy-prover and galaxy-crypto VK bytes differ'
+    echo 'VK bytes: galaxy-prover (zkey) == galaxy-crypto (verification_key.json)'
+}
+
+# Synthetic (development-only) passing room capture -> galaxy-witness input ->
+# WASM witness (all circuit assertions) -> graph witness (the prover's path),
+# equal wire by wire, every R1CS constraint checked, public wires equal to the
+# public inputs reconstructed from the photo and the ledger statement.
+# input.json, salts.json and the witness hold private (synthetic) evidence data: never kept.
+witness_check() {
+    local dir=$1
+    rm -rf -- "$dir"
+    mkdir -p "$dir"
+    # shellcheck disable=SC2064 # expand now: $dir is local
+    trap "rm -f -- '$dir/input.json' '$dir/salts.json' '$dir/witness.wtns'" EXIT
+    tool e2e-input "$dir"
+    FORCE_COLOR=0 TERM=dumb "$SNARKJS" wtns calculate "$OUT/main_v1m_js/main_v1m.wasm" "$dir/input.json" "$dir/witness.wtns"
+    echo 'WASM witness: all circuit assertions hold'
+    tool check-witness "$dir" "$OUT/main_v1m.r1cs" "$OUT/main_v1m.graph.bin"
+}
+
+# End to end: witness_check, then a galaxy-prover proof from the graph witness
+# -> snarkjs verify AND galaxy-crypto verify with the reconstructed public inputs.
+e2e() {
+    check_setup
+    require_file "$OUT/verification_key.bin"
+    require_file "$PROVER"
+    local dir="$BUILD/e2e"
+    witness_check "$dir"
+    "$PROVER" prove --graph "$OUT/main_v1m.graph.bin" --zkey "$OUT/main_v1m.zkey" --input "$dir/input.json" --out "$dir"
+    cmp -- "$dir/vk.bin" "$OUT/verification_key.bin" || fail 'prover VK differs from the exported VK bytes'
+    FORCE_COLOR=0 TERM=dumb "$SNARKJS" groth16 verify "$OUT/verification_key.json" "$dir/public.json" "$dir/proof.json"
+    tool verify "$dir" "$OUT/verification_key.bin"
 }
 
 # Constraint report: each production template compiled alone as `main` with the
@@ -178,11 +259,15 @@ case "${1:-}" in
         ;;
     setup-dev)
         [[ -e "$OUT/build.json" ]] || "$0" build
+        build_prover
         scripts/with-slot.sh --heavy "$0" _setup
         export_bundle
         ;;
     _setup) setup ;;
-    export) export_bundle ;;
+    export) build_prover; export_bundle ;;
+    e2e) build_prover; scripts/with-slot.sh --heavy "$0" _e2e ;;
+    _e2e) e2e ;;
+    witness) check_build; witness_check "$BUILD/witness" ;;
     clean) rm -rf -- "$OUT" "$BUILD"; rm -f -- "$MANIFEST" ;;
-    *) echo 'usage: scripts/circuit.sh build|test|constraints|setup-dev|export|clean' >&2; exit 2 ;;
+    *) echo 'usage: scripts/circuit.sh build|test|constraints|witness|setup-dev|export|e2e|clean' >&2; exit 2 ;;
 esac

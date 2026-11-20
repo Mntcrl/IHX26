@@ -1,0 +1,9 @@
+{
+  "curve": "bn254",
+  "n_wires": 868094,
+  "n_public_outputs": 0,
+  "n_public_inputs": 22,
+  "n_private_inputs": 3481,
+  "n_labels": 2841649,
+  "n_constraints": 876639
+}

@@ -34,6 +34,9 @@ the original ctx-derived values, non-canonical decomposition, padding-row and
 wrong-frame FRAME openings.
 
 ## Consequences
-- Tests compile small harnesses only (~2 min total); the full circuit is covered by
-  the end-to-end proof in `scripts/circuit.sh e2e`.
+- Tests compile small harnesses only (~3 min total). On the full circuit,
+  `scripts/circuit.sh witness` checks every R1CS row of the passing synthetic
+  witness in Rust and requires that changing any of the public wires rgb_root,
+  evidence_root, seed_lo or sampled_tiles[0] leaves a row unsatisfied; the
+  end-to-end proof is `scripts/circuit.sh e2e`.
 - Any new `===` in core components is automatically exercised by the same method.

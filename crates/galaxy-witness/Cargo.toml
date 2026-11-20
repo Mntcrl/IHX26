@@ -18,3 +18,5 @@ thiserror.workspace = true
 [dev-dependencies]
 galaxy-image.workspace = true
 hex.workspace = true
+ark-ff.workspace = true
+galaxy-prover.workspace = true

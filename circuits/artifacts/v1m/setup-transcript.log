@@ -1,0 +1,11 @@
+GALAXY Groth16 setup transcript
+ceremony: development-single-party
+tool: galaxy-prover dev-setup (crates/galaxy-prover/src/dev_setup.rs)
+tool_source_sha256: 9ef81587cabacb0eeefb753f3cb9c15bc36a10f18314d3155f124004b68d0bb7
+tool_binary_sha256: 9ea6e3e2e750c32ff2010d039ab7b94c3924a7e864a1f749fb1e4c7449bf21eb
+phase1: powersOfTau28_hez_final_20.ptau sha256 159d3f938d941e06767d99f30b9fe59a245400a4aae138cf8e411732d7a2f6cd (Lagrange powers consumed as by snarkjs zkey new)
+phase2: single party; delta sampled from the OS RNG inside the process and dropped; no further contributions
+r1cs: main_v1m.r1cs sha256 86f782bd346b8ec6ed6f6a6ff474f95087d116869b140850d11cfb134c70df7d
+[DEVELOPMENT setup: ptau phase 1 + single-party phase 2, never for accepted circuits] DevSetupInfo { n_vars: 868094, n_public: 22, n_constraints: 876639, domain_size: 1048576, n_coefs: 11052252, ptau_power: 20 } in 1275.1 s
+zkey: main_v1m.zkey sha256 5cd0ec2cc484e612ad1a93b7584ca70d8e7e30de15eb3286eced9f86404d8cdd
+verification_key.json sha256 75d81ba28177e003ee3db5bb757ef5a1e4a061885d61b43a8abb6522e3530d43
