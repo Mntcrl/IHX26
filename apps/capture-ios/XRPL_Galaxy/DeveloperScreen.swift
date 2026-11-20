@@ -11,7 +11,7 @@ struct DeveloperScreen: View {
                     LabeledContent("Camera", value: capture.cameraStatus)
                     LabeledContent("Video format", value: capture.videoFormat)
                     LabeledContent("Depth coverage", value: capture.depthCoverage.map { $0.formatted(.percent.precision(.fractionLength(1))) } ?? "Unavailable")
-                    LabeledContent("Current baseline", value: capture.baselineMillimeters.map { String(format: "%.1f mm", $0) } ?? "Unavailable")
+                    LabeledContent("Camera speed", value: capture.speedMmPerSecond.map { String(format: "%.1f mm/s", $0) } ?? "Unavailable")
                     LabeledContent("CoreMotion", value: capture.imuStatus)
                     LabeledContent("Bluetooth", value: capture.bluetoothStatus)
                     if let clock = capture.clockSummary { Text(clock).font(.caption.monospacedDigit()) }

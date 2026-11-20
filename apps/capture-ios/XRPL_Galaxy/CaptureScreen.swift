@@ -142,17 +142,19 @@ struct CaptureScreen: View {
 
     private enum MotionGrade { case unknown, good, tooSlow, tooFast, rotating }
 
+    /// t− and t+ are chosen up to 0.5 s from t0 (largest displacement), and the policy needs ≥ 3 mm
+    /// on each side: ≥ 8 mm/s of steady sideways motion is enough. Very fast motion breaks tracking.
     private var motionGrade: MotionGrade {
-        guard let mm = capture.baselineMillimeters, let deg = capture.rotationDegrees else { return .unknown }
-        if mm > 40 { return .tooFast }
-        if deg > 4 { return .rotating }
-        if mm < 4 { return .tooSlow }
+        guard let speed = capture.speedMmPerSecond, let turn = capture.rotationDegPerSecond else { return .unknown }
+        if speed > 150 { return .tooFast }
+        if turn > 15 { return .rotating }
+        if speed < 8 { return .tooSlow }
         return .good
     }
 
     private var motionText: String {
-        guard let mm = capture.baselineMillimeters, let deg = capture.rotationDegrees else { return "—" }
-        let value = String(format: "%.0f mm %.1f°", mm, deg)
+        guard let speed = capture.speedMmPerSecond, let turn = capture.rotationDegPerSecond else { return "—" }
+        let value = String(format: "%.0f mm/s %.0f°/s", speed, turn)
         switch motionGrade {
         case .tooFast: return value + " fast"
         case .tooSlow: return value + " slow"

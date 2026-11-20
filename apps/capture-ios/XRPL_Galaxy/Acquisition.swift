@@ -23,8 +23,9 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
     private(set) var imuStatus = "Not collecting"
     private(set) var bluetoothStatus = "Not scanning"
     private(set) var depthCoverage: Double?
-    private(set) var baselineMillimeters: Double?
-    private(set) var rotationDegrees: Double?
+    /// Camera speed and rotation rate over the last ~0.45 s (HUD guidance).
+    private(set) var speedMmPerSecond: Double?
+    private(set) var rotationDegPerSecond: Double?
     private(set) var trackingNormal = false
     private(set) var attempts = 0
     private(set) var exported = 0
@@ -144,8 +145,8 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
         history.removeAll(keepingCapacity: true)
         firstFrameTime = nil
         depthCoverage = nil
-        baselineMillimeters = nil
-        rotationDegrees = nil
+        speedMmPerSecond = nil
+        rotationDegPerSecond = nil
         overlay.reset()
         imuStatus = "Not collecting"
         bluetoothStatus = "Not scanning"
@@ -168,11 +169,12 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
         let snapshot = FrameSnapshot(frame, arrival: CACurrentMediaTime())
         history.removeAll { timestamp - $0.timestamp > 0.6 }
         if history.count == 10 { history.removeFirst() }
-        let previous = nearest(in: history, target: timestamp - 0.25, lower: timestamp - 0.5, upper: timestamp - 0.1)
-        if let previous {
-            baselineMillimeters = Self.baseline(snapshot, previous) * 1_000
-            rotationDegrees = PoseMath.rotationDeg(previous.transform, snapshot.transform)
-        } else { baselineMillimeters = nil; rotationDegrees = nil }
+        let previous = nearest(in: history, target: timestamp - 0.45, lower: timestamp - 0.55, upper: timestamp - 0.3)
+        if let previous, timestamp > previous.timestamp {
+            let dt = timestamp - previous.timestamp
+            speedMmPerSecond = Self.baseline(snapshot, previous) * 1_000 / dt
+            rotationDegPerSecond = PoseMath.rotationDeg(previous.transform, snapshot.transform) / dt
+        } else { speedMmPerSecond = nil; rotationDegPerSecond = nil }
         history.append(snapshot)
         trackingNormal = snapshot.tracking == 2
         cameraStatus = snapshot.tracking == 2 ? "Tracking normal" : "Tracking: \(snapshot.trackingReason)"
@@ -186,8 +188,8 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
         if wantsCenter {
             centerDeadline = nil
             pending = Pending(center: snapshot,
-                              minus: nearest(in: history, target: timestamp - 0.25,
-                                             lower: timestamp - 0.5, upper: timestamp - 0.1))
+                              minus: widest(in: history, center: snapshot,
+                                            lower: timestamp - 0.5, upper: timestamp - 0.1))
             // Consider the entire successor window, then allow an additional 50 ms of motion coverage.
             let delay = max(0, timestamp + 0.58 - CACurrentMediaTime())
             timer = Task { [weak self] in
@@ -196,8 +198,11 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
             }
         } else if var window = pending {
             let delta = timestamp - window.center.timestamp
+            // Within the allowed 100–500 ms window keep the most useful successor (normal tracking,
+            // depth, then the largest displacement from t0), so slow hand motion still reaches the
+            // policy's 3 mm baseline.
             if (0.1...0.5).contains(delta),
-               window.plus.map({ abs(delta - 0.25) < abs($0.timestamp - window.center.timestamp - 0.25) }) ?? true {
+               window.plus.map({ Self.score($0, center: window.center) < Self.score(snapshot, center: window.center) }) ?? true {
                 window.plus = snapshot
                 pending = window
             }
@@ -253,6 +258,16 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
             self.centerDeadline = nil
             self.finishWithoutRaw([CaptureIssue.missingFrame.message])
         }
+    }
+
+    /// Neighbour ranking: frames with normal tracking, pixels and depth first, then larger baseline.
+    private static func score(_ frame: FrameSnapshot, center: FrameSnapshot) -> (Int, Double) {
+        (frame.tracking == 2 && frame.depth != nil && frame.pixels != nil ? 1 : 0, baseline(frame, center))
+    }
+
+    private func widest(in candidates: [FrameSnapshot], center: FrameSnapshot, lower: Double, upper: Double) -> FrameSnapshot? {
+        candidates.lazy.filter { (lower...upper).contains($0.timestamp) }
+            .max(by: { Self.score($0, center: center) < Self.score($1, center: center) })
     }
 
     private func nearest(in candidates: [FrameSnapshot], target: Double, lower: Double, upper: Double) -> FrameSnapshot? {
