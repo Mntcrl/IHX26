@@ -1,0 +1,27 @@
+[package]
+name = "galaxy-verifier"
+version = "0.1.0"
+description = "XRPL Galaxy: galaxy-verifier"
+publish = false
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+recorded = []
+
+[dependencies]
+galaxy-protocol.workspace = true
+galaxy-crypto.workspace = true
+galaxy-image.workspace = true
+galaxy-attestation.workspace = true
+galaxy-xrpl.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+ed25519-dalek.workspace = true
+sha2.workspace = true

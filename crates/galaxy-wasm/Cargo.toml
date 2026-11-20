@@ -1,0 +1,29 @@
+[package]
+name = "galaxy-wasm"
+version = "0.1.0"
+description = "XRPL Galaxy: galaxy-wasm"
+publish = false
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+galaxy-crypto.workspace = true
+galaxy-image.workspace = true
+galaxy-protocol.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+galaxy-verifier.workspace = true
+galaxy-xrpl.workspace = true
+js-sys = "=0.3.107"
+wasm-bindgen.workspace = true
+wasm-bindgen-futures = "=0.4.80"
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "=0.3.80"

@@ -1,0 +1,11 @@
+[package]
+name = "galaxy-ffi"
+version = "0.1.0"
+description = "XRPL Galaxy: galaxy-ffi"
+publish = false
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["staticlib", "lib"]

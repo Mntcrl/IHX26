@@ -1,0 +1,33 @@
+[package]
+name = "galaxy-devtools"
+version = "0.1.0"
+description = "XRPL Galaxy Testnet development tools; not for certification"
+publish = false
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "galaxy-dev"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+ed25519-dalek.workspace = true
+galaxy-attestation.workspace = true
+galaxy-crypto.workspace = true
+galaxy-evidence.workspace = true
+galaxy-geometry.workspace = true
+galaxy-image.workspace = true
+galaxy-protocol.workspace = true
+galaxy-prover.workspace = true
+galaxy-verifier.workspace = true
+galaxy-witness.workspace = true
+galaxy-xrpl = { workspace = true, features = ["native"] }
+getrandom.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
+zeroize = "=1.9.2"
