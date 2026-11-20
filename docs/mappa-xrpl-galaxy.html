@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>XRPL Galaxy · Mappa dello scatto</title>
+<meta name="description" content="Mappa interattiva del percorso di uno scatto in XRPL Galaxy: sensori, residui, verifica offline e condivisione.">
+<style>
+:root {
+  color-scheme: dark; --bg: #101214; --panel: #171a1d; --ink: #f4f5ee; --muted: #adb4b7;
+  --line: #30373c; --green: #d8ff76; --blue: #8de6f0; --purple: #d3b7ff; --orange: #ffc7a0;
+  --mono: ui-monospace, "SF Mono", Consolas, monospace; --sans: system-ui, -apple-system, sans-serif;
+}
+* { box-sizing: border-box }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 1rem/1.55 var(--sans) }
+button, a { -webkit-tap-highlight-color: transparent }
+button { font: inherit; color: inherit; cursor: pointer }
+a { color: var(--green); text-underline-offset: .25em }
+:focus-visible { outline: 2px solid var(--green); outline-offset: 4px }
+.shell { width: min(1420px, calc(100% - 72px)); margin: auto }
+header { display: flex; align-items: center; justify-content: space-between; gap: 18px; min-height: 74px; border-bottom: 1px solid var(--line) }
+.brand, .annotation, .stage h3, .eyebrow, .label, .detail-kind, .status { font: 650 .875rem/1.3 var(--mono); letter-spacing: .07em; text-transform: uppercase }
+.brand { display: flex; align-items: center; gap: 12px }
+.brand-mark { width: 22px; height: 22px; border: 1px solid var(--green); border-radius: 50%; position: relative }
+.brand-mark::after { content: ""; position: absolute; inset: 5px; border: 1px solid var(--green); rotate: 45deg }
+.annotation, .eyebrow, .label { color: var(--muted) }
+.hero { padding: clamp(38px, 6vw, 84px) 0 42px; display: grid; grid-template-columns: 1.35fr 1fr; gap: 26px; align-items: end }
+.hero h1 { font-size: clamp(3rem, 7.35vw, 7.1rem); line-height: .91; font-weight: 710; letter-spacing: -.085em; margin: 0; max-width: 12ch }
+.hero h1 span { color: var(--green) }
+.hero p { font-size: clamp(1rem, 1.55vw, 1.27rem); color: #d1d5d3; max-width: 40ch; margin: 0 0 4px }
+.metrics { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; margin-bottom: 44px; background: #15181a }
+.metric { padding: 14px 19px; display: grid; gap: 3px }
+.metric + .metric { border-left: 1px solid var(--line) }
+.metric strong { font-weight: 690; font-size: 1.2rem }
+.metric span { color: var(--muted); font-size: .9rem }
+.workspace-title { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 14px; margin-bottom: 14px }
+.workspace-title h2 { margin: 0; font-size: clamp(1.55rem, 2.8vw, 2.2rem); font-weight: 690; letter-spacing: -.045em; line-height: 1.1 }
+.workspace-title p { margin: 6px 0 0; color: var(--muted) }
+.filters { display: inline-flex; background: #171a1d; padding: 4px; gap: 3px; border: 1px solid var(--line); border-radius: 10px }
+.filters button { border: 0; border-radius: 6px; padding: 7px 11px; background: transparent; color: var(--muted); font-size: .9rem }
+.filters button[aria-pressed="true"] { color: var(--ink); background: #343b3d }
+.workspace { display: grid; grid-template-columns: minmax(0, 2.06fr) minmax(320px, 1fr); border: 1px solid var(--line); border-radius: 18px; overflow: clip; background: var(--panel) }
+.board { min-width: 0; padding: 23px 22px; position: relative; isolation: isolate; background: radial-gradient(circle at 1px 1px, #32383c 1px, transparent 1.13px) 0 0/20px 20px, #14171a }
+#connections { position: absolute; inset: 0; width: 100%; height: 100%; z-index: -1; pointer-events: none }
+.stages { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(20px, 3.3vw, 55px) }
+.stage { min-width: 0 }
+.stage h3 { background: #14171a; width: fit-content; padding: 1px 5px; margin: 0 0 17px; color: var(--accent) }
+.nodes { display: grid; gap: 12px }
+.node { display: grid; grid-template-columns: minmax(0, 1fr) 16px; align-items: center; gap: 9px; width: 100%; min-height: 70px; text-align: left; border: 1px solid #3b444a; border-radius: 10px; background: #202529; padding: 11px 10px 11px 12px; transition: background .18s, border-color .18s }
+.node:hover, .node[aria-expanded="true"] { border-color: var(--accent); background: #292f33 }
+.node strong { display: block; font-size: clamp(.92rem, 1.16vw, 1.06rem); letter-spacing: -.015em; line-height: 1.22 }
+.node small { display: block; color: #b3bac0; font-size: .86rem; line-height: 1.25; margin-top: 5px }
+.node .toggle { color: var(--accent); font: 500 1.35rem/1 var(--mono); justify-self: end }
+.node[aria-expanded="true"] strong { color: var(--accent) }
+.node[data-optional] { border-style: dashed }
+.node[hidden] { display: none }
+.capture { --accent: var(--blue) }
+.process { --accent: var(--purple) }
+.verify { --accent: var(--green) }
+.legend { display: flex; flex-wrap: wrap; gap: 9px 17px; align-items: center; margin: 24px 0 0; color: #bdc4c6; font-size: .86rem }
+.legend span { display: inline-flex; gap: 8px; align-items: center; background: #14171a; padding: 0 4px }
+.line { width: 18px; border-top: 1px solid #abb8ba }
+.line.optional { border-top-style: dashed }
+.panel { padding: clamp(19px, 2.35vw, 34px); border-left: 1px solid var(--line); background: #1a1e20; min-width: 0 }
+.detail-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px }
+.detail-kind { color: var(--accent, var(--green)) }
+.close { border: 1px solid var(--line); border-radius: 7px; background: transparent; width: 34px; height: 34px; font-size: 1.2rem; line-height: 1 }
+.panel h2 { font-weight: 690; font-size: clamp(1.6rem, 2.7vw, 2.65rem); letter-spacing: -.045em; line-height: 1.05; margin: 0 0 14px }
+.panel p { color: #d0d5d4; margin: 0 0 14px }
+.panel h3 { margin: 18px 0 4px; font-size: 1rem; letter-spacing: -.01em }
+.panel ul { margin: 6px 0 14px; padding-left: 1.1em; color: #d0d5d4 }
+.panel li + li { margin-top: .42em }
+.note { padding: 12px; border-left: 2px solid var(--accent, var(--green)); background: #232a2b; color: #ecefea; margin-top: 15px }
+.artifacts, .related { display: flex; flex-wrap: wrap; gap: 7px; margin: 7px 0 }
+.artifacts code, .related button, kbd { font: .84rem/1.35 var(--mono); padding: 5px 7px; border: 1px solid #485156; border-radius: 6px; white-space: normal; overflow-wrap: anywhere }
+.artifacts code { color: #cbd8d7; background: #141719 }
+.related button { background: #22292a }
+.related button:hover { border-color: var(--green) }
+footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 26px 0 34px; color: var(--muted); font-size: .9rem }
+footer nav { display: flex; flex-wrap: wrap; gap: 14px }
+@media (max-width: 1060px) {
+  .shell { width: calc(100% - 40px) }
+  .workspace { grid-template-columns: minmax(0, 1fr) 310px }
+  .board { padding: 18px 13px }
+  .stages { gap: 19px }
+}
+@media (max-width: 850px) {
+  .workspace { display: block }
+  .panel { border-left: 0; border-top: 1px solid var(--line) }
+  .board { padding: 21px 17px }
+}
+@media (max-width: 540px) {
+  .shell { width: calc(100% - 26px) }
+  header { min-height: 60px }
+  header .annotation { display: none }
+  .hero { grid-template-columns: 1fr; gap: 16px; padding-bottom: 28px }
+  .hero h1 { max-width: 11ch }
+  .metrics { margin-bottom: 31px }
+  .metric { padding: 10px 8px }
+  .metric strong { font-size: 1rem }
+  .metric span { font-size: .79rem }
+  .stages { gap: 8px }
+  .board { padding: 14px 7px }
+  .stage h3 { font-size: .73rem; letter-spacing: .015em; padding-left: 2px }
+  .node { padding: 8px 5px; grid-template-columns: minmax(0, 1fr) 11px; gap: 3px; min-height: 67px }
+  .node strong { font-size: .85rem; overflow-wrap: anywhere }
+  .node small { font-size: .76rem }
+  .node .toggle { font-size: 1rem }
+  .legend { margin-left: 4px }
+}
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important } }
+</style>
+</head>
+<body>
+<div class="shell">
+<header>
+  <div class="brand"><span class="brand-mark" aria-hidden="true"></span> XRPL Galaxy</div>
+  <div class="annotation">Guida interattiva all’app iOS</div>
+</header>
+<main>
+  <section class="hero" aria-labelledby="title">
+    <h1 id="title">Uno scatto, <span>molte misure.</span></h1>
+    <p>Dal tocco sul pulsante al file condiviso. Segui come XRPL Galaxy raccoglie immagini, profondità e movimento e come permette di controllare lo scatto.</p>
+  </section>
+  <div class="metrics" aria-label="Tempi e requisiti">
+    <div class="metric"><strong>5 s prima</strong><span>Raccolta mentre inquadri</span></div>
+    <div class="metric"><strong>350 ms dopo</strong><span>Finestra aggiuntiva</span></div>
+    <div class="metric"><strong>631 ms</strong><span>Fino alla preparazione dei file, in uno scatto su iPhone 13 Pro Max</span></div>
+  </div>
+  <section aria-labelledby="map-title">
+    <div class="workspace-title">
+      <div><h2 id="map-title">Mappa dello scatto</h2><p>Seleziona un nodo per aprire il dettaglio. Le linee mostrano come passano i dati.</p></div>
+      <div class="filters" role="group" aria-label="Filtra i nodi">
+        <button type="button" data-filter="all" aria-pressed="true">Tutta la mappa</button>
+        <button type="button" data-filter="offline" aria-pressed="false">Solo offline</button>
+      </div>
+    </div>
+    <div class="workspace">
+      <div class="board" id="board">
+        <canvas aria-hidden="true" id="connections"></canvas>
+        <div id="stages" class="stages"></div>
+        <p class="legend"><span><i class="line" aria-hidden="true"></i>Flusso dei dati</span><span><i class="line optional" aria-hidden="true"></i>Passaggio opzionale</span></p>
+      </div>
+      <aside class="panel" id="detail" aria-labelledby="detail-title" tabindex="-1"></aside>
+    </div>
+    <noscript>La mappa interattiva richiede JavaScript attivo nel browser.</noscript>
+  </section>
+</main>
+<footer>
+  <span>File autonomo · apribile senza connessione</span>
+  <nav aria-label="Approfondimenti nel progetto">
+    <a href="ambient-architecture.md">Architettura</a>
+    <a href="ambient-validation-report.md">Misure e test</a>
+  </nav>
+</footer>
+</div>
+<script>
+const stages = [
+  { id: "capture", title: "Acquisizione", nodes: ["shutter","camera","lidar","imu","radio"] },
+  { id: "process", title: "Elaborazione", nodes: ["clock","noise","burst","anchors"] },
+  { id: "verify", title: "Verifica e uscita", nodes: ["physics","merkle","export","attest","xrpl"] }
+];
+const node = {
+  shutter: {
+    title: "Scatto", short: "Un solo tocco", lead: "Mentre inquadri, l’app mantiene una breve cronologia in memoria. Quando tocchi il pulsante, blocca il fotogramma dello scatto e lo usa come riferimento.",
+    steps: ["Conserva fino a cinque secondi di misure precedenti. Dopo lo scatto raccoglie ancora dati per una finestra di 350 millisecondi.", "La codifica JPEG, l’elaborazione del fotogramma e la preparazione del LiDAR partono in parallelo durante la raccolta."],
+    limit: "631 ms è una misura su uno scatto reale fino alla preparazione del pacchetto. Le ultime scritture, l’importazione in Foto e l’eventuale rete non rientrano nella misura.",
+    related: ["clock","camera","lidar"]
+  },
+  camera: {
+    title: "Fotocamera", short: "JPEG e campioni YUV", lead: "Da un fotogramma ARKit l’app crea due versioni della stessa immagine, con scopi diversi.",
+    steps: ["Il JPEG viene orientato come lo scatto e serve da anteprima o da foto da condividere.", "Il file YUV conserva tutti i campioni di luminanza Y e crominanza Cb e Cr forniti da ARKit nel formato supportato. Mantiene l’orientamento nativo e rimuove soltanto il padding fra le righe.", "Il manifest registra formato, dimensioni, metadati colore, esposizione, intrinseci e dati EXIF disponibili."],
+    limit: "Il file YUV precede la compressione JPEG dell’app, ma arriva dopo l’elaborazione della fotocamera Apple. I dati Bayer del sensore non sono disponibili in questo flusso.",
+    files: [".jpg",".yuv",".json"], related: ["noise","burst","merkle"]
+  },
+  lidar: {
+    title: "LiDAR", short: "Distanza e geometria", lead: "ARKit fornisce una mappa della distanza dalla fotocamera e, quando disponibile, una confidenza per indicare la qualità dei singoli campioni.",
+    steps: ["L’app usa la calibrazione della fotocamera per proiettare le misure in 3D e ottenere raggi, punti nello spazio e normali alle superfici.", "Esporta anche pose, punti di tracciamento, piani e mesh quando ARKit li rende disponibili.", "I raggi del campo visivo sono calcolati per la foto e per l’area visibile nel mirino."],
+    limit: "Una mappa di profondità può essere presente anche quando ARKit non ha ancora ricostruito una mesh. La qualità varia con la scena.",
+    files: [".fdepth",".spatial.json",".json"], related: ["burst","physics"]
+  },
+  imu: {
+    title: "Movimento", short: "Accelerometro e giroscopio", lead: "Core Motion registra due serie di vettori sui tre assi fisici del telefono, con tempi relativi allo scatto.",
+    steps: ["L’accelerometro registra l’accelerazione in g, inclusa la gravità. Il giroscopio registra la velocità angolare in radianti al secondo.", "L’app richiede 100 campioni al secondo per sensore e salva anche la frequenza effettiva, i buchi e lo stato di disponibilità.", "Il verificatore integra la rotazione del giroscopio fra due fotogrammi. L’accelerometro resta disponibile nel file per altre analisi."],
+    limit: "Le serie restano negli assi del dispositivo. La traiettoria ARKit è un dato distinto.",
+    files: [".imu.json"], related: ["clock","physics"]
+  },
+  radio: {
+    title: "Bluetooth", short: "Segnali ambientali aggregati", lead: "In primo piano l’app ascolta i dispositivi Bluetooth che trasmettono segnali rilevabili da iOS. Non si connette ai dispositivi osservati.",
+    steps: ["Usa un identificatore temporaneo per evitare di contare più volte lo stesso identificativo ricevuto nella finestra. Gli identificatori temporanei rimangono in memoria e vengono scartati dopo il riassunto.", "Salva il numero di callback, intervalli di intensità RSSI, persistenza e densità nel tempo. Distingue il Bluetooth spento da una scansione senza segnali."],
+    limit: "Le osservazioni dipendono da ciò che iOS rileva. Non sono un conteggio di persone e il valore RSSI non indica una distanza esatta.",
+    files: [".radio.json"], related: ["clock","merkle","export"]
+  },
+  clock: {
+    title: "Sincronizzazione", short: "Un riferimento temporale", lead: "Per collegare dati raccolti a frequenze diverse, l’app confronta il tempo del fotogramma con il tempo monotono del telefono.",
+    steps: ["Se questi riferimenti sono compatibili, il tempo del fotogramma diventa lo zero della finestra. Altrimenti l’app usa il tempo della pressione del pulsante e indica il ripiego.", "Fotogrammi, misure di movimento e osservazioni Bluetooth vengono selezionati nella stessa finestra. I file distinguono disponibilità e copertura effettiva."],
+    limit: "I tempi relativi permettono di confrontare i sensori, ma la data del telefono da sola non certifica l’ora dello scatto.",
+    files: [".session.json",".imu.json"], related: ["shutter","burst","physics"]
+  },
+  noise: {
+    title: "Residui della camera", short: "La parte «silicio»", lead: "Ogni fotosito trasforma la luce in carica elettrica. La luce e l’elettronica introducono variazioni casuali. Alcune differenze di sensibilità tra fotositi, invece, possono ripetersi da uno scatto all’altro.",
+    steps: ["Su ciascun campione Y, Cb e Cr, l’app calcola 4 × centro − sinistra − destra − sopra − sotto. Se il centro vale 102 e i vicini valgono 100, il residuo è 8.", "Esporta il residuo con segno per ogni campione e riassunti per riga, colonna e canale.", "Confronta i fotogrammi vicini quando movimento, calibrazione ed esposizione rientrano nelle soglie. Se non ci rientrano, registra il motivo dell’esclusione."],
+    limit: "Un bordo della scena può produrre lo stesso residuo del rumore. I campioni ARKit sono già elaborati, quindi la mappa registra variazioni per scatto senza isolare un’impronta del sensore.",
+    files: [".noise.i16",".noise.json",".yuv"], related: ["camera","burst","physics"]
+  },
+  burst: {
+    title: "Fotogrammi vicini", short: "Immagini prima e dopo", lead: "Lo scatto include fino a due fotogrammi di supporto, acquisiti automaticamente durante la normale inquadratura.",
+    steps: ["L’app conserva il piano di luminanza dei fotogrammi vicini, le intrinseche e gli scarti temporali.", "Quando disponibili conserva anche le relative mappe di profondità. I fotogrammi possono servire alla verifica fisica anche se il confronto del rumore li ha esclusi."],
+    limit: "I fotogrammi in più possono contenere dettagli privati. Il pacchetto selettivo Bluetooth non li include.",
+    files: [".physics.json",".ref0.y",".ref1.y",".ref0.fdepth",".ref1.fdepth"], related: ["camera","lidar","physics"]
+  },
+  anchors: {
+    title: "Ancore ambientali", short: "Estensione opzionale", optional: true, lead: "Il progetto prevede un punto di estensione per infrastrutture fidate che trasmettono token firmati.",
+    steps: ["Un’infrastruttura configurata può fornire token con firma Ed25519 e scadenza. L’app può verificare firma, intervallo di validità e duplicati durante la cattura.", "Il provider predefinito è vuoto. Nessuna ancora è richiesta per scattare o verificare i dati offline."],
+    limit: "Un token firmato può essere ritrasmesso durante la sua validità. Questa estensione non implementa misure sicure di distanza.",
+    files: [".anchors.json, se disponibile"], related: ["radio","merkle"]
+  },
+  physics: {
+    title: "Fisica offline", short: "Immagine, profondità e gyro", lead: "Su un computer, uno script legge lo ZIP estratto e controlla se immagini, profondità e rotazione sono compatibili. Non richiede account o connessione.",
+    steps: ["Trova punti riconoscibili nel fotogramma, li segue nelle altre immagini e usa il LiDAR per stimare un movimento rigido.", "Controlla la riproiezione e la profondità su punti che non ha usato per stimare il movimento. Confronta la rotazione visiva con quella misurata dal giroscopio.", "Riporta uno dei tre esiti: coerente, incoerente o evidenza insufficiente. Per esempio, un telefono quasi immobile può produrre troppo poca parallasse."],
+    limit: "Il risultato descrive la compatibilità tra le misure. Da solo non stabilisce chi le ha prodotte o se la scena era autentica.",
+    files: ["backend/verify-physics.py"], related: ["burst","imu","merkle"]
+  },
+  merkle: {
+    title: "Integrità Merkle", short: "Hash e prova selettiva", lead: "L’app calcola un hash SHA-256 dei file e raggruppa le impronte in categorie. Ogni categoria usa un valore casuale prima di entrare nell’albero Merkle.",
+    steps: ["Foto, LiDAR, radio, metadati ed eventuali ancore confluiscono in un’unica radice.", "Per verificare una categoria bastano i file selezionati, il relativo valore casuale e il percorso fino alla radice. Le altre categorie restano private."],
+    limit: "La prova dimostra che i file corrispondono alla radice che il destinatario ritiene affidabile. La radice da sola non certifica l’origine fisica dei dati.",
+    files: [".proof.json","inclusion-proof.json","backend/verify-scan.mjs"], related: ["export","physics","xrpl"]
+  },
+  export: {
+    title: "Esportazione", short: "ZIP completo o selettivo", lead: "Apri uno scatto in Scans e scegli il menu di condivisione. Puoi inviare tutto con AirDrop o scegliere una sola categoria.",
+    steps: ["Lo ZIP completo conserva foto, misure e prove. Puoi aprirlo e controllarlo su un computer.", "Per condividere solo i dati radio, scegli la categoria radio. Lo ZIP contiene il riepilogo e la prova di inclusione."],
+    limit: "La condivisione avviene solo quando la scegli. Il pacchetto completo può contenere immagini e geometria dello spazio.",
+    files: [".zip"], related: ["merkle","physics"]
+  },
+  attest: {
+    title: "App Attest", short: "Verifica dell’app", optional: true, lead: "Se si configura un server e si abilita App Attest, l’app può associare la radice dello scatto a una chiave attestata da Apple.",
+    steps: ["L’app richiede una sfida monouso a breve scadenza. Dopo lo scatto firma un’asserzione che include la radice della cattura.", "Il server verifica identità dell’app, firma, scadenza e contatore per impedire il riutilizzo di una prova."],
+    limit: "Questo passaggio dipende da Apple e da un server configurato. Autentica l’app che ha firmato, senza certificare la provenienza dei valori dei sensori.",
+    related: ["merkle","xrpl"]
+  },
+  xrpl: {
+    title: "XRP Ledger", short: "Ancoraggio su Testnet", optional: true, lead: "Il backend può pubblicare una radice già verificata in una transazione Testnet, quando dispone di un account configurato.",
+    steps: ["Nel memo finiscono soltanto versione e radice Merkle. I file dello scatto rimangono fuori dal registro.", "L’ancoraggio viene indicato come verificato quando la transazione compare in un ledger convalidato e il memo corrisponde."],
+    limit: "Il registro dimostra che il commitment esisteva quando è stato ancorato. Nei test è stata ancorata una radice sintetica. La verifica fisica funziona offline e non dipende dal registro.",
+    related: ["attest","merkle","physics"]
+  }
+};
+const edges = [
+  ["shutter","clock"],["camera","noise"],["camera","burst"],["lidar","burst"],["imu","clock"],
+  ["radio","clock"],["radio","merkle"],["clock","physics"],["noise","merkle"],["burst","physics"],
+  ["burst","merkle"],["anchors","merkle"],["merkle","export"],["merkle","attest"],["attest","xrpl"]
+];
+const board = document.querySelector("#board");
+const canvas = document.querySelector("#connections");
+const detail = document.querySelector("#detail");
+const grid = document.querySelector("#stages");
+const buttons = new Map();
+const stageByNode = new Map();
+let selected = "shutter";
+let onlyOffline = false;
+let lineFrame = 0;
+
+function element(tag, content, className) {
+  const el = document.createElement(tag);
+  if (content) el.textContent = content;
+  if (className) el.className = className;
+  return el;
+}
+for (const stage of stages) {
+  const section = element("section", "", "stage " + stage.id);
+  section.append(element("h3", stage.title));
+  const stack = element("div", "", "nodes");
+  for (const id of stage.nodes) {
+    const item = node[id];
+    stageByNode.set(id, stage);
+    const button = element("button", "", "node");
+    button.type = "button";
+    button.setAttribute("aria-controls", "detail");
+    if (item.optional) button.dataset.optional = "";
+    const copy = element("span");
+    copy.append(element("strong", item.title), element("small", item.short));
+    const toggle = element("span", "+", "toggle");
+    toggle.setAttribute("aria-hidden", "true");
+    button.append(copy, toggle);
+    button.addEventListener("click", event => select(selected === id ? null : id,
+      event.detail > 0 && window.matchMedia("(max-width: 850px)").matches));
+    stack.append(button);
+    buttons.set(id, button);
+  }
+  section.append(stack);
+  grid.append(section);
+}
+function select(id, reveal = false) {
+  selected = id;
+  render();
+  if (id && reveal) detail.scrollIntoView({ behavior:
+    matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "nearest" });
+}
+function render() {
+  for (const [id, button] of buttons) {
+    button.setAttribute("aria-expanded", String(selected === id));
+    button.querySelector(".toggle").textContent = selected === id ? "−" : "+";
+    button.hidden = onlyOffline && Boolean(node[id].optional);
+  }
+  detail.replaceChildren();
+  detail.className = "panel";
+  if (!selected) {
+    const title = element("h2", "Scegli un nodo");
+    title.id = "detail-title";
+    detail.append(title, element("p", "Apri un nodo della mappa per leggere come funziona e quali dati produce."));
+    scheduleLines();
+    return;
+  }
+  const item = node[selected];
+  const activeNode = selected;
+  const stage = stageByNode.get(activeNode);
+  detail.classList.add(stage.id);
+  const head = element("div", "", "detail-head");
+  head.append(element("span", item.optional ? "Opzionale" : stage.title, "detail-kind"));
+  const close = element("button", "×", "close");
+  close.type = "button";
+  close.setAttribute("aria-label", "Chiudi dettaglio");
+  close.addEventListener("click", () => {
+    select(null);
+    buttons.get(activeNode).focus();
+  });
+  head.append(close);
+  const title = element("h2", item.title);
+  title.id = "detail-title";
+  detail.append(head, title, element("p", item.lead), element("h3", "Come funziona"));
+  const steps = element("ul");
+  item.steps.forEach(step => steps.append(element("li", step)));
+  detail.append(steps, element("div", item.limit, "note"));
+  if (item.files?.length) {
+    const files = element("div", "", "artifacts");
+    item.files.forEach(file => files.append(element("code", file)));
+    detail.append(element("h3", "File e strumenti"), files);
+  }
+  const next = item.related.filter(id => !onlyOffline || !node[id].optional);
+  if (next.length) {
+    const relations = element("div", "", "related");
+    for (const id of next) {
+      const button = element("button", node[id].title);
+      button.type = "button";
+      button.addEventListener("click", () => {
+        select(id);
+        detail.focus({ preventScroll: true });
+      });
+      relations.append(button);
+    }
+    detail.append(element("h3", "Nodi collegati"), relations);
+  }
+  scheduleLines();
+}
+function scheduleLines() {
+  cancelAnimationFrame(lineFrame);
+  lineFrame = requestAnimationFrame(draw);
+}
+function draw() {
+  const rect = board.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(rect.width * dpr);
+  canvas.height = Math.round(rect.height * dpr);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  ctx.scale(dpr, dpr);
+  for (const [a,b] of edges) {
+    const from = buttons.get(a), to = buttons.get(b);
+    if (from.hidden || to.hidden) continue;
+    const f = from.getBoundingClientRect(), t = to.getBoundingClientRect();
+    const x1 = f.right - rect.left, x2 = t.left - rect.left;
+    const y1 = f.top + f.height / 2 - rect.top, y2 = t.top + t.height / 2 - rect.top;
+    const focused = [a,b].includes(selected);
+    ctx.strokeStyle = focused ? "#d8ff76" : "#71818b";
+    ctx.lineWidth = focused ? 1.45 : 1;
+    ctx.globalAlpha = focused ? .8 : .5;
+    ctx.setLineDash(node[a].optional || node[b].optional ? [4,4] : []);
+    ctx.beginPath();
+    if (stageByNode.get(a) === stageByNode.get(b)) {
+      const right = x1 + 7;
+      ctx.moveTo(x1, y1); ctx.lineTo(right, y1); ctx.lineTo(right, y2);
+      ctx.lineTo(t.right - rect.left, y2);
+    } else {
+      const midpoint = x1 + (x2 - x1) / 2;
+      ctx.moveTo(x1, y1); ctx.bezierCurveTo(midpoint, y1, midpoint, y2, x2, y2);
+    }
+    ctx.stroke();
+  }
+}
+document.querySelectorAll("[data-filter]").forEach(button => button.addEventListener("click", () => {
+  onlyOffline = button.dataset.filter === "offline";
+  for (const choice of document.querySelectorAll("[data-filter]")) choice.setAttribute("aria-pressed", String(choice === button));
+  if (selected && onlyOffline && node[selected].optional) selected = "shutter";
+  render();
+}));
+if ("ResizeObserver" in window) new ResizeObserver(scheduleLines).observe(board);
+window.addEventListener("resize", scheduleLines);
+render();
+</script>
+</body>
+</html>
