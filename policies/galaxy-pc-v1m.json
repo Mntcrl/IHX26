@@ -67,7 +67,7 @@
     "imu_dt_max_us": 25000,
     "imu_cover_tol_us": 30000,
     "gyro_tol_urad": 20000,
-    "m_cd": [0, 1, 0, 1, 0, 0, 0, 0, -1],
+    "m_cd": [0, -1, 0, -1, 0, 0, 0, 0, -1],
     "grav_norm_tol_q40": 109951162778,
     "grav_cos_milli": 950,
     "acc_max_mg": 2000

@@ -44,6 +44,7 @@ pub enum FixtureError {
 }
 
 type Parts = ([FrameData; 3], [CameraFrame; 3], ImuEvidence);
+type Target = fn(&GeometryView, &PolicyReport) -> bool;
 
 fn annotate(view: GeometryView, policy: &Policy) -> Result<(GeometryView, PolicyReport), FixtureError> {
     let report = try_evaluate(&view, policy)?;
@@ -92,7 +93,7 @@ fn synthetic_fixtures(policy: &Policy, out: &mut Vec<Fixture>) -> Result<u64, Fi
     let (room_seed, view) = first_seed(Scenario::Room, policy, "synthetic-room-pass", |_, r| r.pass)?;
     out.push(fixture("synthetic-room-pass",
         format!("Synthetic room/desk scene, seed {room_seed} (first passing seed): every predicate true, PASS."), view));
-    let cases: [(&'static str, Scenario, &str, fn(&GeometryView, &PolicyReport) -> bool); 5] = [
+    let cases: [(&'static str, Scenario, &str, Target); 5] = [
         ("synthetic-flat-wall", Scenario::FlatWall, "Flat textured wall: geometry_ok false (planarity).",
             |_, r| !r.geometry_ok),
         ("synthetic-low-texture", Scenario::LowTexture, "Uniform grey texture over a 3D room: rgb_depth_ok false (no luminance edges at depth discontinuities).",
@@ -193,7 +194,6 @@ struct Rig {
     intrinsics: [[i64; 4]; 3],
     ts: [u64; 3],
     windows: [Vec<ImuSample>; 2],
-    g0: [i32; 3],
 }
 
 const IDENTITY: [i64; 9] = [Q30, 0, 0, 0, Q30, 0, 0, 0, Q30];
@@ -217,16 +217,17 @@ impl Rig {
             intrinsics: [INTRINSICS; 3],
             ts: [1_000_000, 1_150_000, 1_300_000],
             windows: [still.clone(), still],
-            // m_cd maps device x to camera y; gravity points along camera +y (down).
-            g0: [-Q20, 0, 0],
         }
     }
 
-    fn view(&self, seed: u64) -> Result<GeometryView, FixtureError> {
+    /// g0 = m_cd^T·(0, −2^20, 0): gravity along camera −y, matching
+    /// gp = −row1(R_1) for the identity rotation of frame t0.
+    fn view(&self, seed: u64, m_cd: &[i64; 9]) -> Result<GeometryView, FixtureError> {
+        let g0 = std::array::from_fn(|a| i32::try_from(-m_cd[3 + a] * i64::from(Q20)).expect("signed permutation entry"));
         let frames = self.depth.map(|d| {
             let mut f = FrameData { rgb: Vec::with_capacity(3 * WIDTH * HEIGHT), depth_mm: vec![d; WIDTH * HEIGHT], conf: vec![2; WIDTH * HEIGHT] };
             for i in 0..WIDTH * HEIGHT {
-                let level = if (i % WIDTH + i / WIDTH) % 2 == 0 { 40 } else { 215 };
+                let level = if (i % WIDTH + i / WIDTH).is_multiple_of(2) { 40 } else { 215 };
                 f.rgb.extend([level; 3]);
             }
             f
@@ -235,7 +236,7 @@ impl Rig {
             let [fx, fy, cx, cy] = self.intrinsics[f];
             CameraFrame { fx, fy, cx, cy, r: self.r[f], t: self.t[f], ts_us: self.ts[f], track: 2 }
         });
-        let imu = ImuEvidence { g0: self.g0, a_peak_mg: 0, windows: self.windows.clone() };
+        let imu = ImuEvidence { g0, a_peak_mg: 0, windows: self.windows.clone() };
         Ok(view_from_parts(&frames, &camera, &imu, &synthetic::synthetic_challenge(seed))?)
     }
 }
@@ -243,7 +244,7 @@ impl Rig {
 const PLANE_SEED: u64 = 7;
 
 fn plane(policy: &Policy, rig: &Rig) -> Result<(GeometryView, PolicyReport), FixtureError> {
-    annotate(rig.view(PLANE_SEED)?, policy)
+    annotate(rig.view(PLANE_SEED, &policy.motion.m_cd)?, policy)
 }
 
 fn plane_fixtures(policy: &Policy, out: &mut Vec<Fixture>) -> Result<(), FixtureError> {

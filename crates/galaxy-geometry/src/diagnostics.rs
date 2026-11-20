@@ -13,6 +13,14 @@ pub struct ImuFrameFit {
     pub max_axis_residual_urad: f64,
     pub runner_up_rms_urad: f64,
     pub policy_rms_urad: f64,
+    /// Every signed permutation with its RMS residual, best first.
+    pub candidates: Vec<Candidate>,
+}
+
+#[derive(Serialize)]
+pub struct Candidate {
+    pub m_cd: [i64; 9],
+    pub rms_urad: f64,
 }
 
 #[derive(Clone, Default)]
@@ -36,8 +44,9 @@ pub fn fit_imu_frame(views: &[GeometryView], policy: &Policy) -> Option<ImuFrame
     });
     let mut totals: [Residuals; 48] = std::array::from_fn(|_| Residuals::default());
     let mut used = 0;
-    for view in views.iter().filter(|v| v.validate().is_ok() && motion::quality(v, &policy.quality)
-        && (0..2).all(|w| motion::imu_window(v, &policy.motion, w))) {
+    // Tracking state and intrinsics do not enter the pose/gyro comparison, so
+    // only the view domain and the §8.5 IMU window rules gate a capture.
+    for view in views.iter().filter(|v| v.validate().is_ok() && (0..2).all(|w| motion::imu_window(v, &policy.motion, w))) {
         used += 1;
         for (w, pose) in relative_poses(view).iter().enumerate() {
             let skew = motion::vee(&pose.r);
@@ -62,5 +71,6 @@ pub fn fit_imu_frame(views: &[GeometryView], policy: &Policy) -> Option<ImuFrame
         captures_used: used, captures_excluded: views.len() - used,
         m_cd: matrices[best], rms_urad: rms(best), max_axis_residual_urad: totals[best].peak,
         runner_up_rms_urad: rms(ranked[1]), policy_rms_urad: rms(current),
+        candidates: ranked.iter().map(|&i| Candidate { m_cd: matrices[i], rms_urad: rms(i) }).collect(),
     })
 }

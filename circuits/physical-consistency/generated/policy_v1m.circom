@@ -46,7 +46,7 @@ function POL_imu_min_samples() { return 5; }
 function POL_imu_dt_max_us() { return 25000; }
 function POL_imu_cover_tol_us() { return 30000; }
 function POL_gyro_tol_urad() { return 20000; }
-function POL_m_cd(row, col) { var entries[9] = [0, 1, 0, 1, 0, 0, 0, 0, -1]; return entries[3*row+col]; }
+function POL_m_cd(row, col) { var entries[9] = [0, -1, 0, -1, 0, 0, 0, 0, -1]; return entries[3*row+col]; }
 function POL_grav_norm_tol_q40() { return 109951162778; }
 function POL_grav_cos_milli() { return 950; }
 function POL_acc_max_mg() { return 2000; }

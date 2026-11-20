@@ -8,7 +8,8 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use galaxy_crypto::sampling::Challenge;
-use galaxy_evidence::{ingest, Evidence, ImageProfile};
+use galaxy_evidence::bundle::{self, EvidenceBundle};
+use galaxy_evidence::{ingest, Evidence, ImageProfile, Salts};
 use galaxy_geometry::synthetic::{self, suite, Scenario};
 use galaxy_geometry::{build_view, diagnostics, fixtures, try_evaluate, GeometryView};
 use galaxy_protocol::policy::Policy;
@@ -65,7 +66,8 @@ impl ChallengeArgs {
 #[derive(Subcommand)]
 enum Command {
     /// Render a synthetic (simulated, not device) capture; writes the canonical
-    /// image and its GeometryView (synthetic challenge, `expected` filled).
+    /// image and its GeometryView (synthetic challenge, `expected` filled), and
+    /// with `--gxev` a GXEV EvidenceBundle (fresh random salts, empty capture state).
     Synth {
         #[arg(value_parser = parse_scenario)]
         scenario: Scenario,
@@ -75,6 +77,8 @@ enum Command {
         out: PathBuf,
         #[arg(long, value_enum, default_value = "png")]
         profile: Profile,
+        #[arg(long)]
+        gxev: bool,
     },
     /// Evaluate a GeometryView JSON (checking its `expected` if present) or a
     /// GXRW capture (requires the challenge arguments).
@@ -159,13 +163,17 @@ fn run(cli: Cli) -> Result<ExitCode, Error> {
     let policy = Policy::load(&cli.policy)?;
     policy.validate()?;
     match cli.command {
-        Command::Synth { scenario, seed, out, profile } => {
+        Command::Synth { scenario, seed, out, profile, gxev } => {
             let evidence = synthetic::synthesize_with_profile(scenario, seed, &policy, profile.into())?;
             let view = build_view(&evidence, &synthetic::synthetic_challenge(seed))?.with_expected(&policy);
             let stem = format!("synthetic-{scenario}-{seed}");
             let ext = match profile { Profile::Png => "png", Profile::Jpeg => "jpg" };
             write(&out.join(format!("{stem}.{ext}")), &evidence.image.encoded)?;
             write(&out.join(format!("{stem}.view.json")), &fixtures::to_json(&view))?;
+            if gxev {
+                let bundle = EvidenceBundle { evidence, salts: Salts::random()?, capture_state: Vec::new() };
+                write(&out.join(format!("{stem}.gxev")), &bundle::encode(&bundle)?)?;
+            }
             print_json(&view.expected)?;
         }
         Command::Eval { input, challenge, profile } => {
@@ -194,7 +202,7 @@ fn run(cli: Cli) -> Result<ExitCode, Error> {
             let views = gxrw.iter().map(|p| Ok(build_view(&ingest_gxrw(p, Profile::Png)?, &challenge)?))
                 .collect::<Result<Vec<_>, Error>>()?;
             let fit = diagnostics::fit_imu_frame(&views, &policy)
-                .ok_or("no capture passed the quality and IMU-window checks")?;
+                .ok_or("no capture passed the view-domain and IMU-window checks")?;
             print_json(&fit)?;
         }
         Command::Calibrate { dir, challenges } => {
