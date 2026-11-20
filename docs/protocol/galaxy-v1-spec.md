@@ -1,0 +1,289 @@
+# XRPL Galaxy v1 — Protocol Specification and Engineering Contract
+
+Primary protocol reference: `arch.docx` (repo root, Italian, "XRPL_Galaxy_Architettura_v1"). This contract resolves its open points and is the normative spec for every workstream; it will live in the repo as `docs/protocol/galaxy-v1-spec.md`. Deviations from arch.docx are listed in §18 and each has an ADR in `docs/adr/`. If you find a contradiction, an infeasible requirement, or a formula that cannot be implemented exactly, STOP that sub-part and message the orchestrator (your final report, or `write agent://<orchestrator>` if available); never diverge silently. Changes to this contract are made only by the orchestrator.
+
+## 0. Ground rules (all agents)
+- Real implementations only: no mocked proofs, hardcoded VERIFIED, simulated attestations, fake success paths, stubs, TODO placeholders. Test-only paths (desktop prover, synthetic scenes, dev-unattested credential) are allowed only when explicitly labelled and impossible to confuse with certified results.
+- Fail closed: strict decoding; reject trailing bytes, non-canonical field elements, reserved bits ≠ 0, unknown versions, oversize inputs.
+- Never log seeds, private keys, salts, witness values, raw sensor data, Bluetooth identifiers. Never commit secrets. Dev wallet seeds live outside the repo in `~/.config/galaxy/` (Linux) or the iOS Keychain.
+- Use established libraries for curves, pairings, ECDSA, Ed25519, X.509, CBOR, SHA-2, RIPEMD-160 (arkworks 0.6 as pinned in the workspace, RustCrypto, light-poseidon, ciborium, x509-cert/der). Never hand-roll EC or pairing math.
+- One shared Rust implementation for protocol/crypto/image/verification, exposed to Swift (UniFFI), browser (wasm-bindgen), CLI and node. Circom is the only second implementation; equivalence is enforced by cross-language vectors and differential tests.
+- Shared worktree etiquette: edit only files you own (§1). Keep every Cargo.toml you own parseable at all times (a broken member manifest breaks everyone). Use `CARGO_TARGET_DIR=target/<YourAgentName>` and `CARGO_BUILD_JOBS=2`. Build/test only your packages (`cargo test -p <crate>`). Never `git commit/push/reset/checkout/stash/restore`; the orchestrator commits. No repo-wide formatters (`cargo fmt -p <your crate>` is fine). Check `free -g` before memory-heavy jobs (circom compile, snarkjs setup); do not start them below 6 GiB available.
+- Record decisions in `docs/adr/NNNN-<slug>.md` (Context / Decision / Consequences) within your ADR range (§1).
+- Final report: files changed, commands run with real output (tests, measurements), open issues, contract questions. Measurements only from real runs; unmeasured claims labelled [INFERENCE].
+
+## 1. Monorepo layout and ownership
+```
+Cargo.toml (workspace, members = ["crates/*"]), rust-toolchain.toml, root Makefile, .gitignore  -> orchestrator
+crates/galaxy-protocol    wire formats, ids, canonical JSON, policy struct + policy_id, network config, XMP model -> ProtocolCrypto
+crates/galaxy-crypto      field/limbs, Poseidon, tags, frame trees + openings, component/evidence roots, sampling, Groth16 proof/VK codec + verify -> ProtocolCrypto
+crates/galaxy-image       png-v1 / jpeg-v1, YCbCr→RGB, box downscale, analysis raster, photo_id, XMP embed/extract -> ImageEvidence
+crates/galaxy-evidence    evidence model, ARKit ingest/quantization, commit() via galaxy-crypto, EvidenceBundle codec -> ImageEvidence
+crates/galaxy-geometry    reference physical-consistency engine (§8) + synthetic scene generator + calibration tools -> Geometry
+crates/galaxy-witness     circuit input builder (evidence + challenge → circom input JSON) -> Circuit
+crates/galaxy-attestation App Attest attestation/assertion verification + dev-unattested credential -> Attestation
+crates/galaxy-xrpl        XRPL binary codec subset, keys, signing, tx hash, LedgerSource trait, JSON-RPC/WS client, submission manager, bundle publishing -> XRPL
+crates/galaxy-prover      proving backends (witness generation + Groth16 prove) for desktop and iOS -> MobileProver
+crates/galaxy-verifier    verification pipeline + reports -> Verifier
+crates/galaxy-cli         `galaxy` binary -> Verifier
+crates/galaxy-node        `galaxy-node` daemon: index, REST API, discovery -> Node
+crates/galaxy-wasm        wasm-bindgen surface -> WebVerifier
+crates/galaxy-ffi         UniFFI surface for iOS -> IOS (phase 2)
+circuits/                 circom sources, tests, setup scripts, artifacts manifest, package.json -> Circuit
+apps/capture-ios/         Xcode project (moved from repo root) -> IOS
+apps/prover-bench-ios/    on-device proving benchmark app -> MobileProver
+apps/verifier-web/        browser verifier (Vite + TS + WASM) -> WebVerifier
+bindings/swift/           generated Swift package / static libs -> IOS + MobileProver (build scripts)
+bindings/wasm/            generated wasm package -> WebVerifier
+policies/                 policy JSON (initial values ProtocolCrypto; calibration changes via orchestrator)
+test-vectors/<area>/      golden vectors; area dir owned by the producing agent
+fixtures/synthetic/       synthetic scenes (Geometry); fixtures/real/ is gitignored (private captures)
+deployments/              network configs (ProtocolCrypto creates xrpl-testnet.toml schema), docker compose (Node)
+docs/                     PLAN.md, PROGRESS.md (orchestrator), protocol/ (spec + per-area docs), adr/, security/
+scripts/                  prefixed by area: xrpl-*, circuit-*, ios-*, web-*, node-*, prover-*
+```
+ADR ranges: orchestrator 0001-0009, ProtocolCrypto 0010-0019, ImageEvidence 0020-0029, Geometry 0030-0039, Circuit 0040-0049, XRPL 0050-0059, Attestation 0060-0069, IOS 0070-0079, MobileProver 0080-0089, Verifier 0090-0099, Node 0100-0109, WebVerifier 0110-0119, Security 0120-0129.
+
+## 2. Encoding conventions
+- Wire integers big-endian (`u8/u16be/u32be/u64be`); signed wire integers two's complement big-endian.
+- Hashes/ids: 32 raw bytes. Text form: Galaxy ids lowercase hex; XRPL tx/ledger hashes uppercase hex; parsers case-insensitive with exact length.
+- BN254 scalar field r = 21888242871839275222246405745257275088548364400416034343698204186575808495617. Field element on the wire = 32 B big-endian, value < r; decoding ≥ r is an error (never reduce).
+- 256-bit hash → field: two 128-bit limbs, `hi` = BE integer of bytes[0..16], `lo` = bytes[16..32].
+- Signed integers entering Poseidon or the circuit: x encoded as x mod r. The circuit range-checks every private numeric input at entry (Num2Bits of x + offset) before any arithmetic.
+- Policy math (§8) uses exact unbounded integers. `div_floor(a, b)` for b > 0 is ⌊a/b⌋ toward −∞ (Rust `div_euclid`). Comparisons exactly as written.
+- Canonical JSON (policy, circuit descriptor, node descriptor): ASCII, object keys sorted bytewise, no insignificant whitespace, integers only (no floats/exponents/leading zeros/"-0"), |integer| < 2^53, arrays keep order, strings with minimal escapes (`\"`, `\\`, control chars as `\u00xx`). Id computation rejects non-canonical input.
+
+## 3. SHA-256 identifiers (domain tag = ASCII bytes followed by 0x00)
+| id | definition |
+|---|---|
+| photo_id | SHA256("GALAXY/PHOTO/v1\0" ‖ u32be(w) ‖ u32be(h) ‖ rgb_bytes) over the canonical decoded raster (RGB8 row-major) |
+| capture_id | SHA256("GALAXY/CAPTURE/v1\0" ‖ core299) |
+| seed | SHA256("GALAXY/SAMPLE/v1\0" ‖ u32be(network_id) ‖ capture_id ‖ u32be(Lsel) ‖ ledger_hash(Lsel)) |
+| tile stream block | SHA256("GALAXY/SAMPLE-TILES/v1\0" ‖ seed ‖ u32be(counter)) |
+| App Attest clientData (capture) | "GALAXY/ASSERT/v1\0" ‖ core299 ; clientDataHash = SHA256(clientData) |
+| registration clientDataHash | SHA256("GALAXY/DEVICE-REG/v1\0" ‖ u32be(network_id) ‖ u32be(reg_ledger_index) ‖ reg_ledger_hash ‖ reg_nonce[32] ‖ key_id[32] ‖ account_id[20]) |
+| dev-unattested signature message | "GALAXY/DEV-ASSERT/v1\0" ‖ core299 |
+| dev-unattested key_id | SHA256("GALAXY/DEV-KEY/v1\0" ‖ ed25519_public_key[32]) |
+| bundle_id | SHA256("GALAXY/BUNDLE/v1\0" ‖ bundle_bytes) |
+| policy_id | SHA256("GALAXY/POLICY/v1\0" ‖ canonical_policy_json) |
+| circuit_id | SHA256("GALAXY/CIRCUIT/v1\0" ‖ canonical_descriptor_json) |
+| vk_digest | SHA256("GALAXY/VK/v1\0" ‖ vk_bytes) |
+| node descriptor signature message | "GALAXY/NODE/v1\0" ‖ canonical_descriptor_json_without_signature_field |
+
+network_id (u32) = XRPL NetworkID: 0 xrpl-mainnet, 1 xrpl-testnet, 2 xrpl-devnet. Mainnet refused unless config `allow_mainnet = true`.
+
+## 4. Image profiles
+- Canonical raster: 1024×768 RGB8 interleaved, row-major from top-left, no alpha, sensor-native landscape orientation (ARKit capturedImage orientation; the app captures only in that orientation), sRGB interpretation, no color management anywhere in verification.
+- Analysis raster 256×192: `A[u,v] = raster[x = 4u+2, y = 4v+2]`. Analysis pixel (u,v) ↔ depth pixel (u,v), 1:1 (documented ≈0.125 depth-pixel offset).
+- `png-v1` (profile code 0): IHDR 1024×768, bit depth 8, color type 2, compression 0, filter 0, interlace 0. Allowed ancillary chunks: sRGB, pHYs, tIME, tEXt, zTXt, iTXt. Rejected: iCCP, gAMA, cHRM, sBIT, PLTE, tRNS, acTL/fcTL/fdAT, unknown critical chunks, bad CRC, trailing data after IEND, duplicate IHDR. Any lossless re-encoding preserving the raster verifies.
+- `jpeg-v1` (profile code 1): committed raster = reference-decoder output of the exported JPEG bytes. Pinned encoder (`jpeg-encoder` exact version, quality 92, 4:4:4, baseline, standard Huffman tables) on device and in tools; pinned decoder (`jpeg-decoder` exact version, scalar/platform-independent integer IDCT, no SIMD features) everywhere. Accepted files: SOF0 baseline, 8-bit, 3 components, all sampling factors 1×1, 1024×768, no progressive/arithmetic/lossless/12-bit, Adobe transform (if present) = 1, EXIF orientation absent or 1. Cross-platform identity (x86_64, aarch64-apple-ios, aarch64-apple-darwin, wasm32) proven by golden vectors; if not achievable, JPEG certification is reported INCOMPLETE and only PNG is certified.
+- CAPTURE `flags` bits 0–3 = profile code of the committed raster; bits 4–15 reserved = 0. Verification decodes the presented file with its container's reference decoder and requires photo_id equality (a pixel-identical PNG of a jpeg-v1 capture verifies; documented).
+- XMP: namespace `https://xrpl-galaxy.org/ns/galaxy/1.0/`, prefix `galaxy`, properties `protocol` ("galaxy/v1"), `network` ("xrpl-testnet"), `imageProfile` ("png-v1" | "jpeg-v1"), `photoId`, `captureId` (lowercase hex), `manifestTx`, `proofTx` (uppercase hex). PNG: one iTXt chunk, keyword "XML:com.adobe.xmp", uncompressed, before the first IDAT. JPEG: APP1 with "http://ns.adobe.com/xap/1.0/\0" after SOI/APP0. Embedding never changes IDAT or scan data. Metadata is untrusted; cap 64 KiB.
+
+## 5. Evidence model and quantization (galaxy-evidence)
+Frames f: 0 = t−, 1 = t0, 2 = t+. Analysis grid W=256, H=192. Per frame: rgb[256·192·3] u8, depth_mm[256·192] u16 (0 = invalid), conf[256·192] u8 ∈ {0,1,2} (ARConfidenceLevel low/medium/high).
+- ARKit ingest (deterministic integer code in Rust): capturedImage must be 1920×1440 `420YpCbCr8BiPlanarFullRange`, else capture is INCONCLUSIVE (unsupported format). Per source pixel, chroma at (x>>1, y>>1), arithmetic shifts = floor: R = clamp255(Y + ((91881·(Cr−128) + 32768) >> 16)); G = clamp255(Y − ((22554·(Cb−128) + 46802·(Cr−128) + 32768) >> 16)); B = clamp255(Y + ((116130·(Cb−128) + 32768) >> 16)). The pixel buffer's YCbCr matrix attachment is recorded in META; v1 always uses the BT.601 full-range coefficients above.
+- Downscale 1920×1440 → 1024×768 by exact box filter in 1/8-pixel units: output X covers [15X, 15X+15), source x covers [8x, 8x+8); w(x) = max(0, min(8x+8, 15X+15) − max(8x, 15X)) (Σ = 15 per axis); out = div_floor(Σ wx·wy·v + 112, 225) per channel. The t− and t+ frames use the same pipeline; their analysis rasters use §4 sampling.
+- Depth: Float32 meters → mm = round_half_even(d·1000) if finite and 0 < d ≤ 65.535, else 0. Confidence copied (values > 2 → error).
+- Intrinsics on the analysis grid from ARCamera.intrinsics (1920×1440, s = 7.5): fx_a = fx/s, fy_a = fy/s, cx_a = (cx + 0.5)/s − 0.5, cy_a = (cy + 0.5)/s − 0.5; stored Q16 = round(v·65536) (Float64 math, round half away from zero), each in [0, 2^26).
+- Pose: ARCamera.transform (camera→world, ARKit camera axes). Convert to CV camera axes (x right, y down, z forward): R_cv = R_arkit · diag(1, −1, −1). Store R row-major Q30 = round(v·2^30); camera position T (world) in µm = round(t·10^6). Every R and T entry must lie in the i32 range [−2^31, 2^31 − 1]; ingest fails otherwise.
+- Timestamps: ARFrame.timestamp and CMLogItem.timestamp (same uptime clock) → µs u64 = round(ts·10^6), < 2^48. Tracking state: 0 notAvailable, 1 limited, 2 normal.
+- IMU (CMDeviceMotion, 100 Hz, bias-corrected rotationRate, device frame): window 0 = samples with t ∈ (ts_0, ts_1], window 1 = (ts_1, ts_2]; IMU_MAX = 64 samples per window, in time order, padding at the end. Sample = (dt_us u32 = t_k − t_{k−1} with t_{−1} = window start; ω = round(rotationRate·2^20) as i32 per axis). Padding samples are all zero. g0 = deviceMotion.gravity at the sample nearest ts_1, Q20 i32 (units of g). a_peak_mg = max |userAcceleration| over [ts_0, ts_2] in milli-g (u32).
+- Bluetooth aggregate (committed only): version, availability flags (bit0 poweredOn, bit1 authorized, bit2 scanned), scan_duration_ms, n_adv, n_unique (HMAC dedup with a discarded session secret), RSSI histogram 16 bins of 5 dB from −100 dBm, rssi_mean_q8, rssi_var_q8, persistence_pct. Missing/denied Bluetooth = zeros + flags; never invalidates a proof.
+- Noise aggregate (committed only): version + ≤ 16 bounded quantized residual statistics; no PRNU, no persistent fingerprint.
+- Meta (committed only): version, image profile code, app build, device model code (u32 table, 0 unknown), frame offsets ms, YCbCr matrix code, quality flags.
+- Salts: 31 random bytes → field element (CSPRNG: SecRandomCopyBytes / getrandom), one per salted component slot (§6).
+- EvidenceBundle binary codec (local persistence, resumable proving): magic "GXEV", u8 version, fixed-order fields, length-prefixed arrays, strict decoding (designed by ImageEvidence, documented in `docs/protocol/evidence-v1.md`).
+
+## 6. Commitments (Poseidon over BN254)
+- Poseidon = circomlib `Poseidon(n)`; Rust `light-poseidon` `Poseidon::<Fr>::new_circom(n)`, exact version pinned; golden vectors n = 1..5 checked against circomlib.
+- Tags: `TAG(code, aux) = 0x47414C58·2^96 + 1·2^80 + code·2^64 + aux` with aux < 2^64. Codes: 1 RGB_LEAF, 2 DEPTH_LEAF, 3 FRAME_LEAF, 4 NODE, 5 PAD_TILE, 6 COMPONENT, 7 SCALARS, 8 EVIDENCE_NODE, 9 PAD_EVIDENCE, 10 CTX, 11 SAMPLE_TILE, 12 HYP.
+- Layout: tiles 32×32 px in an 8×6 grid, label T = ty·8 + tx; blocks 4×4 px, 8×8 per tile. Tree positions in Morton order: morton(x,y) = Σ_{k=0..2} (bit_k(x) << 2k) | (bit_k(y) << (2k+1)). tile_pos = morton(tx, ty) over an 8×8 slot grid (ty ∈ {6,7} are padding); block_pos = morton(bx, by); leaf slot L = tile_pos·64 + block_pos (12 bits). Base-4 digit k of L (k = 0 lowest) is the child index at level k+1, child = bit_x + 2·bit_y.
+- Frame trees: arity 4, depth 6 (4096 leaf slots). kind 1 = RGB (frame 1, public), 2 = DEPTH (frame 1), 3 = FRAME (frames 0 and 2: RGB + depth). pos = (frame << 12) | L.
+  - RGB leaf: Poseidon3(TAG(1,pos), l0, l1); block bytes = 16 pixels in (y, x) row-major order, each R,G,B; l0 = BE integer of bytes[0..24], l1 = bytes[24..48].
+  - Depth leaf: Poseidon3(TAG(2,pos), dl0, dl1); e_k = depth_k·4 + conf_k (k = 0..15 pixel order); dl0 = Σ_{k=0..7} e_k·2^(18·(7−k)); dl1 likewise for k = 8..15.
+  - Frame leaf (frames 0, 2): Poseidon5(TAG(3,pos), l0, l1, dl0, dl1).
+  - Node at level ℓ ∈ 1..6, index i = L >> 2ℓ: Poseidon5(TAG(4, kind<<24 | frame<<20 | ℓ<<16 | i), c0, c1, c2, c3).
+  - Padding tile slot (ty ≥ 6): its level-3 node is Poseidon2(TAG(5, kind<<16 | frame<<8 | tile_pos), 0).
+  - rgb_root = RGB tree root (frame 1), unsalted, recomputed by any verifier from the photo.
+- Components (16 slots): 0 RGB0 = rgb_root; 1 DEPTH0, 2 FRAME_MINUS, 3 FRAME_PLUS: Poseidon3(TAG(6,slot), salt, tree_root). Scalar components 4 CAMERA, 5 IMU, 6 BLUETOOTH, 7 NOISE, 8 META: h = Poseidon3(TAG(7,slot), salt, n); then per chunk of 4 elements h = Poseidon5(h, e0, e1, e2, e3) (last chunk zero-filled); comp = h. Slots 9–15: Poseidon2(TAG(9,slot), 0).
+- evidence_root: n_j = Poseidon5(TAG(8, 1<<16 | j), comp[4j..4j+3]) for j = 0..3; root = Poseidon5(TAG(8, 2<<16), n0, n1, n2, n3).
+- CAMERA elements (n = 54): per frame f = 0,1,2: fx, fy, cx, cy (Q16), R00..R22 (Q30), Tx, Ty, Tz (µm), ts_us, track.
+- IMU elements (n = 133): [g0x, g0y, g0z, a_peak_mg, 0] then 128 packed samples (window 0 then window 1, 64 each): e = dt·2^96 + (ωx+2^31)·2^64 + (ωy+2^31)·2^32 + (ωz+2^31).
+- BLUETOOTH / NOISE / META element layouts: fixed per version, defined by ImageEvidence in `docs/protocol/evidence-v1.md`; opaque to the circuit (it only hashes them).
+
+## 7. Ledger challenge and sampling
+- Lpre = validated ledger read just before capture (CAPTURE carries index + hash). L0 = ledger of the validated tesSUCCESS CAPTURE; require Lpre < L0 ≤ Lpre + w_cap. Lsel = L0 + sel_offset (5); no retries. Lproof: Lsel < Lproof ≤ Lsel + w_proof. Policy values w_cap = 20, w_proof = 300.
+- Tile selection (outside the circuit; public inputs; every verifier recomputes): central stratum = labels with 2 ≤ tx ≤ 5 ∧ 1 ≤ ty ≤ 4 (16 tiles, ascending), peripheral = the other 32 (ascending). Word stream: tile-stream blocks for counter 0,1,2,…, each split into 8 u32be words. Partial Fisher–Yates: over the central list for 8 picks, then over the peripheral list for 8 picks (stream continues): for i in 0..k: n = len − i; limit = ⌊2^32/n⌋·n; draw x until x < limit; j = i + (x mod n); swap(list[i], list[j]); pick list[i]. sampled_tiles = sort(central picks) ‖ sort(peripheral picks).
+- ctx = Poseidon5(TAG(10,0), capture_hi, capture_lo, seed_hi, seed_lo).
+- Per slot s ∈ 0..15 with tile T_s = (tx, ty): h_s = Poseidon3(TAG(11,s), ctx, T_s); b = the 254 canonical little-endian bits of h_s (strict decomposition in-circuit). Quadrant q ∈ 0..3, qx = q mod 2, qy = q div 2: rx = b[4q] + 2b[4q+1], ry = b[4q+2] + 2b[4q+3]; block (bx, by) = (4qx + rx, 4qy + ry); temporal pick ip_q = b[16+2q] + 2b[17+2q], (ix, iy) = (1 + ip mod 2, 1 + ip div 2). Block origin (u_b, v_b) = (32tx + 4bx, 32ty + 4by).
+- Hypotheses j ∈ 0..7: g_j = Poseidon2(TAG(12,j), ctx), 254 LE bits. j < 4 (global): idx_m = bits[8m .. 8m+8) as integer, m = 0..2, over all 256 points. j ≥ 4 (central): idx_m = bits[7m .. 7m+7), over points 0..127.
+
+## 8. Policy galaxy-pc-v1m (mobile profile of GalaxyPhysicalConsistencyProofV1)
+Values live in `policies/galaxy-pc-v1m.json` (keys = names below, grouped per subsection). Calibration may change values (→ new policy_id/circuit_id); formulas change only via a contract update. Initial values in §8.7.
+
+Notation: frame 1 unless a frame subscript is given. valid_f(p) = d_min_mm ≤ D_f(p) ≤ d_max_mm ∧ C_f(p) ≥ conf_min (d_max_mm < 8192 required). Y(p) = 77R + 150G + 29B.
+
+8.1 Points. For slot s, quadrant q, k ∈ 0..3: point index i = 16s + 4q + k at pixel (u_b + 1 + k mod 2, v_b + 1 + k div 2). 256 points; points i < 128 (slots 0..7) are central.
+
+8.2 LiDAR geometry (planarity in inverse depth, 1/d = A·u + B·v + C, fixed P = 2^32).
+- Hypothesis j with vertices (u_m, v_m, d_m) = points idx_m. pre_deg_j = two idx equal ∨ ¬valid(any vertex) ∨ |Δ| < area_min. If pre_deg_j: a = b = c = 0, deg_j = 1. Otherwise:
+  Δ = u0(v1−v2) − v0(u1−u2) + (u1v2 − u2v1); w0 = d1d2, w1 = d0d2, w2 = d0d1; Dp = d0d1d2;
+  det_A = w0(v1−v2) − v0(w1−w2) + (w1v2 − w2v1); det_B = u0(w1−w2) − w0(u1−u2) + (u1w2 − u2w1); det_C = u0(v1w2 − v2w1) − v0(u1w2 − u2w1) + w0(u1v2 − u2v1);
+  σ = sign(Δ); Den = Dp·|Δ|; a = div_floor(σ·det_A·P, Den), b = div_floor(σ·det_B·P, Den), c = div_floor(σ·det_C·P, Den);
+  deg_j = |a| ≥ 2^36 ∨ |b| ≥ 2^36 ∨ |c| ≥ 2^36 (then a = b = c treated as 0). Under the v1m values (d_min_mm 200, area_min 64) this bound is unreachable for valid vertices; it stays as a structural guard. Test-only policies (own ids, never accepted by any config) may lower d_min_mm / area_min to exercise the branch.
+- res_ij = P − D_i·(a_j·u_i + b_j·v_i + c_j) (only meaningful when valid_i; every use is conjoined with valid_i).
+- inlier_ij = valid_i ∧ ¬deg_j ∧ −2^eps_log2 ≤ res_ij < 2^eps_log2. Evaluated for (j < 4, all 256 i) and (j ≥ 4, i < 128).
+- support_all_j = Σ_{i<256} inlier_ij (j < 4); support_c_j = Σ_{i<128} inlier_ij (j < 8); V_all = Σ_{i<256} valid_i; V_c = Σ_{i<128} valid_i.
+- max_all = max_{j<4} support_all_j; max_c = max_{j<8} support_c_j; j_star = min{ j < 4 : support_all_j = max_all }.
+- out_i = valid_i ∧ ¬inlier_{i,j_star}; strong_i = valid_i ∧ ¬deg_{j_star} ∧ ¬(−2^sep_log2 ≤ res_{i,j_star} < 2^sep_log2). Per slot s (its 16 points): valid_s, out_s, strong_s counts.
+- n_hyp_ok_g = #{j<4 : ¬deg_j}; n_hyp_ok_c = #{j≥4 : ¬deg_j}; tiles_cov = #{s : valid_s ≥ tile_valid_min}; tiles_nonplanar = #{s : out_s ≥ tile_out_min}; tiles_nonplanar_c = #{s<8 : out_s ≥ tile_out_min}; n_strong = Σ strong_i; tiles_strong = #{s : strong_s ≥ 1}.
+- geometry_ok = V_all ≥ v_all_min ∧ V_c ≥ v_c_min ∧ tiles_cov ≥ tiles_cov_min ∧ n_hyp_ok_g ≥ 1 ∧ n_hyp_ok_c ≥ 1 ∧ 100·max_all ≤ plane_global_max_pct·V_all ∧ 100·max_c ≤ plane_central_max_pct·V_c ∧ tiles_nonplanar ≥ nonplanar_tiles_min ∧ tiles_nonplanar_c ≥ nonplanar_tiles_c_min ∧ 100·n_strong ≥ strong_min_pct·V_all ∧ tiles_strong ≥ strong_tiles_min.
+
+8.3 RGB–LiDAR correspondence. For each of the 64 opened frame-1 blocks, local coordinates (x, y) ∈ [0,4)², interior pixels (x, y) ∈ {1,2}²:
+- disc_h(x,y) = valid(x−1,y) ∧ valid(x+1,y) ∧ 200·|D(x+1,y) − D(x−1,y)| ≥ disc_pct·(D(x+1,y) + D(x−1,y)); disc_v(x,y) symmetric with (x, y±1).
+- gh(x', y') = |Y(x'+1,y') − Y(x'−1,y')| ≥ grad_min_y for x' ∈ {1,2}, y' ∈ 0..3; gv(x', y') = |Y(x',y'+1) − Y(x',y'−1)| ≥ grad_min_y for x' ∈ 0..3, y' ∈ {1,2}.
+- edge_h(x,y) = gh(x,y−1) ∨ gh(x,y) ∨ gh(x,y+1); edge_v(x,y) = gv(x−1,y) ∨ gv(x,y) ∨ gv(x+1,y).
+- N_disc = Σ (disc_h + disc_v); N_match = Σ (disc_h ∧ edge_h) + (disc_v ∧ edge_v) over 64 blocks × 4 interior pixels.
+- rgb_depth_ok = N_disc ≥ disc_min ∧ 100·N_match ≥ edge_match_pct·N_disc.
+
+8.4 Temporal reprojection. Candidates: slots s ∈ 0..15 × quadrants q ∈ {0, 3} (32 candidates), p0 = (u_b + ix_q, v_b + iy_q), d0 = D_1(p0). For j ∈ {0, 2} (64 pairs):
+- R_j1[a][b] = div_floor(Σ_k R_j[k][a]·R_1[k][b], 2^30); T_j1[a] = div_floor(Σ_k R_j[k][a]·(T_1[k] − T_j[k]), 2^30).
+- A0 = u0·2^16 − cx_1; B0 = v0·2^16 − cy_1; F = fx_1·fy_1; P = (A0·d0·fy_1, B0·d0·fx_1, d0·F); Q = 1000·R_j1·P + 2^30·F·T_j1; M = 1000·2^30·F.
+- zpos = Q_z > 0. If zpos: uj = div_floor(fx_j·Q_x + cx_j·Q_z + 2^15·Q_z, 2^16·Q_z); vj = div_floor(fy_j·Q_y + cy_j·Q_z + 2^15·Q_z, 2^16·Q_z). inb = zpos ∧ 0 ≤ uj < 256 ∧ 0 ≤ vj < 192. Equivalent evaluation is allowed: with N_u, N_v the numerators and den = 2^16·Q_z > 0, inb ⇔ zpos ∧ 0 ≤ N_u < 256·den ∧ 0 ≤ N_v < 192·den; uj, vj are only used when inb.
+- usable = inb ∧ valid_1(p0) ∧ valid_j(uj, vj); dj = D_j(uj, vj).
+- occluded = usable ∧ 1000·dj·M < (1000 − occ_pm)·Q_z; depth_ok = usable ∧ ¬occluded ∧ 1000·|dj·M − Q_z| ≤ dcons_pm·dj·M.
+- informative = valid_1(p0) ∧ max_{n ∈ N4(p0)} |Y_1(p0) − Y_1(n)| ≥ g_inf_y (4-neighbours lie inside the opened block).
+- photo_ok = usable ∧ ¬occluded ∧ informative ∧ ∃ q in the 4×4 block of frame j containing (uj, vj): |Y_1(p0) − Y_j(q)| ≤ photo_tol_y.
+- N_usable = Σ usable; N_occ = Σ occluded; N_dok = Σ depth_ok; N_inf = Σ (usable ∧ ¬occluded ∧ informative); N_pok = Σ photo_ok.
+- temporal_ok = N_usable ≥ t_usable_min ∧ 100·N_occ ≤ occ_max_pct·N_usable ∧ 100·N_dok ≥ dok_min_pct·(N_usable − N_occ) ∧ N_inf ≥ inf_min ∧ 100·N_pok ≥ pok_min_pct·N_inf.
+- The circuit opens, for every pair, the frame-j block containing (uj, vj) when inb (position bits derived from the computed uj, vj), otherwise block slot 0; exclusions are only the computed ones above.
+
+8.5 Sensor quality and motion.
+- quality_ok = ∀f: track_f = 2 ∧ fx_min_q16 ≤ fx_f ≤ fx_max_q16 ∧ fx_min_q16 ≤ fy_f ≤ fx_max_q16 (closed intervals; fy uses the fx bounds) ∧ cx_min_q16 ≤ cx_f ≤ cx_max_q16 ∧ cy_min_q16 ≤ cy_f ≤ cy_max_q16 ∧ ∀a ≤ b: |Σ_k R_f[a][k]·R_f[b][k] − δ_ab·2^60| ≤ ortho_tol_q60 ∧ (row0 × row1)·row2 > 0; and dt_min_us ≤ ts_1 − ts_0 ≤ dt_max_us ∧ dt_min_us ≤ ts_2 − ts_1 ≤ dt_max_us.
+- vee(M) = (M[2][1] − M[1][2], M[0][2] − M[2][0], M[1][0] − M[0][1]).
+- IMU per window w ∈ {0,1}: ∀k: dt_k ≤ imu_dt_max_us; ∀k: dt_k = 0 ⇒ ω_k = 0; ∀k < 63: dt_k = 0 ⇒ dt_{k+1} = 0 (padding only at the end); #{k : dt_k > 0} ≥ imu_min_samples; |Σ_k dt_k − (ts_{w+1} − ts_w)| ≤ imu_cover_tol_us. Θ_w = Σ_k ω_k·dt_k (vector); Θc_w = m_cd·Θ_w (m_cd = signed permutation from policy, device→CV camera axes; MUST be validated on device).
+- Gyro: ∀a: |vee(R_01)_a·10^6 − 2^11·Θc_0,a| ≤ 2·gyro_tol_urad·2^30 and |vee(R_21)_a·10^6 + 2^11·Θc_1,a| ≤ 2·gyro_tol_urad·2^30.
+- Gravity: gc = m_cd·g0 (Q20); gp = −row1(R_1) (Q30; ARKit world +y is up). |Σ gc_a² − 2^40| ≤ grav_norm_tol_q40 ∧ 1000·Σ_a gc_a·gp_a ≥ grav_cos_milli·2^50; a_peak_mg ≤ acc_max_mg.
+- motion_ok = ∀j ∈ {0,2}: Σ_a T_j1[a]² ≥ baseline_min_um² ∧ ∀a |vee(R_j1)_a| ≤ rot_max_q30; ∧ IMU, gyro and gravity checks above.
+
+8.6 PASS = commitments_ok ∧ selection_ok ∧ quality_ok ∧ geometry_ok ∧ rgb_depth_ok ∧ temporal_ok ∧ motion_ok, constrained PASS === 1 (commitments/selection are hard constraints). Bluetooth, noise and meta are committed only (bound through evidence_root), never claimed as verified.
+
+8.7 Initial values. lidar: d_min_mm 200, d_max_mm 5000, conf_min 1, area_min 64, eps_log2 26, sep_log2 28, v_all_min 128, v_c_min 64, tile_valid_min 8, tiles_cov_min 12, plane_global_max_pct 85, plane_central_max_pct 80, tile_out_min 4, nonplanar_tiles_min 6, nonplanar_tiles_c_min 3, strong_min_pct 10, strong_tiles_min 3. rgb_depth: disc_pct 4, grad_min_y 2560, disc_min 6, edge_match_pct 50. temporal: occ_pm 50, dcons_pm 30, g_inf_y 2560, photo_tol_y 5120, t_usable_min 24, occ_max_pct 40, dok_min_pct 70, inf_min 8, pok_min_pct 60. quality: dt_min_us 80000, dt_max_us 600000, fx_min_q16 9830400, fx_max_q16 17039360, cx_min_q16 6553600, cx_max_q16 10223616, cy_min_q16 4980736, cy_max_q16 7602176, ortho_tol_q60 1125899906842624. motion: baseline_min_um 3000, rot_max_q30 751619277, imu_min_samples 5, imu_dt_max_us 25000, imu_cover_tol_us 30000, gyro_tol_urad 20000, m_cd [0,1,0,1,0,0,0,0,-1], grav_norm_tol_q40 109951162778, grav_cos_milli 950, acc_max_mg 2000. windows: w_cap 20, w_proof 300, sel_offset 5. Structural constants (not tunable without a new circuit): P = 2^32, coefficient bound 2^36, 16 slots (8 central), 4 blocks/slot, 4 global + 4 central hypotheses, temporal quadrants {0,3}, IMU_MAX 64.
+
+8.8 Named statistics (reference engine and circuit expose identical names for differential tests): V_all, V_c, n_hyp_ok_g, n_hyp_ok_c, max_all, max_c, j_star, tiles_cov, tiles_nonplanar, tiles_nonplanar_c, n_strong, tiles_strong, N_disc, N_match, N_usable, N_occ, N_dok, N_inf, N_pok; booleans quality_ok, geometry_ok, rgb_depth_ok, temporal_ok, motion_ok, pass.
+
+8.9 Profiles. `galaxy-pc-v1m` is the mobile target. The arch.docx full target (48 tiles × 64 blocks × 3 frames = 9,216 samples, 256 correspondences) is estimated from measured per-component constraint counts and documented, not built as the mobile profile. A reduced CI profile is optional and must have its own ids and never be accepted by default configs.
+
+## 9. Circuit interface
+- `GalaxyPhysicalConsistencyProofV1`, Circom 2.x, Groth16 BN254, circomlib Poseidon. Policy constants are generated from `policies/galaxy-pc-v1m.json` into a circom include by a script (no hand-copied numbers).
+- Public inputs (22, this order): rgb_root, evidence_root, capture_id_hi, capture_id_lo, seed_hi, seed_lo, sampled_tiles[0..16]. No public outputs. The circuit constrains tiles < 48, stratum membership per slot, strict ascending order within each stratum, all openings to these roots, ctx from the limbs.
+- Groth16 proof wire (256 B): A.x, A.y, B.x.c0, B.x.c1, B.y.c0, B.y.c1, C.x, C.y, each 32 B BE canonical (< q). Decoding validates on-curve, subgroup (including G2), not infinity. The c0/c1 convention is tested against snarkjs and arkworks.
+- VK bytes: u8 version = 1 ‖ u8 curve = 1 (bn254) ‖ u32be n_public ‖ alpha_g1 (64) ‖ beta_g2 (128) ‖ gamma_g2 (128) ‖ delta_g2 (128) ‖ IC[n_public + 1] (64 each).
+- Circuit descriptor (canonical JSON): {name, profile, version, policy_id, circom_version, source_sha256, r1cs_sha256, wasm_sha256, witness_graph_sha256, zkey_sha256, vk_digest, ptau_name, ptau_sha256, setup_transcript_sha256, n_constraints, n_public, public_layout: "galaxy-pc-v1-public-22", ceremony: "development-single-party" | …}.
+- Witness input JSON schema: owned by Circuit, documented in `circuits/INPUTS.md`, produced by `galaxy-witness`.
+
+## 10. Wire formats (one Memo per tx; MemoType ASCII; MemoFormat "application/octet-stream")
+- CAPTURE `galaxy/v1/capture`: core299 = u8 version = 1 ‖ u32be network ‖ registration_tx[32] ‖ preledger_hash[32] ‖ nonce[32] ‖ u32be preledger_index ‖ u64be claimed_time_ms (Unix ms, declarative) ‖ u16be width ‖ u16be height ‖ u16be flags ‖ photo_id[32] ‖ rgb_root[32] ‖ evidence_root[32] ‖ policy_id[32] ‖ circuit_id[32] ‖ account_id[20]; then u16be assertion_len ‖ assertion (App Attest CBOR, or dev-unattested: 0xF0 ‖ ed25519 signature[64]). assertion_len ≤ 600.
+- PROOF `galaxy/v1/proof` (361 B): u8 version ‖ u32be network ‖ manifest_tx[32] ‖ u32be selection_ledger_index ‖ selection_ledger_hash[32] ‖ circuit_id[32] ‖ proof[256]. Must be sent by the CAPTURE account.
+- CHUNK `galaxy/v1/device-chunk`, `galaxy/v1/circuit-chunk`: u8 version ‖ bundle_id[32] ‖ u16be index ‖ u16be total ‖ u16be payload_len ‖ payload (1..800 B). Bundle cap 1 MiB.
+- DEVICE manifest `galaxy/v1/device`: u8 version ‖ u32be network ‖ bundle_id[32] ‖ u32be bundle_len ‖ u16be chunk_total ‖ u32be first_chunk_ledger ‖ u32be last_chunk_ledger ‖ u8 kind (1 apple-app-attest, 0xF0 dev-unattested-ed25519) ‖ u8 env (1 development, 2 production, 0 n/a) ‖ key_id[32] ‖ account_id[20] ‖ u32be reg_ledger_index ‖ reg_ledger_hash[32].
+- Device bundle: "GXDB" ‖ u8 version ‖ u8 kind ‖ u8 env ‖ u16be app_id_len ‖ app_id ASCII ("TEAMID.bundle.id") ‖ key_id[32] ‖ u32be network ‖ u32be reg_ledger_index ‖ reg_ledger_hash[32] ‖ reg_nonce[32] ‖ account_id[20] ‖ u32be att_len ‖ attestation (App Attest attestation object re-encoded without attStmt.receipt; dev kind: 32-byte ed25519 public key).
+- CIRCUIT manifest `galaxy/v1/circuit`: u8 version ‖ u32be network ‖ bundle_id[32] ‖ u32be bundle_len ‖ u16be chunk_total ‖ u32be first_chunk_ledger ‖ u32be last_chunk_ledger ‖ circuit_id[32] ‖ policy_id[32] ‖ vk_digest[32]. Circuit bundle: "GXCB" ‖ u8 version ‖ (u32be len ‖ descriptor JSON) ‖ (u32be len ‖ vk bytes) ‖ (u32be len ‖ policy JSON).
+- REVOKE `galaxy/v1/revoke`: u8 version ‖ u32be network ‖ registration_tx[32] ‖ u8 reason ‖ u32be effective_ledger (0 = the revoke tx ledger). Valid only from the registration account and only if DEVICE-manifest ledger ≤ effective ledger ≤ revoke tx ledger (backdating allowed, future-dating not; otherwise the REVOKE is ignored and reported). Captures with L0 ≥ effective ledger are rejected (state INVALID, check registration.revocation). Verifiers scan the account history up to the latest validated ledger they consult, so a later revocation can withdraw an earlier certification; reports state "credential state as of ledger N", and nodes re-evaluate cached reports of a registration when a REVOKE for it is indexed.
+- NODE `galaxy/v1/node` (optional announcement): u8 version ‖ u32be network ‖ node_pubkey[32] (ed25519) ‖ u64be expires_at ‖ u16be url_len ‖ url ‖ sig[64] over "GALAXY/NODE/v1\0" ‖ all preceding bytes.
+- Chunk retrieval: account_tx(manifest account, first_chunk_ledger..last_chunk_ledger); collect chunks with matching bundle_id; reject conflicting duplicates, gaps, index ≥ total, wrong account, digest mismatch, oversize, unvalidated or failed txs.
+
+## 11. App Attest (no project server)
+- Registration: generateKey → key_id; the app reads a validated ledger (index, hash), draws reg_nonce (32 random), computes clientDataHash (§3), calls attestKey, publishes the bundle chunks and the DEVICE manifest from the same wallet. Verifier: x5c chain to the pinned Apple App Attestation Root CA (fingerprint pinned in code), validity evaluated at the close time of the DEVICE manifest ledger; nonce extension OID 1.2.840.113635.100.8.2 equals SHA256(authData ‖ clientDataHash); key_id = SHA256(uncompressed credCert public key) = credentialId; rpIdHash = SHA256(app_id) with app_id in the verifier's accepted list; counter 0; aaguid "appattestdevelop" (development) or "appattest" + 7×0x00 (production) consistent with the manifest env; reg ledger hash matches the real ledger and reg_ledger_index ≤ manifest ledger ≤ reg_ledger_index + 100.
+- Capture: generateAssertion(key_id, SHA256(clientData)). Verifier: CBOR {signature, authenticatorData}; rpIdHash check; nonce = SHA256(authenticatorData ‖ clientDataHash); signature verified as ES256 (ECDSA P-256 with SHA-256) over the message `nonce`, i.e. the ECDSA digest is SHA256(nonce) — Apple's documented behaviour, matching independent implementations and real assertions; no prehashed variant, no fallback. authenticatorData/attestation authData are parsed exactly per Apple's App Attest profile, including the extension data Apple documents; any other trailing data is rejected. Counter strictly greater than every earlier CAPTURE counter of the same registration in ledger order (ledger index, TransactionIndex); capture_id never used before.
+- Environment (development/production) is reported and accepted per verifier config. Dev-unattested credentials (kind 0xF0) can never yield VERIFIED (state UNSUPPORTED, labelled "development unattested credential").
+
+## 12. XRPL conventions
+- AccountSet with only common fields + exactly one Memo; no SetFlag/ClearFlag/other AccountSet fields. ed25519 wallets. Autofill Fee (cap max_fee_drops, default 1000), Sequence, LastLedgerSequence = latest validated + 20. No NetworkID field for network ids ≤ 1024. Compute the tx hash before submit (SHA-512Half("TXN\0" ‖ blob)) and persist it with the blob; recovery = query by hash and resubmit the same blob, never re-sign blindly. Success = validated ∧ TransactionResult tesSUCCESS. Memo sizes measured from the serialized blob; codec cross-checked against xrpl.js ripple-binary-codec.
+- Network config `deployments/networks/xrpl-testnet.toml`: network name/id, json_rpc and websocket URLs, optional trusted local rippled, inception_ledger, max_fee_drops, allow_mainnet = false, explorer tx/ledger URL templates, accepted circuits [{circuit_id, vk_digest, policy_id, registration_tx}], accepted app_ids, accepted attestation environments.
+
+## 13. Verification algorithm and states
+LedgerSource (galaxy-xrpl; native via reqwest/tokio-tungstenite, WASM via a JS callback): tx(hash) with blob + meta + ledger_index + TransactionIndex + validated, ledger_header(index) (hash, close_time, validated), account_tx(account, min, max, marker, limit), server_info(). Pipeline (galaxy-verifier): decode image → profile → photo_id → rgb_root → XMP refs (untrusted) → CAPTURE tx (blob hash recomputed and decoded) → validated + tesSUCCESS → parse → photo_id and rgb_root equality → registration (manifest + chunks + attestation) → assertion + counter + capture_id uniqueness + revocation → account/network binding → Lpre hash and window → Lsel = L0 + 5 hash → PROOF candidates (validated, same account, window, first valid wins) → accepted circuit/policy/vk_digest (VK bytes from the XRPL circuit registration, digest-checked; bundled copies allowed offline) → seed, tiles, public inputs → Groth16 verify → report. Proof-only mode (node, no image) skips image steps and says so.
+States: VERIFIED, PENDING, INVALID, INCONCLUSIVE, NOT_FOUND, UNAVAILABLE, UNSUPPORTED (definitions per the user brief). Direct-reference and manual modes report the state of the referenced capture; a reference whose CAPTURE does not bind to the presented image (photo_id / rgb_root mismatch) is INVALID. Lookup mode: node hints whose CAPTURE does not bind to the image are discarded (listed as rejected hints, never INVALID); every binding candidate is evaluated; aggregate VERIFIED > PENDING > UNSUPPORTED > INCONCLUSIVE > INVALID, where INVALID results only when every binding candidate is invalid; incomplete lookups or missing history → UNAVAILABLE unless a higher state is established; a completed lookup with no binding candidate → NOT_FOUND, always with the consulted ledger ranges / nodes. Never "FAKE", never confidence percentages. Success wording: "Physical consistency verified under Galaxy policy <name> (<policy_id>)."
+Report JSON `galaxy-report/v1`: state, summary, network, image{format, profile, photo_id, rgb_root, xmp}, capture{manifest_tx, L0, Lpre, account, registration_tx, claimed_time_ms, ledger_close_time}, proof{proof_tx, Lsel, Lproof, circuit_id, policy_id}, checks[{id, status: pass|fail|unavailable|not_applicable|skipped, proven_by: cryptographic|zk-circuit|committed-only|ledger-rpc|attestation, detail}], candidates[], limitations[], trust{rpc_endpoints, rpc_trust: remote|local}.
+
+## 14. Node (galaxy-node)
+SQLite cache (rusqlite bundled), axum REST `/v1/*` + `/health` + `/.well-known/galaxy-node.json`, OpenAPI at `crates/galaxy-node/openapi.yaml`, backfill via `ledger` (transactions + expand), live `subscribe` (ledger + transactions), checkpoints (index, hash, parent_hash chain), gap detection, dedup by tx hash, only validated tesSUCCESS indexed. Discovery: signed descriptors (ed25519, §3), bootstrap peers, peer exchange (depth ≤ 2, ≤ 64 peers), cache, optional XRPL node announcements, SSRF guard (https only by default; private ranges only with allow_private_peers), no redirects, timeouts, response caps, per-IP rate limits. Nodes never decide validity.
+
+## 15. Language surfaces
+- galaxy-ffi (UniFFI): ingest frames, canonicalize, encode PNG/JPEG + decode-back, commitments, EvidenceBundle save/load, capture core / ids / clientData hashes, device bundle / chunks / memos, wallet / sign / tx hash, seed / tile selection, reference-engine verdict, witness input, prove, local verify, XMP embed. No networking in Rust on iOS (Swift URLSession).
+- galaxy-wasm (wasm-bindgen): image decode / ids / rgb_root, XMP extract, full verify with a JS LedgerSource, report JSON.
+
+## 16. Test vectors (JSON; bytes hex; field elements decimal strings)
+test-vectors/protocol (ProtocolCrypto): ids, field/limbs, poseidon (n = 1..5), tags, frame-tree roots + openings, component/evidence roots, sampling (seed, tiles, ctx, block picks, hypothesis indices), wire formats (encode/decode/reject), groth16 (snarkjs ↔ arkworks). test-vectors/image, test-vectors/evidence (ImageEvidence); test-vectors/xrpl (XRPL, cross-checked with xrpl.js); test-vectors/attestation (Attestation); test-vectors/policy (Geometry: evidence fixtures → named statistics + verdict, consumed by Circuit differential tests).
+
+## 17. Security invariants
+No unconstrained witness values affecting PASS; every division via quotient/remainder with range checks; every boolean constrained; comparisons only on range-checked operands with documented maximum magnitudes (no field wrap); Merkle position bits constrained; G2 subgroup checks; VK trust only from explicit accepted config; node/peer data never affects validity; photo pixels never leave the browser; Bluetooth identifiers never persisted.
+
+## 18. Deviations from arch.docx (each has an ADR)
+1. Mobile profile galaxy-pc-v1m opens 16 stratified tiles × 4 blocks of frame t0 (all four interior pixels), plus 64 data-dependent temporal openings, instead of 48 tiles × 64 blocks × 3 frames; reason: on-device Groth16 constraint budget (~2^20).
+2. Stratified tile selection (8 central + 8 peripheral) to make central-ROI planarity well-defined; 4 global + 4 central plane hypotheses; power-of-two inlier thresholds.
+3. Arity-4 Poseidon trees in Morton order (tile/block labels stay row-major); t± frames commit RGB + depth in one leaf.
+4. JPEG supported as `jpeg-v1` via pinned Rust encoder/decoder; photo_id is container-independent.
+5. Registration challenge ledger window (≤ 100 ledgers); attestation validity evaluated at ledger close time; receipt stripped from the published attestation object.
+6. RGB–LiDAR edge check and temporal photometric check use fixed in-block neighbourhoods (no unbounded search, no uniqueness test).
+
+## 19. Mac build host and device
+- Mac: `ssh -i /home/ivan/.ssh/id_ihx26 unity@10.164.228.154` (use `zsh -lc '…'` for brew/cargo PATH). The user's workspace `/Users/unity/Workspace/IXH26/app/XRPL_Galaxy` has uncommitted user changes: never modify, build in, or run git commands that write there.
+- Build mirror: `/Users/unity/Workspace/IXH26/galaxy-build/` (plain directory, not a git checkout). Sync only your subtrees with `rsync -az --delete <subtree>/ mac:/Users/unity/Workspace/IXH26/galaxy-build/<subtree>/` (exclude target/, node_modules/, build/, DerivedData/).
+- Mac disk is ~8.8 GB free and RAM 8 GB: keep each agent's Mac footprint < 3 GB (DerivedData under galaxy-build/<subtree>/build), prefer cross-compiling Rust on Linux, run `df -h ~` before large builds, delete your own stale outputs.
+- Device: iPhone 13 Pro Max, CoreDevice id E34AE83F-D43C-510A-94EA-8E032BCD853E, iOS 27.2.1, wired. Xcode 26.6 / SDK 26.5: scheme builds fail ("iOS 26.5 is not installed"), `xcodebuild -target … -sdk iphoneos` works; team PPS57BF3X3, bundle id utcq.XRPL-Galaxy (keep it: permissions persist), 7-day profiles expiring 2026-11-27. Serialize device access: take the lock with `mkdir /tmp/galaxy-device.lock` on the Mac (retry while it exists; remove when done; never hold it > 15 min).
+- Device data safety (mandatory; incident of 2026-11-20 20:40 — a benchmark cleanup deleted 163 pre-existing entries of the utcq.XRPL-Galaxy container): (1) agents never delete, overwrite or move device files they did not create in their own run; (2) every agent writes only inside its own namespaced directory (`Documents/<agent-or-tool-name>/…`) and cleanup deletes only that exact directory (allowlist by exact path, never by enumeration of a parent); (3) before any destructive device step, list the exact targets and copy them off the device; (4) apps never contain "delete everything in Documents" code paths; (5) sharing another app's bundle id/container needs explicit orchestrator approval; (6) the capture app's user data (captures, keys, records) is treated as user data: no agent deletes it, ever; uninstalling the app (which deletes its container) requires the user's approval.
+
+## 20. Circuit split and the GeometryView interface
+The circuit is built by two agents with disjoint files: **CircuitCore** (public inputs, ctx, sampling bits and picks, leaf unpacking + entry range checks, Merkle openings incl. data-dependent temporal openings, component commitments, evidence_root, final PASS, policy-independent plumbing, dev setup, artifacts, `galaxy-witness`) and **CircuitGeo** (§8.2–§8.5 policy math). Ownership inside circuits/: `components/core/**`, `physical-consistency/main_v1m.circom`, `tests/core/**`, `artifacts/**`, `INPUTS.md`, `package.json`, `ptau.lock.json`, setup scripts, `scripts/circuit.sh` → CircuitCore; `components/geometry/**`, `physical-consistency/generated/**`, `tests/geometry/**`, `GEOMETRY.md`, `scripts/circuit-gen-policy.mjs` → CircuitGeo. ADR ranges: CircuitCore 0040-0044, CircuitGeo 0045-0049.
+
+Policy constants: `scripts/circuit-gen-policy.mjs` generates `circuits/physical-consistency/generated/policy_v1m.circom` (circom functions returning each §8.7 value) from `policies/galaxy-pc-v1m.json`; nobody hand-copies numbers.
+
+Interface template (CircuitGeo implements, CircuitCore instantiates once in main):
+```
+template GalaxyPolicyV1m() {
+  // frame-1 sampled blocks, b = 4*s + q (slot-major), pixel k = 4*y + x inside the 4x4 block
+  signal input blk_r[64][16]; signal input blk_g[64][16]; signal input blk_b[64][16]; // 0..255, range-checked by caller
+  signal input blk_d[64][16];   // 0..65535, range-checked by caller
+  signal input blk_c[64][16];   // 0..3, range-checked by caller
+  signal input blk_u0[64]; signal input blk_v0[64];  // block origin pixel (u_b, v_b), caller-derived
+  signal input tmp_ix[32]; signal input tmp_iy[32];  // candidate c = 2*s + qi (qi 0 -> q 0, qi 1 -> q 3); values in {1,2}, caller-derived
+  signal input hyp_idx[8][3];   // j<4: 0..255, j>=4: 0..127, caller-derived from g_j bits
+  // temporal pairs p = 2*c + ji (ji 0 -> frame 0, ji 1 -> frame 2); opened frame-j block (0,0) when not inb
+  signal input pr_r[64][16]; signal input pr_g[64][16]; signal input pr_b[64][16]; signal input pr_d[64][16]; signal input pr_c[64][16];
+  signal input pr_bx[64]; signal input pr_by[64];   // opened block coords in the 64x48 block grid; Geo constrains them to the computed (uj>>2, vj>>2) if inb else (0,0)
+  // camera per frame f = 0,1,2 (caller range-checked: fx..cy in [0,2^26), R and T in [-2^31, 2^31-1], ts < 2^48, track < 4)
+  signal input fx[3]; signal input fy[3]; signal input cx[3]; signal input cy[3];
+  signal input R[3][9]; signal input T[3][3]; signal input ts[3]; signal input track[3];
+  // IMU (caller range-checked: dt < 2^32, w and g0 in [-2^31, 2^31-1], a_peak < 2^32)
+  signal input imu_dt[2][64]; signal input imu_w[2][64][3]; signal input g0[3]; signal input a_peak;
+  signal output quality_ok; signal output geometry_ok; signal output rgb_depth_ok; signal output temporal_ok; signal output motion_ok;
+  signal output st_V_all; signal output st_V_c; signal output st_n_hyp_ok_g; signal output st_n_hyp_ok_c; signal output st_max_all; signal output st_max_c;
+  signal output st_j_star; signal output st_tiles_cov; signal output st_tiles_nonplanar; signal output st_tiles_nonplanar_c; signal output st_n_strong; signal output st_tiles_strong;
+  signal output st_N_disc; signal output st_N_match; signal output st_N_usable; signal output st_N_occ; signal output st_N_dok; signal output st_N_inf; signal output st_N_pok;
+}
+```
+Signed values are field elements (x mod r). In circom input JSON every value is a decimal string in [0, r) (negative v encoded as r − |v|).
+
+**GeometryView JSON** (`galaxy-geometry-view/v1`, produced by `galaxy-geometry`, consumed by CircuitGeo tests and by `galaxy-witness`): an object whose keys are exactly the template input names above with native signed JSON integers (arrays nested as in the template; every template input fits in ±2^53), plus `"version": 1`, `"tiles": [16 labels]`, `"blocks": [{"slot", "q", "bx", "by"} x64]`, `"pairs": [{"slot", "q", "frame", "inb", "uj", "vj"} x64]` (uj/vj are metadata only, never circuit inputs: decimal strings of the exact integers, null when not zpos) and `"expected": {<every §8.8 statistic and boolean>}`. The Rust struct may hold `expected` as an Option (build_view leaves it empty; `with_expected(&Policy)` fills it via `evaluate`); fixture files must contain it. The reference engine computes `expected` from the same view; `galaxy-witness` adds Merkle openings and commitment inputs to produce the full circuit input.
+
+**Input ranges (normative for ingest, build_view, galaxy-witness and the circuit entry checks):** RGB [0, 256); depth [0, 2^16); confidence [0, 4) (ingest emits only 0..2); fx, fy, cx, cy [0, 2^26); R, T, ω, g0 in the i32 range [−2^31, 2^31 − 1] (circuit: Num2Bits(32)(x + 2^31)); ts [0, 2^48); track [0, 4); dt [0, 2^32); a_peak [0, 2^32). Builders reject evidence outside these ranges (capture INCONCLUSIVE) instead of clamping.
+
+## 21. Raw capture format GXRW v1 (writer: IOS in Swift; reader + ingest: ImageEvidence in Rust)
+The single hand-off from Swift sensors to the Rust core, used both in production (bytes passed through UniFFI, never leaving the device) and for private fixtures exported to `fixtures/real/` (gitignored). Contains sensitive data: iOS writes it only with `FileProtectionType.complete`, never uploads it, deletes it after certification unless the user keeps it.
+- Layout: `"GXRW"` ‖ u8 version = 1 ‖ u32be header_len ‖ header (UTF-8 JSON, ≤ 1 MiB) ‖ payload. Every payload region is referenced as `{"offset": u64, "len": u64}` relative to the payload start; regions must lie inside the payload, must not overlap, and the payload has no unreferenced bytes.
+- Header fields: `format` = "galaxy-raw-capture/v1"; `device` {model (e.g. "iPhone14,3"), os, app_build}; `image` {width 1920, height 1440, pixel_format "420f", ycbcr_matrix (CVImageBuffer attachment string or "unknown")}; `depth` {width 256, height 192}; `frames`: array of exactly 3 objects in order minus, center, plus: {role, timestamp_s (f64, ARFrame.timestamp), intrinsics [fx, fy, cx, cy] (f64 from ARCamera.intrinsics: m[0][0], m[1][1], m[2][0], m[2][1]), transform (16 f64, ARCamera.transform column-major), tracking (0/1/2), tracking_reason (string), y, cbcr, depth, conf (regions)}; `imu` {samples: array of [t_s, rot_x, rot_y, rot_z, grav_x, grav_y, grav_z, uacc_x, uacc_y, uacc_z] (f64; CMDeviceMotion timestamp, rotationRate rad/s, gravity g, userAcceleration g), covering at least [t_minus − 0.05 s, t_plus + 0.05 s]}; `bluetooth` (aggregate per §5, integers only; absent → all zero with flags); `noise` (aggregate per §5); `claimed_time_ms` (u64 Unix ms); `quality` {flags and reasons strings, informational}.
+- Payload planes: Y = height rows × width bytes (stride removed); CbCr = height/2 rows × width bytes (interleaved Cb, Cr); depth = 256·192 IEEE-754 binary32 little-endian (meters, row-major); conf = 256·192 u8.
+- JSON floats are written with shortest round-trip formatting (Swift JSONEncoder Double); readers parse as f64 exactly. Ingest converts per §5; any missing/extra frame, wrong size or non-finite intrinsics/transform → error (capture INCONCLUSIVE).
+
+## 22. Normative Rust API surface (owners may add items; these names and semantics must exist)
+- galaxy-protocol: `Hash32 = [u8; 32]`, `AccountId = [u8; 20]`; `ids::{photo_id(w, h, &rgb), capture_id(&core_bytes), assertion_client_data(&core_bytes), registration_client_data_hash(..), bundle_id, policy_id, circuit_id, vk_digest}` (§3); `wire::{CaptureCore, CaptureMemo, ProofMemo, ChunkMemo, DeviceManifest, DeviceBundle, CircuitManifest, CircuitBundle, RevokeMemo, NodeAnnouncement}` each with `encode(&self) -> Vec<u8>` and strict `decode(&[u8]) -> Result<Self, WireError>`; `wire::MemoKind` (memo_type strings of §10); `policy::Policy` (serde, every §8.7 key, `canonical_json()`, `id()`, `load(path)`); `canonical_json`; `network::{NetworkId, NetworkConfig::load(path)}`; `xmp::GalaxyXmp {protocol, network, image_profile, photo_id, capture_id, manifest_tx, proof_tx}` with `to_packet()` and `parse_packet()`.
+- galaxy-crypto: `Fr` (ark_bn254::Fr); `field::{fr_from_be_canonical, fr_to_be, hash_limbs, fr_from_i128, fr_to_dec, fr_from_dec}`; `poseidon::hash(&[Fr]) -> Fr` (1..=5 inputs); `tags::tag(code, aux)`; `layout::{morton, tile_label, tile_xy, leaf_slot, CENTRAL_TILES, PERIPHERAL_TILES}`; `tree::{TreeKind, pack_rgb, pack_depth, rgb_leaf, depth_leaf, frame_leaf, FrameTree::build, FrameTree::root, FrameTree::opening(leaf_slot) -> Opening {leaf_slot, siblings: [[Fr; 3]; 6]}, Opening::root_from_leaf}`; `commit::{tree_component, scalar_component, pad_component, evidence_root}`; `sampling::{seed, select_tiles, ctx, slot_picks, hypothesis_indices}` and `Challenge::derive(network_id, &capture_id, lsel, &lsel_hash) -> Challenge {seed, tiles: [u8; 16], ctx, picks: [SlotPicks; 16], hyp: [[u16; 3]; 8]}` with `SlotPicks {blocks: [(u8, u8); 4], temporal: [(u8, u8); 4]}` (per quadrant: block (bx, by) and temporal pick (ix, iy)); `public::public_inputs_v1(rgb_root: &Fr, evidence_root: &Fr, capture_id: &Hash32, seed: &Hash32, tiles: &[u8; 16]) -> [Fr; 22]` (the §9 layout; the single source used by galaxy-witness, galaxy-prover and galaxy-verifier — nobody else re-implements the layout); `groth16::{Proof::from_bytes, Proof::to_bytes, Proof::from_snarkjs_json, VerifyingKey::from_bytes, VerifyingKey::to_bytes, VerifyingKey::from_snarkjs_json, verify(&vk, &[Fr], &proof) -> Result<bool, _>}`.
+- galaxy-evidence (exact data shapes): `FrameData {rgb: Vec<u8> (256·192·3), depth_mm: Vec<u16>, conf: Vec<u8>}`; `CameraFrame {fx: i64, fy: i64, cx: i64, cy: i64, r: [i64; 9], t: [i64; 3], ts_us: u64, track: u8}`; `ImuSample {dt_us: u32, w: [i32; 3]}`; `ImuEvidence {g0: [i32; 3], a_peak_mg: u32, windows: [Vec<ImuSample>; 2]}` (exactly 64 samples per window including padding); `CanonicalImage {profile: ImageProfile, rgb: Vec<u8> (1024·768·3), encoded: Vec<u8> (exported file bytes without XMP)}`; `Evidence {image, frames: [FrameData; 3], camera: [CameraFrame; 3], imu, bluetooth: BluetoothAggregate, noise: NoiseAggregate, meta: Meta}`; `Salts {depth0, frame_minus, frame_plus, camera, imu, bluetooth, noise, meta: Fr}` with `Salts::random()`; `commit(&Evidence, &Salts) -> Commitments {rgb_tree, depth_tree, minus_tree, plus_tree: FrameTree, components: [Fr; 16], rgb_root: Fr, evidence_root: Fr}`; `component_elements(&Evidence)` (per scalar slot `Vec<Fr>`); `ingest::from_gxrw(&[u8], ImageProfile) -> Result<Evidence, IngestError>`; `bundle::{encode, decode}` for the EvidenceBundle (Evidence + Salts + capture state data).
+- galaxy-geometry: `GeometryView` (§20, serde JSON), `build_view(&Evidence, &Challenge) -> Result<GeometryView, ViewError>` (policy-free; validates §20 input ranges; `expected` empty), `GeometryView::with_expected(self, &Policy) -> GeometryView`, `evaluate(&GeometryView, &Policy) -> PolicyReport {stats (§8.8 names), quality_ok, geometry_ok, rgb_depth_ok, temporal_ok, motion_ok, pass}`.
+- Account binding (v1): CAPTURE tx Account = core.account_id = DEVICE manifest account_id; PROOF tx Account = the same account. Replay/counter checks scan account_tx(account, registration ledger .. L0).
+
+## 23. Shared machine resources
+Linux box: 8 CPUs, 13 GiB RAM shared by all agents. Run every cargo build/test through `scripts/with-slot.sh cargo …` (≤ 3 concurrent cargo jobs, CARGO_BUILD_JOBS=2) and every memory-heavy job (circom compile > 100k constraints, snarkjs setup/zkey operations, desktop proving > 100k constraints, large wasm builds) through `scripts/with-slot.sh --heavy …`. Until the script exists, check `free -g` first.

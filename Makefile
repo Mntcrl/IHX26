@@ -1,58 +1,93 @@
+# XRPL Galaxy monorepo entry point.
+# Area targets delegate to owner scripts under scripts/; core-* run cargo directly.
+# Override any variable on the command line, e.g. `make ios-run DEVICE=<CoreDevice id>`.
 
-SCHEME     := XRPL_Galaxy
-CONFIG     := Debug
-SDK        := iphoneos
-BUILD_DIR  := $(CURDIR)/build
-DEVICE     := E34AE83F-D43C-510A-94EA-8E032BCD853E
-APP        := $(BUILD_DIR)/$(CONFIG)-iphoneos/$(SCHEME).app
+DEVICE     ?= E34AE83F-D43C-510A-94EA-8E032BCD853E
+MAC_HOST   ?= unity@10.164.228.154
+MAC_KEY    ?= $(HOME)/.ssh/id_ihx26
+MAC_MIRROR ?= /Users/unity/Workspace/IXH26/galaxy-build
+NETWORK    ?= xrpl-testnet
+CARGO      ?= cargo
 
-AMBIENT_BACKEND_URL ?=
-AMBIENT_HALF_WINDOW_SECONDS ?= 5
-AMBIENT_POST_WINDOW_SECONDS ?= 0.35
-APP_ATTEST_ENVIRONMENT ?= development
-CAPTURE_SWIFT_OPTIMIZATION ?= -O
-POV_COORDINATOR_URL ?= http://10.164.228.104:8088
+export DEVICE MAC_HOST MAC_KEY MAC_MIRROR NETWORK
 
-ifneq ($(strip $(AMBIENT_BACKEND_URL)),)
-ATTEST_SETTINGS := CODE_SIGN_ENTITLEMENTS=AppAttest.entitlements APP_ATTEST_ENVIRONMENT="$(APP_ATTEST_ENVIRONMENT)"
-endif
+SHELL := bash
+.DEFAULT_GOAL := help
 
-.DEFAULT_GOAL := run
+# Run an owner script, or fail with exit 2 if it does not exist yet.
+# $(1) = script path relative to the repo root, $(2) = arguments.
+define owner
+	@if [ -x "$(1)" ]; then \
+		"./$(1)" $(2); \
+	else \
+		echo "owner script $(1) not implemented yet" >&2; \
+		exit 2; \
+	fi
+endef
 
-.PHONY: all build install launch run clean devices
+.PHONY: help build install run \
+	ios-build ios-install ios-run \
+	core-build core-test \
+	circuit-build circuit-test circuit-setup-dev \
+	node-build node-run node-test \
+	verifier-build verifier-run verifier-test \
+	test integration-test doctor
 
-all: run
+help:
+	@echo "Targets:"
+	@echo "  doctor                        environment report (scripts/doctor.sh)"
+	@echo "  core-build core-test          Rust workspace (native; galaxy-wasm checked for wasm32)"
+	@echo "  ios-build ios-install ios-run capture app on the Mac + device (scripts/ios.sh); build/install/run alias these"
+	@echo "  circuit-build circuit-test circuit-setup-dev   circom circuit (scripts/circuit.sh)"
+	@echo "  node-build node-run node-test galaxy-node daemon (scripts/node.sh)"
+	@echo "  verifier-build verifier-run verifier-test   browser verifier (scripts/web.sh)"
+	@echo "  test                          core + circuit + node + verifier tests"
+	@echo "  integration-test              end-to-end Testnet run (scripts/integration-test.sh)"
+	@echo "Variables: DEVICE=$(DEVICE) MAC_HOST=$(MAC_HOST) MAC_MIRROR=$(MAC_MIRROR) NETWORK=$(NETWORK)"
 
-build:
-	xcodebuild \
-		-target $(SCHEME) \
-		-sdk $(SDK) \
-		-configuration $(CONFIG) \
-		-allowProvisioningUpdates \
-		SWIFT_OPTIMIZATION_LEVEL="$(CAPTURE_SWIFT_OPTIMIZATION)" \
-		AMBIENT_BACKEND_URL="$(AMBIENT_BACKEND_URL)" \
-		AMBIENT_HALF_WINDOW_SECONDS="$(AMBIENT_HALF_WINDOW_SECONDS)" \
-		AMBIENT_POST_WINDOW_SECONDS="$(AMBIENT_POST_WINDOW_SECONDS)" \
-		POV_COORDINATOR_URL="$(POV_COORDINATOR_URL)" \
-		$(ATTEST_SETTINGS) \
-		build
+build: ios-build
+install: ios-install
+run: ios-run
 
-install: build
-	xcrun devicectl device install app \
-		--device $(DEVICE) \
-		"$(APP)"
+ios-build:
+	$(call owner,scripts/ios.sh,build)
+ios-install:
+	$(call owner,scripts/ios.sh,install)
+ios-run:
+	$(call owner,scripts/ios.sh,run)
 
-launch: install
-	xcrun devicectl device process launch \
-		--device $(DEVICE) \
-		--terminate-existing \
-		"$$("/usr/libexec/PlistBuddy" -c 'Print CFBundleIdentifier' "$(APP)/Info.plist")"
+core-build:
+	$(CARGO) build --workspace
+	$(CARGO) check -p galaxy-wasm --target wasm32-unknown-unknown
 
-run: launch
+core-test:
+	$(CARGO) test --workspace --exclude galaxy-wasm
 
-clean:
-	rm -rf "$(BUILD_DIR)"
+circuit-build:
+	$(call owner,scripts/circuit.sh,build)
+circuit-test:
+	$(call owner,scripts/circuit.sh,test)
+circuit-setup-dev:
+	$(call owner,scripts/circuit.sh,setup-dev)
 
-devices:
-	xcrun devicectl list devices
+node-build:
+	$(call owner,scripts/node.sh,build)
+node-run:
+	$(call owner,scripts/node.sh,run)
+node-test:
+	$(call owner,scripts/node.sh,test)
 
+verifier-build:
+	$(call owner,scripts/web.sh,build)
+verifier-run:
+	$(call owner,scripts/web.sh,run)
+verifier-test:
+	$(call owner,scripts/web.sh,test)
+
+test: core-test circuit-test node-test verifier-test
+
+integration-test:
+	$(call owner,scripts/integration-test.sh,)
+
+doctor:
+	@./scripts/doctor.sh

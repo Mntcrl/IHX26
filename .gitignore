@@ -1,3 +1,4 @@
+# Imported from both histories (origin + mac/main)
 node_modules/
 .venv/
 .env
@@ -13,3 +14,29 @@ build/
 xcuserdata/
 DerivedData/
 .DS_Store
+
+# Rust
+target/
+
+# Repo-local toolchain (circom, wasm-bindgen, wasm-opt, ptau downloads)
+.tools/
+
+# Private captures and secrets
+fixtures/real/
+.secrets/
+
+# Circuit build outputs and setup material
+*.ptau
+*.zkey
+!test-vectors/prover/fixture.zkey
+*.wtns
+circuits/build/
+circuits/artifacts/**
+!circuits/artifacts/*.json
+!circuits/artifacts/*.md
+
+# Generated bindings and web output
+bindings/swift/**/lib*.a
+bindings/wasm/pkg/
+apps/verifier-web/dist/
+apps/prover-bench-ios/artifacts/
