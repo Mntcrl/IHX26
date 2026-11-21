@@ -9,3 +9,31 @@ rust-version.workspace = true
 
 [lib]
 crate-type = ["staticlib", "lib"]
+
+[features]
+uniffi-cli = ["uniffi/cli"]
+
+[dependencies]
+galaxy-attestation.workspace = true
+galaxy-crypto.workspace = true
+galaxy-evidence.workspace = true
+galaxy-geometry.workspace = true
+galaxy-image.workspace = true
+galaxy-protocol.workspace = true
+galaxy-prover.workspace = true
+galaxy-witness.workspace = true
+galaxy-xrpl.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uniffi.workspace = true
+zeroize = "=1.9.2"
+
+[dev-dependencies]
+sha2.workspace = true
+
+[[bin]]
+name = "galaxy-ffi-bindgen"
+path = "src/bin/bindgen.rs"
+required-features = ["uniffi-cli"]

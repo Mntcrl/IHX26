@@ -98,8 +98,9 @@ galaxy-prover dev-setup --r1cs C.r1cs --ptau P.ptau --ptau-sha256 HEX --out C.zk
 DEVELOPMENT ONLY. Phase 1 = the prepared powers of tau of `P.ptau` (hashed first;
 a digest other than `HEX` fails closed; pass the `sha256` of `circuits/ptau.lock.json`);
 phase 2 = one contribution with δ drawn from the OS RNG inside the process and
-dropped on return. Whoever runs it could forge proofs, so the key must never be an
-accepted circuit key. Output: snarkjs zkey sections 1–9 (no section 10 transcript);
+dropped on return. Whoever runs it could forge proofs, so the key must never be
+accepted outside development networks ([ADR 0043](../adr/0043-groth16-setup-ceremony.md)).
+Output: snarkjs zkey sections 1–9 (no section 10 transcript);
 the δ-independent sections equal `snarkjs zkey new` byte for byte (test
 `tests/dev_setup.rs`), and snarkjs proves/verifies with it. It exists because
 `snarkjs groth16 setup` needs ~10 GB at ~1M constraints. Memory: the r1cs and ptau
