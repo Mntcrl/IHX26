@@ -6,6 +6,7 @@ import simd
 nonisolated enum CaptureIssue: UInt32, CaseIterable, Sendable {
     case missingFrame = 1, tracking = 2, missingDepth = 4, imageFormat = 8
     case noMotion = 16, motionUnavailable = 32, cameraUnavailable = 64
+    case noUsableDepth = 128, excessRotation = 256
 
     var message: String {
         switch self {
@@ -13,9 +14,11 @@ nonisolated enum CaptureIssue: UInt32, CaseIterable, Sendable {
         case .tracking: "ARKit tracking was not normal in all three selected frames."
         case .missingDepth: "A selected frame lacked usable 256×192 LiDAR depth and confidence planes."
         case .imageFormat: "A selected frame did not provide the 1920×1440 full-range 420f format."
-        case .noMotion: "No hand-held camera motion (under 0.5 mm between the center and a neighboring frame)."
+        case .noMotion: "Camera displacement fell below the motion floor between the center and a neighboring frame."
         case .motionUnavailable: "The synchronized 100 Hz CoreMotion window was unavailable or incomplete."
         case .cameraUnavailable: "The camera or unsmoothed LiDAR capture was unavailable."
+        case .noUsableDepth: "The center frame had no confident LiDAR depth samples in the policy range."
+        case .excessRotation: "A neighboring frame exceeded the capture’s relative rotation limit."
         }
     }
 
@@ -29,6 +32,8 @@ nonisolated enum CaptureIssue: UInt32, CaseIterable, Sendable {
         case .noMotion: "no motion"
         case .motionUnavailable: "no IMU"
         case .cameraUnavailable: "camera"
+        case .noUsableDepth: "depth range"
+        case .excessRotation: "rotation"
         }
     }
 
@@ -63,6 +68,20 @@ nonisolated struct FrameSnapshot: Sendable {
     struct Depth: Sendable {
         let meters: Data
         let confidence: Data
+
+        func hasPolicyDepth(_ limits: CapturePolicyLimits) -> Bool {
+            let minMm = Double(limits.depthMinMm)
+            let maxMm = Double(limits.depthMaxMm)
+            return meters.withUnsafeBytes { depth in
+                confidence.withUnsafeBytes { (conf: UnsafeRawBufferPointer) in
+                    for i in conf.indices where Int64(conf[i]) >= limits.depthConfMin && conf[i] <= 2 {
+                        let mm = (Double(depth.loadUnaligned(fromByteOffset: i * 4, as: Float32.self)) * 1_000).rounded()
+                        if mm >= minMm && mm <= maxMm { return true }
+                    }
+                    return false
+                }
+            }
+        }
 
         func coverage() -> Double {
             // HUD estimate on a fixed grid; the Rust policy uses its own challenge-dependent samples.

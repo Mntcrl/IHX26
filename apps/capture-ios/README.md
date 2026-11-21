@@ -1,8 +1,7 @@
 # XRPL Galaxy
 
-SwiftUI capture app for the ARKit sceneDepth, nearby camera frames, CoreMotion and optional Bluetooth aggregate used by XRPL Galaxy.
+SwiftUI camera app that registers with Apple App Attest, submits to XRPL Testnet and generates a Groth16 proof on the iPhone. It exports the original PNG or JPEG with verification references after the PROOF validates.
 
-- `make ios-run` from the repo root builds (in the Mac's Aqua session, see `tools/` and ADR 0071), installs and launches the app on the configured iPhone.
-- See [iOS capture workflow](../../docs/protocol/ios-capture.md) for the private GXRW handoff, recovery, diagnostics and fixture export.
+- Follow the [iOS capture runbook](../../docs/protocol/ios-capture.md) to build GalaxyCore, compile/sign in the Mac’s Aqua session, and install the matching public proving files separately.
+- **Certification & setup** manages the Testnet wallet and device registration and shows capture history. **Developer** enables private raw-only calibration.
 
-This version freezes raw capture evidence only. It does not produce a certificate, XRPL transaction or proof.

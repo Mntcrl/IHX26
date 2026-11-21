@@ -16,6 +16,15 @@ struct DeveloperScreen: View {
                     LabeledContent("Bluetooth", value: capture.bluetoothStatus)
                     if let clock = capture.clockSummary { Text(clock).font(.caption.monospacedDigit()) }
                 }
+                Section("Calibration mode") {
+                    @Bindable var settings = capture
+                    Toggle("Enable private calibration captures and overlays", isOn: $settings.calibrationMode)
+                        .disabled(capture.record?.state == .acquiring || capture.writing)
+                    if capture.isCalibration {
+                        Toggle("Automatically export each fixture and label", isOn: $settings.autoExportFixtures)
+                    }
+                    Text("Calibration captures are not registered or certified.")
+                }
                 Section("Private calibration fixture") {
                     Text("GXRW contains unredacted camera, depth and motion data. Export is local only. Pull it only with the photographer’s consent, and never publish it.")
                     Button("Export last raw capture", action: capture.exportLastRaw)

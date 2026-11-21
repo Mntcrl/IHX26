@@ -4,7 +4,13 @@ import SwiftUI
 struct CaptureScreen: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var capture = Acquisition()
+    let model: CertificationController
     @State private var showDeveloper = false
+    @State private var showCertification = false
+
+    private var canShutter: Bool {
+        capture.canCapture && (capture.isCalibration ? model.idle : model.readyToCapture)
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -12,24 +18,26 @@ struct CaptureScreen: View {
             ZStack {
                 Color.black.ignoresSafeArea()
                 CameraPreview(view: capture.preview).ignoresSafeArea().accessibilityHidden(true)
-                OverlayCanvas(model: capture.overlay).ignoresSafeArea().accessibilityHidden(true)
+                if capture.isCalibration {
+                    OverlayCanvas(model: capture.overlay).ignoresSafeArea().accessibilityHidden(true)
+                }
                 VStack(spacing: 8) {
                     topBar
                     HStack(alignment: .top) {
                         Spacer()
-                        if capture.overlay.showTrail { MotionTrail(model: capture.overlay) }
+                        if capture.isCalibration && capture.overlay.showTrail { MotionTrail(model: capture.overlay) }
                     }
                     Spacer()
                     if portrait {
                         VStack(spacing: 8) {
                             statusChips
-                            toggles
+                            if capture.isCalibration { toggles }
                             shutter
                         }
                     } else {
                         HStack(alignment: .bottom, spacing: 12) {
                             VStack(alignment: .leading, spacing: 8) {
-                                toggles
+                                if capture.isCalibration { toggles }
                                 statusChips
                             }
                             Spacer()
@@ -42,23 +50,35 @@ struct CaptureScreen: View {
         }
         .preferredColorScheme(.dark)
         .onChange(of: scenePhase, initial: true) { _, phase in
+            capture.onFinished = { [weak model] row in model?.cameraFinished(row) }
+            capture.onStorageFailure = { [weak model] row in model?.cameraStorageFailed(row) }
+            if !capture.isStaticDiagnostic { model.setActive(phase == .active) }
             capture.setActive(phase == .active)
         }
         .sheet(isPresented: $showDeveloper) { DeveloperScreen(capture: capture) }
+        .sheet(isPresented: $showCertification) { CertificationScreen(model: model) }
     }
 
     private var topBar: some View {
         HStack(spacing: 8) {
-            Picker("Scene", selection: $capture.sceneLabel) {
-                ForEach(SceneLabel.allCases) { Text($0.title).tag($0) }
+            if capture.isCalibration {
+                Picker("Scene", selection: $capture.sceneLabel) {
+                    ForEach(SceneLabel.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.menu)
+                .tint(capture.sceneLabel == .unlabelled ? .orange : .white)
+                .padding(.horizontal, 4)
+                .background(.black.opacity(0.55), in: Capsule())
+                .accessibilityLabel("Scene class of the next capture")
+            } else {
+                Button { showCertification = true } label: {
+                    Chip(systemImage: "checkmark.shield", text: model.readyToCapture ? "Galaxy · Testnet" : "Certification & setup")
+                }
             }
-            .pickerStyle(.menu)
-            .tint(capture.sceneLabel == .unlabelled ? .orange : .white)
-            .padding(.horizontal, 4)
-            .background(.black.opacity(0.55), in: Capsule())
-            .accessibilityLabel("Scene class of the next capture")
             Spacer()
-            Chip(systemImage: "number", text: "\(capture.attempts) · \(capture.exported) saved")
+            if capture.isCalibration {
+                Chip(systemImage: "number", text: "\(capture.attempts) · \(capture.exported) saved")
+            }
             Button { showDeveloper = true } label: {
                 Image(systemName: "slider.horizontal.3").font(.body.weight(.semibold)).padding(8)
             }
@@ -85,8 +105,12 @@ struct CaptureScreen: View {
             HStack(spacing: 6) {
                 Chip(systemImage: stateSymbol, text: stateText, tint: stateTint)
                 Chip(systemImage: "dot.radiowaves.right", text: depthText)
-                Text(String(format: "%.0f fps", capture.overlay.framesPerSecond))
-                    .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                if capture.isCalibration {
+                    Text(String(format: "%.0f fps", capture.overlay.framesPerSecond))
+                        .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                } else if let label = model.busy {
+                    Chip(systemImage: "hourglass", text: label)
+                }
             }
             HStack(spacing: 6) {
                 Chip(systemImage: "move.3d", text: motionText, tint: motionColor)
@@ -97,23 +121,32 @@ struct CaptureScreen: View {
     }
 
     private var shutter: some View {
-        Button(action: capture.capture) {
+        Button {
+            if capture.isCalibration { capture.capture() }
+            else { model.shutter(capture) }
+        } label: {
             ZStack {
                 Circle().stroke(.white, lineWidth: 4).frame(width: 74, height: 74)
-                Circle().fill(capture.canCapture ? Color.white.opacity(0.92) : .gray.opacity(0.5)).frame(width: 60, height: 60)
+                Circle().fill(canShutter ? Color.white.opacity(0.92) : .gray.opacity(0.5)).frame(width: 60, height: 60)
             }
         }
-        .disabled(!capture.canCapture)
+        .disabled(!canShutter)
         .accessibilityLabel("Capture photo and depth")
+        .accessibilityHint(capture.isCalibration ? "Private calibration only" : "Publishes to XRPL Testnet if the capture is eligible")
     }
 
     // MARK: - Status text
 
+    private var displayedRecord: CaptureRecord? {
+        capture.isCalibration ? capture.record : model.pending ?? model.lastAttempt
+    }
+
     private var stateText: String {
-        guard let record = capture.record else { return "READY" }
+        guard let record = displayedRecord else { return "READY" }
         switch record.state {
-        case .canonicalizing: return "SAVED"
+        case .canonicalizing where capture.isCalibration: return "SAVED · CALIBRATION"
         case .inconclusive, .failed:
+            if !capture.isCalibration { return record.state.rawValue }
             let codes = Array(Set(record.reasons.map(CaptureIssue.short(for:)))).sorted()
             return codes.isEmpty ? record.state.rawValue : "\(record.state.rawValue) · \(codes.joined(separator: ", "))"
         default: return record.state.rawValue
@@ -121,8 +154,9 @@ struct CaptureScreen: View {
     }
 
     private var stateSymbol: String {
-        switch capture.record?.state {
-        case .canonicalizing: "checkmark.circle.fill"
+        switch displayedRecord?.state {
+        case .canonicalizing where capture.isCalibration: "checkmark.circle.fill"
+        case .certified: "checkmark.circle.fill"
         case .inconclusive: "questionmark.circle"
         case .failed: "xmark.circle"
         case .acquiring: "record.circle"
@@ -131,8 +165,9 @@ struct CaptureScreen: View {
     }
 
     private var stateTint: Color {
-        switch capture.record?.state {
-        case .canonicalizing: .green
+        switch displayedRecord?.state {
+        case .canonicalizing where capture.isCalibration: .green
+        case .certified: .green
         case .inconclusive: .yellow
         case .failed: .red
         case .acquiring: .orange

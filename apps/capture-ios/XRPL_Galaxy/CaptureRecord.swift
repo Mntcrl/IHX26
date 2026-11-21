@@ -18,6 +18,8 @@ nonisolated enum CaptureState: String, Codable, Sendable {
     case inconclusive = "INCONCLUSIVE"
     case failed = "FAILED"
 
+    var isTerminal: Bool { self == .certified || self == .inconclusive || self == .failed }
+
     func permits(_ next: Self) -> Bool {
         switch (self, next) {
         case (.certified, _), (.inconclusive, _), (.failed, _): false
@@ -38,6 +40,7 @@ nonisolated struct CaptureRecord: Codable, Identifiable, Sendable {
     let claimedTimeMs: UInt64
     private(set) var state: CaptureState = .ready
     private(set) var reasons: [String] = []
+    var certification: CertificationJournal?
 
     mutating func prepareAcquisition(reasons: [String]) throws {
         guard state == .acquiring else { throw CaptureStore.Failure.invalidTransition }
@@ -103,10 +106,10 @@ nonisolated struct CaptureStore: Sendable {
 
     func recover() throws -> [CaptureRecord] {
         try records().map { record in
-            guard record.state == .acquiring else { return record }
+            guard record.state == .ready || record.state == .acquiring else { return record }
             // The acquisition decision is persisted before the raw file is atomically published.
             var next = record
-            if hasRaw(record) {
+            if record.state == .acquiring, hasRaw(record) {
                 try next.transition(to: record.reasons.isEmpty ? .canonicalizing : .inconclusive, reasons: record.reasons)
             } else {
                 try next.transition(to: .inconclusive, reasons: ["Acquisition was interrupted before the raw capture was frozen."])

@@ -6,6 +6,12 @@ subtree=apps/capture-ios
 appdir="$MAC_MIRROR/$subtree"
 bundle=utcq.XRPL-Galaxy
 device="$(_mac_quote "${DEVICE:-E34AE83F-D43C-510A-94EA-8E032BCD853E}")"
+core=bindings/swift/GalaxyCore
+artifactdir=circuits/artifacts/v1m
+networkdir=deployments/networks
+descriptor="$GALAXY_REPO_ROOT/$artifactdir/descriptor.json"
+network="$GALAXY_REPO_ROOT/$networkdir/xrpl-testnet.toml"
+core_info="$GALAXY_REPO_ROOT/$core/BUILD-INFO.txt"
 attest="${APP_ATTEST:-off}"
 case "$attest" in
     off) ;;
@@ -32,11 +38,77 @@ with_device_lock() {
         $1"
 }
 
+require_build_inputs() {
+    local kind expected actual
+    if [ ! -s "$core_info" ] || [ ! -s "$GALAXY_REPO_ROOT/$core/ios-arm64/libgalaxy_ffi.a" ]; then
+        echo 'Missing GalaxyCore arm64 archive or build info. Run scripts/ios-rust-lib.sh with the approved inputs.' >&2
+        return 2
+    fi
+    for kind in 'descriptor JSON' 'network TOML'; do
+        expected=$(awk -v suffix="  build input ($kind)" 'substr($0, 65) == suffix { print $1 }' "$core_info")
+        case "$kind" in
+            'descriptor JSON') actual=$(sha256sum "$descriptor");;
+            'network TOML') actual=$(sha256sum "$network");;
+        esac
+        if [[ "$expected" != "${actual%% *}" ]]; then
+            echo "GalaxyCore build info does not match the current $kind; rebuild GalaxyCore first." >&2
+            return 2
+        fi
+    done
+    (
+        cd "$GALAXY_REPO_ROOT/$core"
+        awk '$2 ~ /^(ios-arm64|swift|include)\// { print }' BUILD-INFO.txt | sha256sum --check --status -
+    ) || { echo 'GalaxyCore archive, bindings or headers do not match BUILD-INFO.txt.' >&2; return 2; }
+}
+
+sync_build() {
+    require_build_inputs
+    mac_rsync "$subtree"
+    mac_rsync "$core"
+    mac_rsync "$artifactdir" --include='/descriptor.json' --exclude='*'
+    mac_rsync "$networkdir" --include='/xrpl-testnet.toml' --exclude='*'
+}
+
+push_artifacts() (
+    require_build_inputs
+    # Verify the public artifacts before copying anything; openProver verifies them again on the phone.
+    local src id expected stage install_id destination
+    src="$GALAXY_REPO_ROOT/$artifactdir"
+    id=$({ printf 'GALAXY/CIRCUIT/v1\0'; cat "$descriptor"; } | sha256sum)
+    id=${id%% *}
+    [[ "$id" =~ ^[a-f0-9]{64}$ ]]
+    expected=$(jq -er '.witness_graph_sha256, .zkey_sha256 | select(test("^[a-f0-9]{64}$"))' "$descriptor")
+    [[ "$expected" == *$'\n'* ]]
+    (
+        cd "$src"
+        printf '%s  main_v1m.graph.bin\n%s  main_v1m.zkey\n' "${expected%%$'\n'*}" "${expected##*$'\n'}" | sha256sum --check -
+    )
+    # Use a new immutable slot under the circuit ID. A partial copy gets no READY
+    # marker and can never replace a slot mapped by an earlier process.
+    stage=$(mac_ssh "set -e; umask 077
+        free_kb=\$(/bin/df -k ~ | /usr/bin/awk 'END {print \$4}')
+        [ \"\$free_kb\" -ge 3145728 ] || { echo 'less than 3 GiB free on Mac' >&2; exit 4; }
+        mktemp -d $(_mac_quote "$appdir/build").artifacts.XXXXXXXX")
+    trap 'mac_ssh "rm -rf -- $(_mac_quote "$stage")"' EXIT
+    install_id="$(date -u +%Y%m%dT%H%M%SZ)-${stage##*.}"
+    destination="Library/Application Support/galaxy-artifacts/$id/$install_id"
+    mac_ssh "mkdir -m 700 $(_mac_quote "$stage/pair"); printf '%s\n' $id > $(_mac_quote "$stage/READY")"
+    _mac_set_ssh_opts
+    _mac_retry mac_artifacts "10 12 30 35 255" rsync -rt --partial -e "ssh ${_mac_ssh_opts[*]}" \
+        "$src/main_v1m.graph.bin" "$src/main_v1m.zkey" "$MAC_HOST:$stage/pair/"
+    with_device_lock "
+        xcrun devicectl --timeout 300 device copy to --device $device --domain-type appDataContainer \
+            --domain-identifier $bundle --source $(_mac_quote "$stage/pair") --destination $(_mac_quote "$destination")
+        xcrun devicectl --timeout 30 device copy to --device $device --domain-type appDataContainer \
+            --domain-identifier $bundle --source $(_mac_quote "$stage/READY") --destination $(_mac_quote "$destination/READY")"
+    echo "Proving files installed for $id. Relaunch the capture app to verify and open them."
+)
+
 # Signing needs the unlocked login keychain, which only the Mac user's Aqua session has
 # (errSecInternalComponent over SSH): builds are submitted to the Aqua build runner
 # (ADR 0071). IOS_SSH_BUILD=1 builds directly in the SSH session instead.
 build() {
-    mac_rsync "$subtree"
+    sync_build
     local runner="$appdir/tools/mac-build-runner.sh"
     local action=submit
     if [ "${IOS_SSH_BUILD:-0}" = 1 ]; then action=build; fi
@@ -49,6 +121,8 @@ cmd="${1:-}"
 if [ "$#" -gt 0 ]; then shift; fi
 case "$cmd" in
     build) build ;;
+    sync-build) sync_build ;;
+    push-artifacts) push_artifacts ;;
     install) build; with_device_lock "$install" ;;
     run|logs)
         app_args=""
@@ -79,5 +153,5 @@ case "$cmd" in
         rsync -rt --chmod=D700,F600 -e "ssh ${_mac_ssh_opts[*]}" \
             "$MAC_HOST:$stage/files/" "$destination/"
         ;;
-    *) echo 'usage: scripts/ios.sh {build|install|run [app args...]|logs [app args...]|pull-fixtures [raw|appattest]}' >&2; exit 2 ;;
+    *) echo 'usage: scripts/ios.sh {sync-build|build|install|push-artifacts|run [app args...]|logs [app args...]|pull-fixtures [raw|appattest]}' >&2; exit 2 ;;
 esac

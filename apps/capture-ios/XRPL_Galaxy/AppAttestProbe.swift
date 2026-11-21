@@ -1,6 +1,5 @@
 #if DEBUG
 import CryptoKit
-import DeviceCheck
 import SwiftUI
 
 struct AppAttestProbe: View {
@@ -29,15 +28,14 @@ struct AppAttestProbe: View {
 
     private func failure(_ operation: String, _ error: Error) {
         let error = error as NSError
-        note("\(operation) failed: \(error.domain) \(error.code) (\(error.localizedDescription))")
+        note("\(operation) failed: \(error.domain) \(error.code)")
     }
 
     private func run() async {
-        let service = DCAppAttestService.shared
-        note("isSupported=\(service.isSupported)")
+        note("isSupported=\(GalaxyAppAttest.isSupported)")
         let keyID: String
         do {
-            keyID = try await service.generateKey()
+            keyID = try await GalaxyAppAttest.generateKeyForRegistration()
             note("generateKey succeeded")
         } catch {
             failure("generateKey", error)
@@ -47,18 +45,21 @@ struct AppAttestProbe: View {
         do {
             let registration = try GalaxyAppAttest.registrationClientData(
                 network: 1, ledger: 1234, ledgerHash: Data(repeating: 0xA5, count: 32),
-                nonce: GalaxyAppAttest.newNonce(), keyID: keyID, account: Data(repeating: 0xB6, count: 20))
-            // Two dummy capture cores so a verifier can check the counter increases between assertions.
-            let captures = try [Data(count: 299), Data(repeating: 0x01, count: 299)].map(GalaxyAppAttest.assertionClientData)
+                nonce: randomBytes(count: 32), keyID: keyID, account: Data(repeating: 0xB6, count: 20))
+            // Two diagnostic-only capture cores so a verifier can check the assertion counter.
+            let captures = try [Data(count: 299), Data(repeating: 0x01, count: 299)].map {
+                try GalaxyAppAttest.assertionClientData(core: $0)
+            }
             var attestation: Data?
             var assertions: [Data] = []
             do {
-                attestation = try await service.attestKey(keyID, clientDataHash: Data(SHA256.hash(data: registration)))
-                note("attestKey succeeded (\(attestation!.count) bytes)")
+                let response = try await GalaxyAppAttest.attestDigest(keyID, digest: Data(SHA256.hash(data: registration)))
+                attestation = response
+                note("attestKey succeeded (\(response.count) bytes)")
             } catch { failure("attestKey", error) }
             for capture in captures {
                 do {
-                    let assertion = try await service.generateAssertion(keyID, clientDataHash: Data(SHA256.hash(data: capture)))
+                    let assertion = try await GalaxyAppAttest.assertDigest(keyID, digest: Data(SHA256.hash(data: capture)))
                     assertions.append(assertion)
                     note("generateAssertion #\(assertions.count) succeeded (\(assertion.count) bytes)")
                 } catch {

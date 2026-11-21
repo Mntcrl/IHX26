@@ -38,6 +38,13 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
     private(set) var lastRaw: CaptureRecord?
     private(set) var running = false
     private(set) var writing = false
+    var calibrationMode = false
+    var autoExportFixtures = false
+    var policyLimits: CapturePolicyLimits?
+    var isStaticDiagnostic: Bool { staticProbe }
+    var isCalibration: Bool { staticProbe || calibrationMode }
+    @ObservationIgnored var onFinished: ((CaptureRecord) -> Void)?
+    @ObservationIgnored var onStorageFailure: ((CaptureRecord) -> Void)?
 
     @ObservationIgnored private let motion = MotionWindow()
     @ObservationIgnored private let bluetooth = BluetoothWindow()
@@ -68,7 +75,7 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
         preview.automaticallyUpdatesLighting = false
     }
 
-    var canCapture: Bool { running && !writing && record?.state != .acquiring && store != nil }
+    var canCapture: Bool { running && !writing && pending == nil && centerDeadline == nil && store != nil }
 
     func setActive(_ value: Bool) {
         active = value
@@ -182,8 +189,8 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
         imuStatus = motion.status
         bluetoothStatus = bluetooth.status
         let orientation = preview.window?.windowScene?.effectiveGeometry.interfaceOrientation ?? .landscapeRight
-        overlay.update(frame: frame, snapshot: snapshot, viewport: preview.bounds.size, orientation: orientation)
-        let wanted: SCNDebugOptions = overlay.showFeatures ? [ARSCNDebugOptions.showFeaturePoints] : []
+        if isCalibration { overlay.update(frame: frame, snapshot: snapshot, viewport: preview.bounds.size, orientation: orientation) }
+        let wanted: SCNDebugOptions = isCalibration && overlay.showFeatures ? [ARSCNDebugOptions.showFeaturePoints] : []
         if preview.debugOptions != wanted { preview.debugOptions = wanted }
         if wantsCenter {
             centerDeadline = nil
@@ -198,9 +205,7 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
             }
         } else if var window = pending {
             let delta = timestamp - window.center.timestamp
-            // Within the allowed 100–500 ms window keep the most useful successor (normal tracking,
-            // depth, then the largest displacement from t0), so slow hand motion still reaches the
-            // policy's 3 mm baseline.
+            // Within the allowed 100–500 ms window favor usable frames and larger displacement.
             if (0.1...0.5).contains(delta),
                window.plus.map({ Self.score($0, center: window.center) < Self.score(snapshot, center: window.center) }) ?? true {
                 window.plus = snapshot
@@ -233,12 +238,12 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
         if active && !running { setActive(true) }
     }
 
-    func capture() {
-        guard canCapture, let store else { return }
+    func capture(certification: CertificationJournal? = nil) {
+        guard canCapture, let store, certification != nil ? policyLimits != nil : isCalibration else { return }
         var row = CaptureRecord(id: UUID(), claimedTimeMs: UInt64((Date().timeIntervalSince1970 * 1000).rounded()))
+        row.certification = certification
         notice = nil
         do {
-            try store.save(row)
             try row.transition(to: .acquiring)
             try store.save(row)
             record = row
@@ -279,8 +284,21 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
         (Double(simd_length(a.position - b.position)) * 1_000_000).rounded() / 1_000_000
     }
 
-    /// Mirrors `motion.baseline_min_um` of policies/galaxy-pc-v1m.json (spec §8.7).
-    static let baselineMinMeters = 0.0005
+    /// Standalone calibration may run without a configured circuit; never used for certification.
+    private static let diagnosticBaselineMinMeters = 0.0005
+
+    private static func rotationSkew(_ first: FrameSnapshot, _ center: FrameSnapshot) -> Double {
+        func rotation(_ frame: FrameSnapshot) -> simd_float3x3 {
+            let m = frame.transform
+            return .init(SIMD3(m.columns.0.x, m.columns.0.y, m.columns.0.z),
+                         SIMD3(m.columns.1.x, m.columns.1.y, m.columns.1.z),
+                         SIMD3(m.columns.2.x, m.columns.2.y, m.columns.2.z))
+        }
+        let r = rotation(first).transpose * rotation(center)
+        let skew = [r.columns.1.z - r.columns.2.y, r.columns.2.x - r.columns.0.z, r.columns.0.y - r.columns.1.x]
+        guard skew.allSatisfy(\.isFinite) else { return .infinity }
+        return Double(skew.map(abs).max() ?? 0)
+    }
 
     private func freeze() async {
         guard let window = pending, let store, var row = record, row.state == .acquiring else { return }
@@ -299,10 +317,19 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
         if frames.contains(where: { $0.tracking != 2 }) { issues.append(.tracking) }
         if frames.contains(where: { $0.pixels == nil }) { issues.append(.imageFormat) }
         if frames.contains(where: { $0.depth == nil }) { issues.append(.missingDepth) }
-        // Policy motion floor (spec §8.5, baseline_min_um = 500): normal hand wobble reaches it;
-        // a phone resting on a support does not.
+        let limits = row.certification == nil ? nil : policyLimits
+        let baselineFloor = limits.map { Double($0.baselineMinUm) / 1_000_000 } ?? Self.diagnosticBaselineMinMeters
         let minBaseline = min(Self.baseline(minus, window.center), Self.baseline(plus, window.center))
-        if !minBaseline.isFinite || minBaseline < Self.baselineMinMeters { issues.append(.noMotion) }
+        if !minBaseline.isFinite || minBaseline < baselineFloor { issues.append(.noMotion) }
+        if let limits {
+            // A conservative sensor preflight, not a policy verdict: no challenge tiles or
+            // provisional witness. Check the full center depth plane and the two relative poses.
+            if let depth = window.center.depth, !depth.hasPolicyDepth(limits) { issues.append(.noUsableDepth) }
+            let skewMax = Double(limits.rotationMaxQ30) / 1_073_741_824 + 0.000_01
+            if [minus, plus].contains(where: { Self.rotationSkew($0, window.center) > skewMax }) {
+                issues.append(.excessRotation)
+            }
+        }
         let samples = motion.snapshot(start: minus.timestamp, end: plus.timestamp)
         if samples == nil { issues.append(.motionUnavailable) }
         guard !issues.contains(.imageFormat), !issues.contains(.missingDepth), let samples else {
@@ -338,10 +365,12 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
             record = row
             lastRaw = row
         } catch {
-            notice = "The capture was frozen. Reopen the app to recover its record."
+            notice = "The capture was frozen. Reload setup to recover its protected record."
+            if let record { onStorageFailure?(record) }
             return
         }
         publishAttempt(row, rawAvailable: true)
+        onFinished?(row)
         if staticProbe {
             print("GXCAPTURE \(row.state.rawValue): \(row.reasons.joined(separator: "; ")); \(notice ?? "no export result")")
             exitDiagnostic()
@@ -365,8 +394,9 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
     /// Exports the frozen raw capture (if any) and writes the label sidecar of the attempt to
     /// Documents/galaxy-fixtures, for every attempt, so experiment statistics include failures.
     private func publishAttempt(_ row: CaptureRecord, rawAvailable: Bool) {
-        guard let store, let current = attempt else { return }
+        guard let current = attempt else { return }
         attempt = nil
+        guard let store, staticProbe || isCalibration && autoExportFixtures else { return }
         var rawExported = false
         if rawAvailable {
             do {
@@ -408,8 +438,14 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
             try row.transition(to: state, reasons: reasons)
             try store.save(row)
             record = row
-        } catch { notice = "Storage error" }
-        if let row = record, row.state == state { publishAttempt(row, rawAvailable: false) }
+        } catch {
+            notice = "Storage error. Reload setup to recover the protected record."
+            if let record { onStorageFailure?(record) }
+        }
+        if let row = record, row.state == state {
+            publishAttempt(row, rawAvailable: false)
+            onFinished?(row)
+        }
         if staticProbe {
             print("GXCAPTURE \(state.rawValue): \(reasons.joined(separator: "; ")); no raw capture")
             exitDiagnostic()

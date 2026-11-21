@@ -1,30 +1,42 @@
-import CryptoKit
 import DeviceCheck
 import Foundation
-import Security
 
-@MainActor
 enum GalaxyAppAttest {
-    enum Failure: LocalizedError {
-        case unsupported, invalidRegistration, invalidCaptureCore, random(OSStatus)
-
-        var errorDescription: String? {
-            switch self {
-            case .unsupported: "App Attest is not supported by this installation."
-            case .invalidRegistration: "Invalid App Attest registration input."
-            case .invalidCaptureCore: "Invalid App Attest capture core length."
-            case .random(let status): "Could not generate registration nonce (OSStatus \(status))."
-            }
-        }
-    }
-
     static var isSupported: Bool { DCAppAttestService.shared.isSupported }
 
-    static func generateKey() async throws -> String {
-        guard isSupported else { throw Failure.unsupported }
-        return try await DCAppAttestService.shared.generateKey()
+    static func generateKeyForRegistration() async throws -> String {
+        guard isSupported else { throw FlowError.paused("App Attest is not supported by this iPhone installation.") }
+        do { return try await DCAppAttestService.shared.generateKey() }
+        catch is CancellationError { throw CancellationError() }
+        catch { throw FlowError.paused("Apple could not generate an App Attest key. Check connectivity and resume.") }
     }
 
+    /// The Rust core already hashed the protocol preimage. Never hash the digest again.
+    static func attestDigest(_ keyID: String, digest: Data) async throws -> Data {
+        guard isSupported, digest.count == 32 else { throw GalaxyError.Attestation }
+        do { return try await DCAppAttestService.shared.attestKey(keyID, clientDataHash: digest) }
+        catch is CancellationError { throw CancellationError() }
+        catch let error as DCError where error.code == .invalidKey || error.code == .invalidInput {
+            throw FlowError.failed("Apple rejected this registration key or challenge. Start a new registration attempt.")
+        }
+        catch { throw FlowError.paused("Apple did not complete App Attest. Check connectivity and resume this registration.") }
+    }
+
+    static func assertDigest(_ keyID: String, digest: Data) async throws -> Data {
+        guard isSupported, digest.count == 32 else { throw GalaxyError.Attestation }
+        do { return try await DCAppAttestService.shared.generateAssertion(keyID, clientDataHash: digest) }
+        catch is CancellationError { throw CancellationError() }
+        catch let error as DCError where error.code == .invalidKey || error.code == .invalidInput {
+            throw FlowError.failed("Apple rejected the registered App Attest key or the capture digest.")
+        }
+        catch { throw FlowError.paused("Apple did not complete the assertion. Check connectivity and resume the same capture.") }
+    }
+
+    #if DEBUG
+    enum Failure: Error { case invalidRegistration, invalidCaptureCore }
+
+    // The diagnostic writes the preimage bytes for independent fixture verification.
+    // Production certification uses only the prehashed digests above.
     static func registrationClientData(network: UInt32, ledger: UInt32, ledgerHash: Data,
                                        nonce: Data, keyID: String, account: Data) throws -> Data {
         guard ledgerHash.count == 32, nonce.count == 32, account.count == 20,
@@ -42,29 +54,10 @@ enum GalaxyAppAttest {
         return data
     }
 
-    static func newNonce() throws -> Data {
-        var nonce = Data(count: 32)
-        let status = nonce.withUnsafeMutableBytes { (bytes: UnsafeMutableRawBufferPointer) in
-            SecRandomCopyBytes(kSecRandomDefault, bytes.count, bytes.baseAddress!)
-        }
-        guard status == errSecSuccess else { throw Failure.random(status) }
-        return nonce
-    }
-
-    static func attest(_ keyID: String, clientData: Data) async throws -> Data {
-        guard isSupported else { throw Failure.unsupported }
-        return try await DCAppAttestService.shared.attestKey(keyID, clientDataHash: digest(clientData))
-    }
-
     static func assertionClientData(core: Data) throws -> Data {
         guard core.count == 299 else { throw Failure.invalidCaptureCore }
         return Data("GALAXY/ASSERT/v1\0".utf8) + core
     }
 
-    static func assert(_ keyID: String, clientData: Data) async throws -> Data {
-        guard isSupported else { throw Failure.unsupported }
-        return try await DCAppAttestService.shared.generateAssertion(keyID, clientDataHash: digest(clientData))
-    }
-
-    private static func digest(_ data: Data) -> Data { Data(SHA256.hash(data: data)) }
+    #endif
 }
