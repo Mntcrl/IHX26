@@ -39,6 +39,23 @@ the laptop; an internet connection is needed to read XRPL Testnet.
 If the package includes `galaxy`, run `./galaxy verify "/path/to/photo.jpg"
 --no-discovery` on an Apple Silicon Mac to verify the same file from Terminal.
 
+## GitHub Pages
+
+Run `scripts/web.sh pages` to build `apps/verifier-web/dist/` for
+[mntcrl.github.io/IHX26/](https://mntcrl.github.io/IHX26/). This sets the Vite
+base to `/IHX26/` via `PHOTON_WEB_BASE`; the normal build uses relative asset
+paths. Run `make verifier-build` again before serving at `/` with `make verifier-run`.
+
+At the root of the `gh-pages` branch, copy the contents of `dist/`, add an empty
+`.nojekyll`, and record the source `main` commit in a `README.md`. Never copy
+photo fixtures, reports or screenshots. Commit the generated site and push it
+with `git push origin gh-pages`. In the [repository settings](https://github.com/Mntcrl/IHX26/settings/pages),
+go to **Pages → Deploy from a branch**, then choose **gh-pages** and **/ (root)**.
+
+Certified photos with embedded references use live XRPL Testnet directly. The
+optional photo-ID lookup uses the build's configured demo node; if its tunnel
+URL changes, set `PHOTON_WEB_LOOKUP_NODE` to the new HTTPS origin and rebuild.
+
 ## Use and interpret the result
 
 1. Choose or drop one JPG or PNG (maximum 16 MiB). Local inspection shows the copyable photo ID and whether Galaxy XMP references are present and consistent, absent, or unreadable. The badge is not a verification result. Only the versioned Galaxy PNG/JPEG profiles have a protocol photo ID; an image that a browser can preview may still be unsupported.

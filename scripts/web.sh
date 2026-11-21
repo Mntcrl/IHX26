@@ -43,6 +43,7 @@ build() {
 
 case ${1:-} in
     build) build ;;
+    pages) PHOTON_WEB_BASE=/IHX26/ build ;;
     run)
         [[ -s $app/dist/index.html ]] || build
         port=${WEB_PORT:-4173}
@@ -63,5 +64,5 @@ case ${1:-} in
         "$slot" cargo build --locked -p galaxy-cli --bin galaxy
         "$slot" node "$app/tests/consistency.mjs" "$CARGO_TARGET_DIR/debug/galaxy" "$tmp/photo.png"
         ;;
-    *) echo "usage: $0 {build|run|test}" >&2; exit 2 ;;
+    *) echo "usage: $0 {build|pages|run|test}" >&2; exit 2 ;;
 esac

@@ -22,7 +22,7 @@ export default defineConfig(({ mode }) => {
     explorerLedger: config.explorer_ledger,
   };
   return {
-    base: './',
+    base: process.env.PHOTON_WEB_BASE ?? './',
     build: { assetsInlineLimit: 0 }, // The CSP does not allow data: URLs for assets.
     // The inline Blob worker inherits the app document's exact connect-src CSP.
     worker: { format: 'es' },

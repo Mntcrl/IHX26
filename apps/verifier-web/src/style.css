@@ -309,8 +309,16 @@ pre { white-space: pre-wrap; max-height: 30rem; overflow: auto; background: var(
 .sample-figure figcaption { color: var(--sc-ink-soft); font-size: .8rem; }
 .limits { display: flex; align-items: end; justify-content: space-between; gap: var(--sc-5); padding-block: clamp(2.75rem, 5.5vw, 5.5rem); }
 .limits p strong { color: var(--sc-ink); font-family: var(--mono); }
-.site-footer { border-top: 1px solid var(--line); border-bottom: 0; color: var(--sc-ink-soft); font-size: .78rem; }
+.site-footer {
+  flex-wrap: wrap;
+  padding-block: var(--sc-4);
+  border-top: 1px solid var(--line);
+  border-bottom: 0;
+  color: var(--sc-ink-soft);
+  font-size: .78rem;
+}
 .site-footer small { font-size: .72rem; }
+.project-links { display: flex; flex: 0 0 100%; flex-wrap: wrap; gap: var(--sc-2) var(--sc-4); }
 
 @keyframes settle { from { opacity: 0; transform: translateY(.22rem); } to { opacity: 1; transform: none; } }
 @media (max-width: 47.99rem) {
