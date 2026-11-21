@@ -53,7 +53,7 @@ The certification shutter remains disabled until ARKit tracking has been normal 
 | 128 | no confident LiDAR samples in the pinned depth envelope in the center frame | INCONCLUSIVE |
 | 256 | relative rotation outside the preflight envelope | INCONCLUSIVE |
 
-The depth and rotation checks are challenge-independent sensor preflight, not a verdict. The exact policy evaluation runs in GalaxyCore only once Lsel is fixed. **Developer → Enable private calibration captures and overlays** uses the separate raw-only flow, with the scene class picker and optional auto-export of GXRW and labels. Neither this mode nor the App Attest and static capture diagnostics can publish a capture.
+The depth and rotation checks are sensor preflight, not a verdict. Only the policy result for the actual Lsel can authorize proving. **Developer → Enable private calibration captures and overlays** uses the separate raw-only flow, with the scene class picker and optional auto-export of GXRW and labels. Neither this mode nor the App Attest and static capture diagnostics can publish a capture.
 
 ## GXRW writer
 
@@ -61,11 +61,13 @@ The depth and rotation checks are challenge-independent sensor preflight, not a 
 
 ## Capture state machine and storage
 
-States: READY, ACQUIRING, CANONICALIZING, COMMITTING, ATTESTING, SUBMITTING_MANIFEST, WAITING_MANIFEST_VALIDATION, WAITING_SELECTION_LEDGER, GENERATING_WITNESS, GENERATING_PROOF, LOCAL_PROOF_VERIFICATION, SUBMITTING_PROOF, WAITING_PROOF_VALIDATION, CERTIFIED, INCONCLUSIVE, FAILED.
+States: READY, ACQUIRING, CANONICALIZING, COMMITTING, CHECKING_SCENE, ATTESTING, SUBMITTING_MANIFEST, WAITING_MANIFEST_VALIDATION, WAITING_SELECTION_LEDGER, GENERATING_WITNESS, GENERATING_PROOF, LOCAL_PROOF_VERIFICATION, SUBMITTING_PROOF, WAITING_PROOF_VALIDATION, CERTIFIED, INCONCLUSIVE, FAILED.
 
 Before the shutter, read Testnet's latest validated index and its exact header; persist the header, nonce, wallet/DEVICE/circuit and selected image profile in the ACQUIRING record. Persist the acquisition outcome before publishing the raw file. On recovery, an attempt interrupted at the shutter with no complete raw becomes INCONCLUSIVE; one with complete raw and successful preflight resumes.
 
 The proving actor ingests the frozen GXRW and publishes one protected atomic checkpoint containing the immutable GXEV, core, capture ID, assertion digest and deadline. No App Attest call or transaction uses a core until the checkpoint is written. Recovery reuses this checkpoint; if killed before that write, there is no published core or signed transaction. Only an ingested handle builds a statement; decoded GXEV handles are used to evaluate and export.
+
+Before App Attest or CAPTURE signing, the phone estimates scene suitability using 48 independently randomized local selection-ledger hashes and the committed evidence. At least 36 draws must pass. A lower score stops the attempt without a fee or transaction and shows a hint for the most frequently failing predicate. The journal keeps the counts and elapsed time, not the sampled hashes. A passing scene check is not certification and does not affect how the real Testnet challenge is selected.
 
 The app persists the assertion, the signed CAPTURE before first submission, validated CAPTURE inclusion L0, then the exact Lsel = L0 + 5 header. The selection header and CAPTURE are immutable inputs on recovery. Run reference policy evaluation, witness generation, proving and verification locally. A failed verdict ends the attempt with predicate names and no PROOF. For an eligible attempt, journal the proof/memo, sign one PROOF, and require its validated `tesSUCCESS` in the allowed window. Rust writes the corresponding XMP into the committed image format. Only after packaging and saving that file does the app record CERTIFIED.
 

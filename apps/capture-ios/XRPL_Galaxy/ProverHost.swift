@@ -129,6 +129,37 @@ actor ProverHost {
         return statement
     }
 
+    func checkScene(pin: PinnedCircuit, statement: CaptureStatementRecord,
+                    preledgerIndex: UInt32, checkpoint: URL) throws -> SceneCheckResult {
+        let start = ContinuousClock.now
+        let evidence = try loadEvidence(checkpoint)
+        // A local index in the accepted window; these headers are not real ledgers and
+        // never become part of the certification journal or the published challenge.
+        let (inclusion, overflow) = preledgerIndex.addingReportingOverflow(1)
+        guard !overflow else { throw GalaxyError.LedgerWindow }
+        let selection = try pin.circuit.selectionLedgerIndex(core: statement.core, captureLedger: inclusion)
+        let noTransaction = String(repeating: "0", count: 64)
+        var passes = 0
+        var failures: [ScenePredicate: Int] = [:]
+        for _ in 0..<SceneCheckResult.sampleCount {
+            try Task.checkCancellation()
+            let simulated = ValidatedLedger(index: selection, hash: try randomBytes(count: 32), closeTime: 0)
+            let challenge = try pin.circuit.deriveChallenge(core: statement.core, captureTx: noTransaction,
+                                                            captureLedger: inclusion, selectionLedger: simulated)
+            let verdict = try challenge.evaluate(evidence: evidence).verdict()
+            if verdict.pass { passes += 1 }
+            if !verdict.geometryOk { failures[.geometry, default: 0] += 1 }
+            if !verdict.rgbDepthOk { failures[.rgbDepth, default: 0] += 1 }
+            if !verdict.temporalOk { failures[.temporal, default: 0] += 1 }
+            if !verdict.motionOk { failures[.motion, default: 0] += 1 }
+            if !verdict.qualityOk { failures[.quality, default: 0] += 1 }
+        }
+        let result = SceneCheckResult(samples: SceneCheckResult.sampleCount, passes: passes, failures: failures,
+                                      seconds: Self.elapsed(since: start))
+        proofTrace("scene check: \(result.passes)/\(result.samples), elapsed \(result.seconds)s")
+        return result
+    }
+
     func evaluate(challenge: CaptureChallenge, checkpoint: URL) throws -> CaptureEvaluation {
         proofTrace("prover actor: evaluate entered")
         defer { proofTrace("prover actor: evaluate exited") }
@@ -256,12 +287,12 @@ actor ProverHost {
         if log.writeFailed { throw FlowError.failed("The proof verified, but its private diagnostics journal could not be written.") }
         return proof
     }
+    #endif
 
     private static func elapsed(since start: ContinuousClock.Instant) -> Double {
         let duration = start.duration(to: .now).components
         return Double(duration.seconds) + Double(duration.attoseconds) / 1e18
     }
-    #endif
 
     func proofMemo(challenge: CaptureChallenge, proof: Data) throws -> Memo {
         try Task.checkCancellation()

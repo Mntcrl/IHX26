@@ -5,6 +5,7 @@ nonisolated enum CaptureState: String, Codable, Sendable {
     case acquiring = "ACQUIRING"
     case canonicalizing = "CANONICALIZING"
     case committing = "COMMITTING"
+    case checkingScene = "CHECKING_SCENE"
     case attesting = "ATTESTING"
     case submittingManifest = "SUBMITTING_MANIFEST"
     case waitingManifestValidation = "WAITING_MANIFEST_VALIDATION"
@@ -25,7 +26,7 @@ nonisolated enum CaptureState: String, Codable, Sendable {
         case (.certified, _), (.inconclusive, _), (.failed, _): false
         case (_, .inconclusive), (_, .failed): true
         case (.ready, .acquiring), (.acquiring, .canonicalizing), (.canonicalizing, .committing),
-             (.committing, .attesting), (.attesting, .submittingManifest),
+             (.committing, .checkingScene), (.checkingScene, .attesting), (.attesting, .submittingManifest),
              (.submittingManifest, .waitingManifestValidation), (.waitingManifestValidation, .waitingSelectionLedger),
              (.waitingSelectionLedger, .generatingWitness), (.generatingWitness, .generatingProof),
              (.generatingProof, .localProofVerification), (.localProofVerification, .submittingProof),

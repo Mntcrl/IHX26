@@ -31,9 +31,20 @@ struct CaptureProgressScreen: View {
         func at(_ state: CaptureState) -> Date? { journal?.enteredAt[state.rawValue] }
         let witnessStart = at(.generatingWitness)
         let proofValidated = journal?.proofValidatedAt ?? at(.certified)
-        return [
+        let check = journal?.sceneCheck
+        let checkStart = at(.checkingScene)
+        var steps = [
             Step("Sensors frozen", "The phone saves camera, LiDAR and motion readings from around the shutter.", at(.acquiring), at(.canonicalizing)),
-            Step("Evidence committed (Poseidon)", "Poseidon fingerprints bind the evidence without publishing the sensor readings.", at(.canonicalizing) ?? at(.committing), at(.attesting)),
+            Step("Evidence committed (Poseidon)", "Poseidon fingerprints bind the evidence without publishing the sensor readings.", at(.canonicalizing) ?? at(.committing), checkStart ?? at(.attesting)),
+        ]
+        if checkStart != nil || at(.attesting) == nil || check != nil {
+            let rejected = check?.passed == false
+            let title = check.map { "Scene check \($0.passes)/\($0.samples)" } ?? "Scene check"
+            steps.append(Step(title, "The phone samples local challenges before signing anything. Testnet chooses a different challenge later.",
+                              checkStart, check == nil ? nil : (rejected ? at(.inconclusive) : at(.attesting)),
+                              rejected: rejected))
+        }
+        steps += [
             Step("Apple App Attest", "The registered app key signs a statement tied to this capture.", at(.attesting), at(.submittingManifest)),
             Step("CAPTURE on XRPL", "Testnet validates a transaction that locks in the photo and its evidence commitments.", at(.submittingManifest), at(.waitingSelectionLedger), transaction: journal?.capture, ledger: journal?.captureLedger),
             Step("Waiting for the challenge ledger", "The challenge can’t be known until five more ledgers have validated.", at(.waitingSelectionLedger), witnessStart),
@@ -44,6 +55,7 @@ struct CaptureProgressScreen: View {
             Step("PROOF on XRPL", "Testnet validates the transaction carrying the proof.", at(.submittingProof), proofValidated, transaction: journal?.proof, ledger: journal?.proofLedger),
             Step("Certified", "The phone saves a photo with verification references embedded in the file.", journal?.proofValidatedAt, at(.certified)),
         ]
+        return steps
     }
 
     var body: some View {
@@ -234,6 +246,11 @@ struct CaptureProgressScreen: View {
             }.buttonStyle(.borderedProminent)
             Text("Open this photo’s verification references and export the original for independent verification.")
                 .font(.footnote).foregroundStyle(.secondary)
+        } else if row.state == .inconclusive, let check = journal?.sceneCheck, !check.passed {
+            Label("Scene check failed", systemImage: "exclamationmark.triangle.fill")
+                .font(.title2.bold()).foregroundStyle(.yellow)
+            Text("No CAPTURE transaction was signed or sent.")
+            Text(check.hint).font(.subheadline.weight(.semibold))
         } else {
             let inconclusive = row.state == .inconclusive
             Label(inconclusive ? "INCONCLUSIVE" : "CERTIFICATION FAILED", systemImage: "exclamationmark.triangle.fill")
@@ -258,9 +275,11 @@ struct CaptureProgressScreen: View {
         let transaction: JournalTransaction?
         let ledger: UInt32?
         let showsProofPhases: Bool
+        let rejected: Bool
 
         init(_ title: String, _ caption: String, _ start: Date?, _ end: Date?,
-             transaction: JournalTransaction? = nil, ledger: UInt32? = nil, showsProofPhases: Bool = false) {
+             transaction: JournalTransaction? = nil, ledger: UInt32? = nil, showsProofPhases: Bool = false,
+             rejected: Bool = false) {
             self.title = title
             self.caption = caption
             self.start = start
@@ -268,6 +287,7 @@ struct CaptureProgressScreen: View {
             self.transaction = transaction
             self.ledger = ledger
             self.showsProofPhases = showsProofPhases
+            self.rejected = rejected
         }
     }
 
@@ -279,13 +299,14 @@ struct CaptureProgressScreen: View {
             VStack(spacing: 4) {
                 Group {
                     if running { ProgressView().controlSize(.small).tint(.cyan) }
+                    else if step.rejected { Image(systemName: "xmark.circle.fill").foregroundStyle(.yellow) }
                     else if done { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green) }
                     else if stopped { Image(systemName: "pause.circle").foregroundStyle(.yellow) }
                     else { Image(systemName: "circle").foregroundStyle(.tertiary) }
                 }.frame(width: 20, height: 20)
                 if !last { Rectangle().fill(.quaternary).frame(width: 1.5).frame(maxHeight: .infinity) }
             }
-            .accessibilityLabel(done ? "Done" : running ? "Running" : stopped ? "Stopped" : "Pending")
+            .accessibilityLabel(step.rejected ? "Failed" : done ? "Done" : running ? "Running" : stopped ? "Stopped" : "Pending")
             VStack(alignment: .leading, spacing: 5) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(step.title).font(.subheadline.weight(.semibold)).foregroundStyle(done || running ? .primary : .secondary)

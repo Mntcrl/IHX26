@@ -151,11 +151,10 @@ struct CaptureScreen: View {
                 if let notice = capture.notice { Chip(systemImage: "xmark.octagon", text: notice, tint: .red) }
             }
             if !capture.isCalibration, capture.running, model.readyToCapture {
-                if turningFast {
-                    Label("Slide sideways, don't turn", systemImage: "arrow.left.and.right")
-                        .font(.caption.weight(.semibold)).foregroundStyle(.yellow)
-                        .padding(5).background(.black.opacity(0.65), in: .rect(cornerRadius: 5))
-                }
+                Text(sceneGuidance)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(motionGrade == .rotating || motionGrade == .tooFast ? .yellow : .white)
+                    .padding(5).background(.black.opacity(0.65), in: .rect(cornerRadius: 5))
                 if !capture.certificationTrackingReady {
                     Label("Waiting for one second of normal ARKit tracking", systemImage: "viewfinder")
                         .font(.caption).padding(5).background(.black.opacity(0.65), in: .rect(cornerRadius: 5))
@@ -236,14 +235,23 @@ struct CaptureScreen: View {
 
     private enum MotionGrade { case unknown, steady, resting, tooFast, rotating }
 
-    private var turningFast: Bool { capture.rotationDegPerSecond.map { $0 > 30 } ?? false }
+    /// Coaching only: these live thresholds do not alter the frozen-frame preflight.
+    private var sceneGuidance: String {
+        switch motionGrade {
+        case .rotating: return "Don't turn the phone"
+        case .tooFast: return "Too much movement — hold steady"
+        default:
+            if let coverage = capture.depthCoverage, coverage < 0.75 {
+                return "Get closer: objects 0.6–1 m away, background within 3 m"
+            }
+            return "Hold almost still — natural hand wobble is enough"
+        }
+    }
 
-    /// Normal hand wobble is enough (policy floor 0.5 mm per side within 0.1–0.5 s, roughly
-    /// ≥ 1 mm/s); only a phone resting on a support is flagged. Very fast motion breaks tracking.
     private var motionGrade: MotionGrade {
-        guard let speed = capture.speedMmPerSecond, capture.rotationDegPerSecond != nil else { return .unknown }
-        if speed > 150 { return .tooFast }
-        if turningFast { return .rotating }
+        guard let speed = capture.speedMmPerSecond, let turn = capture.rotationDegPerSecond else { return .unknown }
+        if turn > 12 { return .rotating }
+        if speed > 75 { return .tooFast }
         if speed < 1 { return .resting }
         return .steady
     }
