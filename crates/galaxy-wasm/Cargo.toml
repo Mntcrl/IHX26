@@ -21,9 +21,9 @@ serde_json.workspace = true
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 galaxy-verifier.workspace = true
 galaxy-xrpl.workspace = true
-js-sys = "=0.3.107"
+js-sys.workspace = true
 wasm-bindgen.workspace = true
-wasm-bindgen-futures = "=0.4.80"
+wasm-bindgen-futures.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-wasm-bindgen-test = "=0.3.80"
+wasm-bindgen-test.workspace = true

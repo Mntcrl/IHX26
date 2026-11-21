@@ -15,8 +15,8 @@ galaxy-protocol.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-ethnum = "=1.5.3"
-libm = "=0.2.16"
+ethnum.workspace = true
+libm.workspace = true
 
 [features]
 cli = ["dep:clap", "dep:hex"]

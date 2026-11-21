@@ -30,17 +30,31 @@ ark-bn254 = "=0.6.0"
 ark-ff = "=0.6.0"
 ark-ec = "=0.6.0"
 ark-groth16 = { version = "=0.6.0", default-features = false }
+ark-poly = { version = "=0.6.0", default-features = false }
 ark-serialize = "=0.6.0"
 ark-std = { version = "=0.6.0", default-features = false }
 ark-relations = "=0.6.0"
 num-bigint = "=0.4.8"
 
+# Proving utilities
+circom-witnesscalc = "=0.3.0"
+memmap2 = "=0.9.12"
+rayon = "=1.12.0"
+
+# Geometry
+ethnum = "=1.5.3"
+libm = "=0.2.16"
+
 # Serialization / encoding
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
 hex = "=0.4.3"
+bs58 = "=0.5.1"
 base64 = { version = "=0.23.1", default-features = false, features = ["std"] }
 ciborium = "=0.2.2"
+quick-xml = "=0.41.0"
+toml = { version = "=1.2.1", default-features = false }
+time = { version = "=0.3.47", default-features = false }
 thiserror = "=2.0.21"
 proptest = { version = "=1.12.0", default-features = false, features = ["std"] }
 
@@ -48,21 +62,29 @@ proptest = { version = "=1.12.0", default-features = false, features = ["std"] }
 sha2 = "=0.11.1"
 ripemd = "=0.2.0"
 p256 = { version = "=0.14.0", default-features = false }
+p384 = { version = "=0.14.0", default-features = false }
 ed25519-dalek = "=3.0.0"
 x509-cert = "=0.3.1"
 der = "=0.8.3"
 rand_core = "=0.10.1"
 getrandom = "=0.4.3"
+zeroize = "=1.9.2"
 
 # Images (scalar, platform-independent JPEG paths per spec §4)
 png = "=0.18.1"
 jpeg-decoder = { version = "=0.3.2", default-features = false, features = ["platform_independent"] }
 jpeg-encoder = { version = "=0.7.1", default-features = false, features = ["std"] }
+crc32fast = "=1.5.0"
+flate2 = { version = "=1.1.9", default-features = false }
+zune-core = { version = "=0.4.12", default-features = false }
+zune-jpeg = { version = "=0.4.21", default-features = false }
 
 # Native networking / services
 tokio = "=1.54.1"
 reqwest = { version = "=0.13.5", default-features = false, features = ["rustls", "json"] }
 tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+futures-util = "=0.3.34"
+url = "=2.5.8"
 axum = "=0.8.9"
 rusqlite = { version = "=0.43.0", features = ["bundled"] }
 clap = { version = "=4.6.9", features = ["derive"] }
@@ -72,3 +94,9 @@ tracing-subscriber = { version = "=0.3.23", features = ["env-filter"] }
 # Language surfaces
 uniffi = "=0.32.2"
 wasm-bindgen = "=0.2.130"
+js-sys = "=0.3.107"
+wasm-bindgen-futures = "=0.4.80"
+
+# Test utilities
+tempfile = "=3.27.0"
+wasm-bindgen-test = "=0.3.80"
