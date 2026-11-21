@@ -1,4 +1,7 @@
-use std::{net::SocketAddr, path::{Path, PathBuf}};
+use std::{
+    net::SocketAddr,
+    path::{Path, PathBuf},
+};
 
 use galaxy_protocol::network::NetworkConfig;
 use serde::Deserialize;
@@ -84,13 +87,22 @@ pub(crate) struct Limits {
 
 impl Default for Limits {
     fn default() -> Self {
-        Self { requests_per_minute: 180, sync_requests_per_second: 4, ledgers_per_pass: 128,
-               poll_interval_secs: 5, discovery_interval_secs: 60 }
+        Self {
+            requests_per_minute: 180,
+            sync_requests_per_second: 4,
+            ledgers_per_pass: 128,
+            poll_interval_secs: 5,
+            discovery_interval_secs: 60,
+        }
     }
 }
 
-fn enabled() -> bool { true }
-fn default_log_filter() -> String { "galaxy_node=info".into() }
+fn enabled() -> bool {
+    true
+}
+fn default_log_filter() -> String {
+    "galaxy_node=info".into()
+}
 
 impl Config {
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
@@ -105,10 +117,17 @@ impl Config {
         let public_url = discovery::peer_url(&node.public_url, node.allow_private_peers)?;
         let lim = &node.limits;
         if network.inception_ledger == 0
-            || node.end_ledger.is_some_and(|end| end < network.inception_ledger)
+            || node
+                .end_ledger
+                .is_some_and(|end| end < network.inception_ledger)
             || node.accounts.len() > MAX_ACCOUNTS
-            || node.rpc_endpoints.len() > 8 || node.websocket_endpoints.len() > 8
-            || node.bootstrap_peers.len().saturating_add(node.manual_peers.len()) > MAX_PEERS
+            || node.rpc_endpoints.len() > 8
+            || node.websocket_endpoints.len() > 8
+            || node
+                .bootstrap_peers
+                .len()
+                .saturating_add(node.manual_peers.len())
+                > MAX_PEERS
             || !(1..=36_000).contains(&lim.requests_per_minute)
             || !(1..=50).contains(&lim.sync_requests_per_second)
             || !(1..=4096).contains(&lim.ledgers_per_pass)
@@ -117,29 +136,53 @@ impl Config {
         {
             return Err(Error::Config("node configuration exceeds bounds"));
         }
-        if node.sync_mode == SyncMode::Ledger && (!node.accounts.is_empty() || node.discover_accounts) {
-            return Err(Error::Config("accounts and discover_accounts require account sync mode"));
+        if node.sync_mode == SyncMode::Ledger
+            && (!node.accounts.is_empty() || node.discover_accounts)
+        {
+            return Err(Error::Config(
+                "accounts and discover_accounts require account sync mode",
+            ));
         }
-        if node.sync_mode == SyncMode::Account && node.accounts.is_empty() && !node.discover_accounts {
-            return Err(Error::Config("account sync requires accounts or discover_accounts"));
+        if node.sync_mode == SyncMode::Account
+            && node.accounts.is_empty()
+            && !node.discover_accounts
+        {
+            return Err(Error::Config(
+                "account sync requires accounts or discover_accounts",
+            ));
         }
-        for account in &node.accounts { galaxy_xrpl::keys::decode_address(account)?; }
+        for account in &node.accounts {
+            galaxy_xrpl::keys::decode_address(account)?;
+        }
         for url in node.bootstrap_peers.iter().chain(&node.manual_peers) {
             discovery::peer_url(url, node.allow_private_peers)?;
         }
-        Ok(Self { node, network, public_url })
+        Ok(Self {
+            node,
+            network,
+            public_url,
+        })
     }
 
-    pub fn log_filter(&self) -> &str { &self.node.log_filter }
+    pub fn log_filter(&self) -> &str {
+        &self.node.log_filter
+    }
 
     pub(crate) fn rpc_urls(&self) -> Vec<&str> {
-        self.network.trusted_local_rippled.iter().map(String::as_str)
+        self.network
+            .trusted_local_rippled
+            .iter()
+            .map(String::as_str)
             .chain(self.node.rpc_endpoints.iter().map(String::as_str))
-            .chain([self.network.json_rpc.as_str()]).collect()
+            .chain([self.network.json_rpc.as_str()])
+            .collect()
     }
 
     pub(crate) fn ws_urls(&self) -> impl Iterator<Item = &str> {
-        self.node.websocket_endpoints.iter().map(String::as_str)
+        self.node
+            .websocket_endpoints
+            .iter()
+            .map(String::as_str)
             .chain([self.network.websocket.as_str()])
     }
 }

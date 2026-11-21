@@ -1,10 +1,18 @@
 use ed25519_dalek::{Signature, VerifyingKey};
-use galaxy_protocol::{ids, wire::{CaptureMemo, ChunkMemo, CircuitManifest, DeviceManifest, NodeAnnouncement, ProofMemo, RevokeMemo}, AccountId, Hash32};
+use galaxy_protocol::{
+    ids,
+    wire::{
+        CaptureMemo, ChunkMemo, CircuitManifest, DeviceManifest, NodeAnnouncement, ProofMemo,
+        RevokeMemo,
+    },
+    AccountId, Hash32,
+};
 use galaxy_xrpl::{codec, keys, ledger::LedgerTx, transaction};
 
 use crate::Result;
 
 const PREFIX_HEX: &str = "67616c6178792f76312f"; // galaxy/v1/
+const PREFIX: &[u8] = b"galaxy/v1/";
 pub(crate) const CAPTURE: &str = "galaxy/v1/capture";
 pub(crate) const PROOF: &str = "galaxy/v1/proof";
 pub(crate) const DEVICE: &str = "galaxy/v1/device";
@@ -39,14 +47,34 @@ pub(crate) struct Record {
 
 /// `LedgerTx` is obtained from XRPL's typed binary reads, which recompute the
 /// hash and validate metadata. Never use a WS notice as a transaction record.
-pub(crate) fn parse(tx: &LedgerTx, network: u32, scope: Option<&AccountId>) -> Result<Option<Record>> {
+pub(crate) fn parse(
+    tx: &LedgerTx,
+    network: u32,
+    scope: Option<&AccountId>,
+) -> Result<Option<Record>> {
     if !tx.validated || tx.transaction_result != "tesSUCCESS" {
         return Ok(None);
     }
+    // A serialized MemoType matching the prefix necessarily contains these
+    // bytes. Avoid decoding unrelated transactions into JSON.
+    if !tx
+        .tx_blob
+        .windows(PREFIX.len())
+        .any(|bytes| bytes == PREFIX)
+    {
+        return Ok(None);
+    }
     let object = codec::decode(&tx.tx_blob)?;
-    let Some(candidate) = object["Memos"].as_array().into_iter().flatten()
+    let Some(candidate) = object["Memos"]
+        .as_array()
+        .into_iter()
+        .flatten()
         .filter_map(|entry| entry["Memo"]["MemoType"].as_str())
-        .find(|raw| raw.get(..PREFIX_HEX.len()).is_some_and(|s| s.eq_ignore_ascii_case(PREFIX_HEX))) else {
+        .find(|raw| {
+            raw.get(..PREFIX_HEX.len())
+                .is_some_and(|s| s.eq_ignore_ascii_case(PREFIX_HEX))
+        })
+    else {
         return Ok(None);
     };
     let account = object["Account"].as_str();
@@ -58,9 +86,18 @@ pub(crate) fn parse(tx: &LedgerTx, network: u32, scope: Option<&AccountId>) -> R
         }
     }
     let mut record = Record {
-        hash: hex::encode_upper(tx.hash), ledger: tx.ledger_index, index: tx.transaction_index,
-        account: account.map(str::to_owned), kind: display_kind(candidate), rejected: None,
-        id: None, reference: None, registration: None, bundle: None, counter: None, announcement: None,
+        hash: hex::encode_upper(tx.hash),
+        ledger: tx.ledger_index,
+        index: tx.transaction_index,
+        account: account.map(str::to_owned),
+        kind: display_kind(candidate),
+        rejected: None,
+        id: None,
+        reference: None,
+        registration: None,
+        bundle: None,
+        counter: None,
+        announcement: None,
     };
     let memo = match transaction::decode_galaxy_object(&object) {
         Ok(memo) => memo,
@@ -69,10 +106,20 @@ pub(crate) fn parse(tx: &LedgerTx, network: u32, scope: Option<&AccountId>) -> R
             return Ok(Some(record));
         }
     };
+    if memo.network_id != (network > 1024).then_some(network) {
+        record.rejected = Some("wrong_transaction_network");
+        return Ok(Some(record));
+    }
     match links(&memo, network) {
         Ok(links) => {
             record.id = links.id.map(hex::encode);
-            record.reference = links.reference.map(|value| if record.kind == CAPTURE { hex::encode(value) } else { hex::encode_upper(value) });
+            record.reference = links.reference.map(|value| {
+                if record.kind == CAPTURE {
+                    hex::encode(value)
+                } else {
+                    hex::encode_upper(value)
+                }
+            });
             record.registration = links.registration.map(hex::encode_upper);
             record.bundle = links.bundle.map(hex::encode);
             record.counter = links.counter;
@@ -85,8 +132,13 @@ pub(crate) fn parse(tx: &LedgerTx, network: u32, scope: Option<&AccountId>) -> R
 
 fn display_kind(raw: &str) -> String {
     if raw.len() <= 96 {
-        if let Ok(text) = hex::decode(raw).and_then(|bytes| String::from_utf8(bytes).map_err(|_| hex::FromHexError::InvalidStringLength)) {
-            if text.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'-')) {
+        if let Ok(text) = hex::decode(raw).and_then(|bytes| {
+            String::from_utf8(bytes).map_err(|_| hex::FromHexError::InvalidStringLength)
+        }) {
+            if text
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'-'))
+            {
                 return text;
             }
         }
@@ -98,7 +150,11 @@ fn links(memo: &transaction::GalaxyMemo, network: u32) -> std::result::Result<Li
     let mut links = Links::default();
     let wire = |_| "invalid_payload";
     let net = |actual| (actual == network).then_some(()).ok_or("wrong_network");
-    let account = |actual| (actual == memo.account).then_some(()).ok_or("wrong_account");
+    let account = |actual| {
+        (actual == memo.account)
+            .then_some(())
+            .ok_or("wrong_account")
+    };
     match memo.kind.as_str() {
         CAPTURE => {
             let capture = CaptureMemo::decode(&memo.data).map_err(wire)?;
@@ -139,10 +195,18 @@ fn links(memo: &transaction::GalaxyMemo, network: u32) -> std::result::Result<Li
         NODE => {
             let announcement = NodeAnnouncement::decode(&memo.data).map_err(wire)?;
             net(announcement.network)?;
-            let key = VerifyingKey::from_bytes(&announcement.node_pubkey).map_err(|_| "invalid_node_signature")?;
-            key.verify_strict(&announcement.signing_message(), &Signature::from_bytes(&announcement.sig))
+            let key = VerifyingKey::from_bytes(&announcement.node_pubkey)
                 .map_err(|_| "invalid_node_signature")?;
-            links.announcement = Some((announcement.url, announcement.expires_at, announcement.node_pubkey));
+            key.verify_strict(
+                &announcement.signing_message(),
+                &Signature::from_bytes(&announcement.sig),
+            )
+            .map_err(|_| "invalid_node_signature")?;
+            links.announcement = Some((
+                announcement.url,
+                announcement.expires_at,
+                announcement.node_pubkey,
+            ));
         }
         _ => return Err("unsupported_memo_type"),
     }

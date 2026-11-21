@@ -1,0 +1,373 @@
+openapi: 3.1.0
+info:
+  title: XRPL Galaxy node API
+  version: 1.0.0
+  description: Public read-only index. References, coverage and reports are untrusted hints. Verify independently from XRPL.
+servers:
+  - url: /
+paths:
+  /health:
+    get:
+      operationId: health
+      summary: Check HTTP and cache availability, not synchronization completeness.
+      responses:
+        '200':
+          description: Service is available.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Coverage'
+                  - type: object
+                    required: [status]
+                    properties:
+                      status: {const: ok}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/status:
+    get:
+      operationId: status
+      summary: Report coverage, checkpoint and record counts and account-scoped ranges.
+      responses:
+        '200':
+          description: Current cache status.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Status'}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/node:
+    get:
+      operationId: node
+      summary: Read this node's signed descriptor.
+      responses:
+        '200': {$ref: '#/components/responses/Descriptor'}
+        default: {$ref: '#/components/responses/Error'}
+  /.well-known/galaxy-node.json:
+    get:
+      operationId: wellKnownNode
+      summary: Read this node's signed descriptor at its well-known address.
+      responses:
+        '200': {$ref: '#/components/responses/Descriptor'}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/peers:
+    get:
+      operationId: peers
+      summary: Discover up to 64 unexpired peer descriptors.
+      responses:
+        '200':
+          description: Independently signed descriptors; neither the publisher nor the descriptor is a trust anchor.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Coverage'
+                  - type: object
+                    required: [peers, peers_truncated]
+                    properties:
+                      peers: {type: array, maxItems: 64, items: {$ref: '#/components/schemas/Descriptor'}}
+                      peers_truncated: {type: boolean}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/photos/{photo_id}:
+    parameters:
+      - {name: photo_id, in: path, required: true, schema: {$ref: '#/components/schemas/InputHash'}}
+      - {$ref: '#/components/parameters/Network'}
+      - {$ref: '#/components/parameters/Cursor'}
+      - {$ref: '#/components/parameters/Limit'}
+    get:
+      operationId: photoCaptures
+      summary: List capture references associated with a photo ID.
+      responses:
+        '200':
+          description: A page of candidates, possibly empty. Inspect coverage before interpreting an empty result.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/CapturePage'
+                  - type: object
+                    required: [photo_id]
+                    properties:
+                      photo_id: {$ref: '#/components/schemas/Id'}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/captures/{capture_id}:
+    parameters:
+      - {$ref: '#/components/parameters/CaptureId'}
+      - {$ref: '#/components/parameters/Network'}
+      - {$ref: '#/components/parameters/Cursor'}
+      - {$ref: '#/components/parameters/Limit'}
+    get:
+      operationId: captures
+      summary: List ledger references matching a capture ID.
+      responses:
+        '200':
+          description: Capture references matching the ID.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/CapturePage'
+                  - type: object
+                    required: [capture_id]
+                    properties:
+                      capture_id: {$ref: '#/components/schemas/Id'}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/proofs/{manifest_tx}:
+    parameters:
+      - {name: manifest_tx, in: path, required: true, schema: {$ref: '#/components/schemas/InputHash'}}
+      - {$ref: '#/components/parameters/Network'}
+      - {$ref: '#/components/parameters/Cursor'}
+      - {$ref: '#/components/parameters/Limit'}
+    get:
+      operationId: proofs
+      summary: List proof references for a capture transaction.
+      responses:
+        '200':
+          description: Indexed proof references, not proof verdicts.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    required: [manifest_tx, proofs]
+                    properties:
+                      manifest_tx: {$ref: '#/components/schemas/Transaction'}
+                      proofs: {$ref: '#/components/schemas/References'}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/credentials/{registration_tx}:
+    parameters:
+      - {name: registration_tx, in: path, required: true, schema: {$ref: '#/components/schemas/InputHash'}}
+      - {$ref: '#/components/parameters/Network'}
+      - {$ref: '#/components/parameters/Cursor'}
+      - {$ref: '#/components/parameters/Limit'}
+    get:
+      operationId: credentials
+      summary: List device registration, bundle chunk and revocation references.
+      responses:
+        '200':
+          description: Indexed references. A revocation reference is not necessarily a valid revocation.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    required: [registration_tx, credentials]
+                    properties:
+                      registration_tx: {$ref: '#/components/schemas/Transaction'}
+                      credentials: {$ref: '#/components/schemas/References'}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/circuits/{circuit_id}:
+    parameters:
+      - {name: circuit_id, in: path, required: true, schema: {$ref: '#/components/schemas/InputHash'}}
+      - {$ref: '#/components/parameters/Network'}
+      - {$ref: '#/components/parameters/Cursor'}
+      - {$ref: '#/components/parameters/Limit'}
+    get:
+      operationId: circuits
+      summary: List circuit registration and bundle chunk references.
+      responses:
+        '200':
+          description: Indexed references, not configured circuit trust anchors.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    required: [circuit_id, circuits]
+                    properties:
+                      circuit_id: {$ref: '#/components/schemas/Id'}
+                      circuits: {$ref: '#/components/schemas/References'}
+        default: {$ref: '#/components/responses/Error'}
+  /v1/reports/{capture_id}:
+    parameters:
+      - {$ref: '#/components/parameters/CaptureId'}
+      - {$ref: '#/components/parameters/Network'}
+      - {$ref: '#/components/parameters/Cursor'}
+      - {$ref: '#/components/parameters/Limit'}
+    get:
+      operationId: reports
+      summary: List cached proof-only evaluations. No image binding is checked.
+      responses:
+        '200':
+          description: Cached reports or null if a report is pending. At most three rows per page (fewer when necessary to meet the body limit).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Page'
+                  - type: object
+                    required: [capture_id, reports]
+                    properties:
+                      capture_id: {$ref: '#/components/schemas/Id'}
+                      reports: {type: array, maxItems: 3, items: {$ref: '#/components/schemas/Report'}}
+        default: {$ref: '#/components/responses/Error'}
+components:
+  parameters:
+    CaptureId: {name: capture_id, in: path, required: true, schema: {$ref: '#/components/schemas/InputHash'}}
+    Network:
+      name: network_id
+      in: query
+      description: When set, reject queries for a different network.
+      schema: {$ref: '#/components/schemas/U32'}
+    Cursor:
+      name: cursor
+      in: query
+      description: Previous page's opaque next_cursor. Use with the same endpoint and ID.
+      schema: {type: string, minLength: 1, maxLength: 256}
+    Limit:
+      name: limit
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 100, default: 50}
+  responses:
+    Descriptor:
+      description: Ed25519 signature over `GALAXY/NODE/v1\0` followed by Galaxy canonical JSON of the descriptor without `signature`.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Descriptor'}
+    Error:
+      description: Structured request or service error. A cache error does not imply absence; HTTP 429 includes Retry-After.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error:
+                type: object
+                required: [code, message]
+                properties:
+                  code: {type: string, pattern: '^[a-z_]+$'}
+                  message: {type: string}
+  schemas:
+    U32: {type: integer, minimum: 0, maximum: 4294967295}
+    Ledger: {type: integer, minimum: 1, maximum: 4294967295}
+    LedgerOrNull: {type: [integer, 'null'], minimum: 1, maximum: 4294967295}
+    InputHash: {type: string, pattern: '^[0-9a-fA-F]{64}$'}
+    Id: {type: string, pattern: '^[0-9a-f]{64}$'}
+    Transaction: {type: string, pattern: '^[0-9A-F]{64}$'}
+    TransactionOrNull: {type: [string, 'null'], pattern: '^[0-9A-F]{64}$'}
+    Range:
+      type: object
+      required: [from, through]
+      properties:
+        from: {$ref: '#/components/schemas/Ledger'}
+        through: {$ref: '#/components/schemas/Ledger'}
+    Coverage:
+      type: object
+      required: [protocol, protocol_version, software_version, network, network_id, indexed_from, indexed_through, indexed_ranges, gaps, latest_validated_ledger, incomplete]
+      properties:
+        protocol: {const: galaxy-node/v1}
+        protocol_version: {const: galaxy/v1}
+        software_version: {type: string}
+        network: {enum: [xrpl-testnet, xrpl-devnet, xrpl-mainnet]}
+        network_id: {$ref: '#/components/schemas/U32'}
+        indexed_from: {$ref: '#/components/schemas/LedgerOrNull'}
+        indexed_through: {$ref: '#/components/schemas/LedgerOrNull'}
+        indexed_ranges: {type: array, items: {$ref: '#/components/schemas/Range'}}
+        gaps: {type: array, items: {$ref: '#/components/schemas/Range'}}
+        latest_validated_ledger: {$ref: '#/components/schemas/LedgerOrNull'}
+        incomplete:
+          type: boolean
+          description: Whether the node lacks continuous global history from inception through the latest known validated ledger, independent of pagination.
+    Status:
+      allOf:
+        - $ref: '#/components/schemas/Coverage'
+        - type: object
+          required: [sync_mode, inception_ledger, configured_end_ledger, latest_synchronized_ledger, account_coverage, checkpoints, records, rejected, queued_reports, sync_issue, live_issue, live_connections, live_ledger_events]
+          properties:
+            sync_mode: {enum: [ledger, account]}
+            inception_ledger: {$ref: '#/components/schemas/Ledger'}
+            configured_end_ledger: {$ref: '#/components/schemas/LedgerOrNull'}
+            latest_synchronized_ledger: {$ref: '#/components/schemas/LedgerOrNull'}
+            account_coverage:
+              type: array
+              maxItems: 64
+              items:
+                type: object
+                required: [account, indexed_ranges, ranges_truncated]
+                properties:
+                  account: {type: string}
+                  indexed_ranges: {type: array, maxItems: 32, items: {$ref: '#/components/schemas/Range'}}
+                  ranges_truncated: {type: boolean}
+            checkpoints: {type: integer, minimum: 0}
+            records: {type: integer, minimum: 0}
+            rejected: {type: integer, minimum: 0}
+            queued_reports: {type: integer, minimum: 0}
+            sync_issue: {type: [string, 'null']}
+            live_issue: {type: [string, 'null']}
+            live_connections: {type: integer, minimum: 0}
+            live_ledger_events: {type: integer, minimum: 0}
+    Descriptor:
+      type: object
+      required: [protocol, protocol_version, node_id, network, network_id, software_version, endpoints, capabilities, indexed_from, indexed_through, indexed_ranges, ranges_truncated, expires_at, signature]
+      properties:
+        protocol: {const: galaxy-node/v1}
+        protocol_version: {const: galaxy/v1}
+        node_id: {$ref: '#/components/schemas/Id'}
+        network: {enum: [xrpl-testnet, xrpl-devnet, xrpl-mainnet]}
+        network_id: {$ref: '#/components/schemas/U32'}
+        software_version: {type: string}
+        endpoints: {type: array, minItems: 1, maxItems: 4, items: {type: string, format: uri}}
+        capabilities: {type: array, maxItems: 16, items: {type: string}}
+        indexed_from: {$ref: '#/components/schemas/LedgerOrNull'}
+        indexed_through: {$ref: '#/components/schemas/LedgerOrNull'}
+        indexed_ranges: {type: array, maxItems: 32, items: {$ref: '#/components/schemas/Range'}}
+        ranges_truncated: {type: boolean}
+        expires_at: {type: integer, minimum: 1, description: Unix seconds.}
+        signature: {type: string, pattern: '^[0-9a-f]{128}$'}
+    Page:
+      allOf:
+        - $ref: '#/components/schemas/Coverage'
+        - type: object
+          required: [next_cursor]
+          properties:
+            next_cursor: {type: [string, 'null'], maxLength: 256}
+    CapturePage:
+      allOf:
+        - $ref: '#/components/schemas/Page'
+        - type: object
+          required: [captures]
+          properties:
+            captures: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/Capture'}}
+    Capture:
+      type: object
+      required: [capture_id, photo_id, manifest_tx, ledger_index, transaction_index, registration_tx, proof_tx, assertion_counter_hint]
+      properties:
+        capture_id: {$ref: '#/components/schemas/Id'}
+        photo_id: {$ref: '#/components/schemas/Id'}
+        manifest_tx: {$ref: '#/components/schemas/Transaction'}
+        ledger_index: {$ref: '#/components/schemas/Ledger'}
+        transaction_index: {$ref: '#/components/schemas/U32'}
+        registration_tx: {$ref: '#/components/schemas/Transaction'}
+        proof_tx: {$ref: '#/components/schemas/TransactionOrNull'}
+        assertion_counter_hint: {type: [integer, 'null'], minimum: 0, maximum: 4294967295}
+    References:
+      type: array
+      maxItems: 100
+      items:
+        type: object
+        required: [tx, ledger_index, transaction_index, memo_type]
+        properties:
+          tx: {$ref: '#/components/schemas/Transaction'}
+          ledger_index: {$ref: '#/components/schemas/Ledger'}
+          transaction_index: {$ref: '#/components/schemas/U32'}
+          memo_type: {type: string}
+          account: {type: [string, 'null']}
+          id: {type: [string, 'null']}
+          reference: {type: [string, 'null']}
+          registration_tx: {$ref: '#/components/schemas/TransactionOrNull'}
+          bundle_id: {type: [string, 'null']}
+          counter_hint: {type: [integer, 'null']}
+    Report:
+      type: object
+      required: [proof_tx, manifest_tx, ledger_index, transaction_index, report_version, evaluated_at_unix, image_binding_checked, report]
+      properties:
+        proof_tx: {$ref: '#/components/schemas/Transaction'}
+        manifest_tx: {$ref: '#/components/schemas/Transaction'}
+        ledger_index: {$ref: '#/components/schemas/Ledger'}
+        transaction_index: {$ref: '#/components/schemas/U32'}
+        report_version: {type: [string, 'null']}
+        evaluated_at_unix: {type: [integer, 'null'], minimum: 0}
+        image_binding_checked: {const: false}
+        report: {type: [object, 'null'], description: Structured galaxy-report/v1 proof-only evaluation.}

@@ -1,16 +1,28 @@
-use std::{path::Path, sync::{Mutex, MutexGuard}, time::Duration};
+use std::{
+    path::Path,
+    sync::{Mutex, MutexGuard},
+    time::Duration,
+};
 
 use galaxy_protocol::Hash32;
 use galaxy_xrpl::ledger::LedgerHeader;
 use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 use serde::Serialize;
 
-use crate::{config::{Config, MAX_ACCOUNTS, MAX_PEERS}, records::{Record, PROOF, REVOKE}, Error, Result};
+use crate::{
+    config::{Config, MAX_ACCOUNTS, MAX_PEERS},
+    records::{Record, CAPTURE, PROOF, REVOKE},
+    Error, Result,
+};
 
 pub(crate) struct Db(Mutex<Connection>);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-pub(crate) struct Range { pub from: u32, pub through: u32 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Range {
+    pub from: u32,
+    pub through: u32,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Cursor(pub u32, pub u32, pub String);
@@ -32,10 +44,18 @@ pub(crate) struct Reference {
 }
 
 impl Reference {
-    pub fn cursor(&self) -> Cursor { Cursor(self.ledger_index, self.transaction_index, self.tx.clone()) }
+    pub fn cursor(&self) -> Cursor {
+        Cursor(self.ledger_index, self.transaction_index, self.tx.clone())
+    }
 }
 
-pub(crate) enum Lookup<'a> { Photo(&'a str), Capture(&'a str), Proof(&'a str), Device(&'a str), Circuit(&'a str) }
+pub(crate) enum Lookup<'a> {
+    Photo(&'a str),
+    Capture(&'a str),
+    Proof(&'a str),
+    Device(&'a str),
+    Circuit(&'a str),
+}
 
 #[derive(Serialize)]
 pub(crate) struct CachedReport {
@@ -44,13 +64,19 @@ pub(crate) struct CachedReport {
     pub ledger_index: u32,
     pub transaction_index: u32,
     pub report_version: Option<String>,
-    pub evaluated_at_unix: Option<u64>,
+    pub evaluated_at_unix: Option<i64>,
     pub image_binding_checked: bool,
     pub report: Option<serde_json::Value>,
 }
 
 impl CachedReport {
-    pub fn cursor(&self) -> Cursor { Cursor(self.ledger_index, self.transaction_index, self.proof_tx.clone()) }
+    pub fn cursor(&self) -> Cursor {
+        Cursor(
+            self.ledger_index,
+            self.transaction_index,
+            self.proof_tx.clone(),
+        )
+    }
 }
 
 pub(crate) const FILE_NAME: &str = "index.sqlite3";
@@ -66,17 +92,33 @@ impl Db {
                 crate::config::SyncMode::Ledger => "ledger",
                 crate::config::SyncMode::Account => "account",
             };
-            let expected = format!("{}:{}:{}", config.network.network_id as u32, config.network.inception_ledger, mode);
-            let actual: Option<String> = tx.query_row("SELECT value FROM settings WHERE key = 'scope_v1'", [], |row| row.get(0)).optional()?;
+            let expected = format!(
+                "{}:{}:{}",
+                config.network.network_id as u32, config.network.inception_ledger, mode
+            );
+            let actual: Option<String> = tx
+                .query_row(
+                    "SELECT value FROM settings WHERE key = 'scope_v1'",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
             if actual.as_ref().is_some_and(|value| value != &expected) {
-                return Err(Error::Config("cache scope changed; rebuild the cache before starting"));
+                return Err(Error::Config(
+                    "cache scope changed; rebuild the cache before starting",
+                ));
             }
-            tx.execute("INSERT OR IGNORE INTO settings VALUES ('scope_v1', ?1)", [expected])?;
+            tx.execute(
+                "INSERT OR IGNORE INTO settings VALUES ('scope_v1', ?1)",
+                [expected],
+            )?;
             for address in &config.node.accounts {
                 tx.execute("INSERT OR IGNORE INTO accounts VALUES (?1)", [address])?;
             }
-            let count: usize = tx.query_row("SELECT COUNT(*) FROM accounts", [], |row| row.get(0))?;
-            if count > MAX_ACCOUNTS { return Err(Error::Config("too many cached accounts")); }
+            let count: i64 = tx.query_row("SELECT COUNT(*) FROM accounts", [], |row| row.get(0))?;
+            if count > MAX_ACCOUNTS as i64 {
+                return Err(Error::Config("too many cached accounts"));
+            }
             tx.commit()?;
         }
         Ok(db)
@@ -88,7 +130,10 @@ impl Db {
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         match tx.query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))? {
-            0 => tx.execute_batch(concat!(include_str!("schema.sql"), "PRAGMA user_version = 1;"))?,
+            0 => tx.execute_batch(concat!(
+                include_str!("schema.sql"),
+                "PRAGMA user_version = 1;"
+            ))?,
             1 => (),
             _ => return Err(Error::Config("unsupported cache schema version")),
         }
@@ -97,7 +142,9 @@ impl Db {
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, Connection>> {
-        self.0.lock().map_err(|_| Error::Invariant("cache lock is unavailable"))
+        self.0
+            .lock()
+            .map_err(|_| Error::Invariant("cache lock is unavailable"))
     }
 
     pub fn clear(&self) -> Result<()> {
@@ -116,15 +163,25 @@ impl Db {
     pub fn set_note(&self, key: &str, value: Option<&str>) -> Result<()> {
         let conn = self.lock()?;
         match value {
-            Some(value) => conn.execute("INSERT INTO settings VALUES ('note:'||?1, ?2)
-                ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![key, value])?,
+            Some(value) => conn.execute(
+                "INSERT INTO settings VALUES ('note:'||?1, ?2)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                params![key, value],
+            )?,
             None => conn.execute("DELETE FROM settings WHERE key='note:'||?1", [key])?,
         };
         Ok(())
     }
 
     pub fn note(&self, key: &str) -> Result<Option<String>> {
-        Ok(self.lock()?.query_row("SELECT value FROM settings WHERE key='note:'||?1", [key], |r| r.get(0)).optional()?)
+        Ok(self
+            .lock()?
+            .query_row(
+                "SELECT value FROM settings WHERE key='note:'||?1",
+                [key],
+                |r| r.get(0),
+            )
+            .optional()?)
     }
 
     pub fn put_tip(&self, index: u32) -> Result<()> {
@@ -134,26 +191,69 @@ impl Db {
     }
 
     pub fn tip(&self) -> Result<Option<u32>> {
-        Ok(self.lock()?.query_row("SELECT CAST(value AS INTEGER) FROM settings WHERE key='latest_validated'", [], |r| r.get(0)).optional()?)
+        Ok(self
+            .lock()?
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM settings WHERE key='latest_validated'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn increment(&self, key: &str) -> Result<()> {
+        self.lock()?.execute(
+            "INSERT INTO settings VALUES ('count:'||?1, 1)
+            ON CONFLICT(key) DO UPDATE SET value=CAST(settings.value AS INTEGER)+1",
+            [key],
+        )?;
+        Ok(())
+    }
+
+    pub fn counter(&self, key: &str) -> Result<i64> {
+        Ok(self
+            .lock()?
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM settings WHERE key='count:'||?1",
+                [key],
+                |r| r.get(0),
+            )
+            .optional()?
+            .unwrap_or(0))
     }
 
     pub fn accounts(&self) -> Result<Vec<String>> {
         let conn = self.lock()?;
         let mut q = conn.prepare_cached("SELECT address FROM accounts ORDER BY address")?;
-        Ok(q.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
+        let rows = q.query_map([], |r| r.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     pub fn discover(&self, account: &str) -> Result<()> {
-        self.lock()?.execute("INSERT OR IGNORE INTO accounts SELECT ?1 WHERE (SELECT COUNT(*) FROM accounts) < ?2", params![account, MAX_ACCOUNTS])?;
+        self.lock()?.execute(
+            "INSERT OR IGNORE INTO accounts SELECT ?1 WHERE (SELECT COUNT(*) FROM accounts) < ?2",
+            params![account, MAX_ACCOUNTS as i64],
+        )?;
         Ok(())
     }
 
     pub fn missing(&self, scope: &str, from: u32, through: u32) -> Result<Option<u32>> {
-        if from > through { return Ok(None); }
+        if from > through {
+            return Ok(None);
+        }
         let conn = self.lock()?;
-        let covered: Option<u32> = conn.query_row("SELECT last FROM indexed_ranges WHERE scope=?1 AND first<=?2 AND last>=?2",
-            params![scope, from], |r| r.get(0)).optional()?;
-        Ok(match covered { Some(end) if end >= through => None, Some(end) => Some(end + 1), None => Some(from) })
+        let covered: Option<u32> = conn
+            .query_row(
+                "SELECT last FROM indexed_ranges WHERE scope=?1 AND first<=?2 AND last>=?2",
+                params![scope, from],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(match covered {
+            Some(end) if end >= through => None,
+            Some(end) => Some(end + 1),
+            None => Some(from),
+        })
     }
 
     pub fn next_covered(&self, scope: &str, after: u32) -> Result<Option<u32>> {
@@ -164,25 +264,42 @@ impl Db {
     pub fn ranges(&self, scope: &str, after: u32, limit: usize) -> Result<Vec<Range>> {
         let conn = self.lock()?;
         let mut q = conn.prepare_cached("SELECT first,last FROM indexed_ranges WHERE scope=?1 AND first>?2 ORDER BY first LIMIT ?3")?;
-        Ok(q.query_map(params![scope, after, limit], |r| Ok(Range { from: r.get(0)?, through: r.get(1)? }))?
-            .collect::<rusqlite::Result<_>>()?)
+        let rows = q.query_map(params![scope, after, limit as i64], |r| {
+            Ok(Range {
+                from: r.get(0)?,
+                through: r.get(1)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     pub fn scope_bounds(&self, scope: &str) -> Result<(Option<u32>, Option<u32>)> {
-        Ok(self.lock()?.query_row("SELECT MIN(first),MAX(last) FROM indexed_ranges WHERE scope=?1", [scope], |r| Ok((r.get(0)?, r.get(1)?)))?)
+        Ok(self.lock()?.query_row(
+            "SELECT MIN(first),MAX(last) FROM indexed_ranges WHERE scope=?1",
+            [scope],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?)
     }
 
     pub fn last_indexed(&self) -> Result<Option<u32>> {
-        Ok(self.lock()?.query_row("SELECT MAX(last) FROM indexed_ranges", [], |r| r.get(0))?)
+        Ok(self
+            .lock()?
+            .query_row("SELECT MAX(last) FROM indexed_ranges", [], |r| r.get(0))?)
     }
 
     pub fn hash(&self, ledger: u32) -> Result<Option<Hash32>> {
-        checkpoint(&self.lock()?, ledger, false)
+        let conn = self.lock()?;
+        checkpoint(&conn, ledger, false)
     }
 
     pub fn insert_ledger(&self, header: &LedgerHeader, records: &[Record]) -> Result<()> {
-        if !header.validated || header.ledger_index == 0 || records.iter().any(|r| r.ledger != header.ledger_index) {
-            return Err(Error::Invariant("expected records from one validated ledger"));
+        if !header.validated
+            || header.ledger_index == 0
+            || records.iter().any(|r| r.ledger != header.ledger_index)
+        {
+            return Err(Error::Invariant(
+                "expected records from one validated ledger",
+            ));
         }
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -190,28 +307,55 @@ impl Db {
         if checkpoint(&tx, i, false)?.is_some_and(|hash| hash != header.hash)
             || checkpoint(&tx, i, true)?.is_some_and(|hash| hash != header.parent_hash)
             || checkpoint(&tx, i - 1, false)?.is_some_and(|hash| hash != header.parent_hash)
-            || i.checked_add(1).map(|next| checkpoint(&tx, next, true)).transpose()?.flatten().is_some_and(|hash| hash != header.hash)
+            || i.checked_add(1)
+                .map(|next| checkpoint(&tx, next, true))
+                .transpose()?
+                .flatten()
+                .is_some_and(|hash| hash != header.hash)
         {
             return Err(Error::Chain(i));
         }
-        tx.execute("INSERT OR IGNORE INTO checkpoints VALUES (?1, ?2, ?3)", params![i, &header.hash[..], &header.parent_hash[..]])?;
+        tx.execute(
+            "INSERT OR IGNORE INTO checkpoints VALUES (?1, ?2, ?3)",
+            params![i, &header.hash[..], &header.parent_hash[..]],
+        )?;
         insert_records(&tx, records)?;
-        cover(&tx, "", Range { from: i, through: i })?;
+        cover(
+            &tx,
+            "",
+            Range {
+                from: i,
+                through: i,
+            },
+        )?;
         tx.commit()?;
         Ok(())
     }
 
     /// Partial account pages may be indexed, but only the terminal page claims coverage.
-    pub fn insert_account_page(&self, scope: &str, range: Range, records: &[Record], complete: bool) -> Result<()> {
+    pub fn insert_account_page(
+        &self,
+        scope: &str,
+        range: Range,
+        records: &[Record],
+        complete: bool,
+    ) -> Result<()> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         insert_records(&tx, records)?;
-        if complete { cover(&tx, scope, range)?; }
+        if complete {
+            cover(&tx, scope, range)?;
+        }
         tx.commit()?;
         Ok(())
     }
 
-    pub fn lookup(&self, what: Lookup<'_>, cursor: &Cursor, limit: usize) -> Result<Vec<Reference>> {
+    pub fn lookup(
+        &self,
+        what: Lookup<'_>,
+        cursor: &Cursor,
+        limit: usize,
+    ) -> Result<Vec<Reference>> {
         let (filter, value) = match what {
             Lookup::Photo(value) => ("r.kind='galaxy/v1/capture' AND r.reference=?1", value),
             Lookup::Capture(value) => ("r.kind='galaxy/v1/capture' AND r.id=?1", value),
@@ -226,39 +370,100 @@ impl Db {
             ORDER BY r.ledger,r.tx_index,r.hash LIMIT ?5");
         let conn = self.lock()?;
         let mut q = conn.prepare_cached(&sql)?;
-        Ok(q.query_map(params![value, cursor.0, cursor.1, cursor.2, limit], |r| Ok(Reference {
-            tx: r.get(0)?, ledger_index: r.get(1)?, transaction_index: r.get(2)?, account: r.get(3)?, memo_type: r.get(4)?,
-            id: r.get(5)?, reference: r.get(6)?, registration_tx: r.get(7)?, bundle_id: r.get(8)?, counter_hint: r.get(9)?, proof_tx: r.get(10)?,
-        }))?.collect::<rusqlite::Result<_>>()?)
+        let rows = q.query_map(
+            params![value, cursor.0, cursor.1, cursor.2, limit as i64],
+            |r| {
+                Ok(Reference {
+                    tx: r.get(0)?,
+                    ledger_index: r.get(1)?,
+                    transaction_index: r.get(2)?,
+                    account: r.get(3)?,
+                    memo_type: r.get(4)?,
+                    id: r.get(5)?,
+                    reference: r.get(6)?,
+                    registration_tx: r.get(7)?,
+                    bundle_id: r.get(8)?,
+                    counter_hint: r.get(9)?,
+                    proof_tx: r.get(10)?,
+                })
+            },
+        )?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    pub fn reports(&self, capture_id: &str, cursor: &Cursor, limit: usize) -> Result<Vec<CachedReport>> {
+    pub fn reports(
+        &self,
+        capture_id: &str,
+        cursor: &Cursor,
+        limit: usize,
+    ) -> Result<Vec<CachedReport>> {
         let conn = self.lock()?;
         let mut q = conn.prepare_cached("SELECT p.hash,c.hash,p.ledger,p.tx_index,j.report_version,j.checked_at,j.document
             FROM records c JOIN records p ON p.reference=c.hash JOIN reports j ON j.proof=p.hash
             WHERE c.kind='galaxy/v1/capture' AND c.rejected IS NULL AND c.id=?1 AND p.kind='galaxy/v1/proof' AND p.rejected IS NULL
             AND (p.ledger,p.tx_index,p.hash)>(?2,?3,?4) ORDER BY p.ledger,p.tx_index,p.hash LIMIT ?5")?;
-        let rows = q.query_map(params![capture_id, cursor.0, cursor.1, cursor.2, limit], |r| {
-            Ok((CachedReport {proof_tx:r.get(0)?, manifest_tx:r.get(1)?, ledger_index:r.get(2)?, transaction_index:r.get(3)?,
-                report_version:r.get(4)?, evaluated_at_unix:r.get(5)?, image_binding_checked:false, report:None}, r.get::<_,Option<String>>(6)?))
-        })?;
-        rows.map(|row| { let (mut report, bytes) = row?; report.report = bytes.map(|b| serde_json::from_str(&b)).transpose()?; Ok(report) }).collect()
+        let rows = q.query_map(
+            params![capture_id, cursor.0, cursor.1, cursor.2, limit as i64],
+            |r| {
+                Ok((
+                    CachedReport {
+                        proof_tx: r.get(0)?,
+                        manifest_tx: r.get(1)?,
+                        ledger_index: r.get(2)?,
+                        transaction_index: r.get(3)?,
+                        report_version: r.get(4)?,
+                        evaluated_at_unix: r.get(5)?,
+                        image_binding_checked: false,
+                        report: None,
+                    },
+                    r.get::<_, Option<String>>(6)?,
+                ))
+            },
+        )?;
+        rows.map(|row| {
+            let (mut report, bytes) = row?;
+            report.report = bytes.map(|b| serde_json::from_str(&b)).transpose()?;
+            Ok(report)
+        })
+        .collect()
     }
 
-    pub fn counts(&self) -> Result<(u64, u64, u64, u64)> {
+    pub fn counts(&self) -> Result<(i64, i64, i64, i64)> {
         Ok(self.lock()?.query_row("SELECT (SELECT COUNT(*) FROM checkpoints),
             (SELECT COUNT(*) FROM records WHERE rejected IS NULL), (SELECT COUNT(*) FROM records WHERE rejected IS NOT NULL),
             (SELECT COUNT(*) FROM reports WHERE due IS NOT NULL)", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?)
     }
 
-    pub fn job(&self, now: u64) -> Result<Option<(String,u64)>> {
-        Ok(self.lock()?.query_row("SELECT proof,generation FROM reports WHERE due<=?1 ORDER BY due,proof LIMIT 1", [now],
-            |r| Ok((r.get(0)?,r.get(1)?))).optional()?)
+    pub fn job(&self, now: i64) -> Result<Option<(String, i64)>> {
+        Ok(self
+            .lock()?
+            .query_row(
+                "SELECT proof,generation FROM reports WHERE due<=?1 ORDER BY due,proof LIMIT 1",
+                [now],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?)
     }
 
-    pub fn store_report(&self, proof: &str, generation: u64, now: u64, version: &str, document: &str, next: Option<u64>) -> Result<()> {
+    pub fn store_report(
+        &self,
+        proof: &str,
+        generation: i64,
+        now: i64,
+        version: &str,
+        document: &str,
+        next: Option<i64>,
+    ) -> Result<()> {
         self.lock()?.execute("UPDATE reports SET due=?3,checked_at=?4,report_version=?5,document=?6 WHERE proof=?1 AND generation=?2",
             params![proof,generation,next,now,version,document])?;
+        Ok(())
+    }
+
+    pub fn defer_report(&self, proof: &str, generation: i64, due: i64) -> Result<()> {
+        self.lock()?.execute(
+            "UPDATE reports SET due=?3 WHERE proof=?1 AND generation=?2",
+            params![proof, generation, due],
+        )?;
         Ok(())
     }
 
@@ -273,17 +478,26 @@ impl Db {
         Ok(())
     }
 
-    pub fn announcements(&self, now: u64) -> Result<Vec<(String, Hash32)>> {
+    pub fn announcements(&self, now: i64) -> Result<Vec<(String, Hash32)>> {
         let conn = self.lock()?;
         let mut q = conn.prepare_cached("SELECT url,id FROM announcements WHERE expires>?1 AND expires<=?2 ORDER BY expires DESC,hash LIMIT ?3")?;
-        Ok(q.query_map(params![now, now + crate::discovery::MAX_TTL, MAX_PEERS], |r| Ok((r.get(0)?, r.get(1)?)))?
-            .collect::<rusqlite::Result<_>>()?)
+        let rows = q.query_map(
+            params![
+                now,
+                now + crate::discovery::MAX_TTL as i64,
+                MAX_PEERS as i64
+            ],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    pub fn peer_documents(&self, now: u64) -> Result<Vec<String>> {
+    pub fn peer_documents(&self, now: i64) -> Result<Vec<String>> {
         let conn = self.lock()?;
-        let mut q = conn.prepare_cached("SELECT document FROM peers WHERE expires>?1 ORDER BY id LIMIT ?2")?;
-        Ok(q.query_map(params![now, MAX_PEERS], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
+        let mut q = conn
+            .prepare_cached("SELECT document FROM peers WHERE expires>?1 ORDER BY id LIMIT ?2")?;
+        let rows = q.query_map(params![now, MAX_PEERS as i64], |r| r.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     pub fn replace_peers(&self, peers: &[crate::discovery::Descriptor]) -> Result<()> {
@@ -292,7 +506,11 @@ impl Db {
         tx.execute("DELETE FROM peers", [])?;
         let mut insert = tx.prepare_cached("INSERT INTO peers VALUES (?1,?2,?3)")?;
         for peer in peers {
-            insert.execute(params![peer.node_id(), peer.expires_at(), serde_json::to_string(peer)?])?;
+            insert.execute(params![
+                peer.node_id(),
+                peer.expires_at() as i64,
+                serde_json::to_string(peer)?
+            ])?;
         }
         drop(insert);
         tx.commit()?;
@@ -301,39 +519,88 @@ impl Db {
 }
 
 fn checkpoint(conn: &Connection, ledger: u32, parent: bool) -> Result<Option<Hash32>> {
-    let sql = if parent { "SELECT parent_hash FROM checkpoints WHERE ledger=?1" } else { "SELECT hash FROM checkpoints WHERE ledger=?1" };
+    let sql = if parent {
+        "SELECT parent_hash FROM checkpoints WHERE ledger=?1"
+    } else {
+        "SELECT hash FROM checkpoints WHERE ledger=?1"
+    };
     Ok(conn.query_row(sql, [ledger], |r| r.get(0)).optional()?)
 }
 
 fn cover(conn: &Connection, scope: &str, range: Range) -> Result<()> {
-    let (first, last): (Option<u32>, Option<u32>) = conn.query_row("SELECT MIN(first),MAX(last) FROM indexed_ranges WHERE scope=?1 AND first<=?2 AND last>=?3",
-        params![scope, i64::from(range.through)+1, range.from.saturating_sub(1)], |r| Ok((r.get(0)?,r.get(1)?)))?;
+    let (first, last): (Option<u32>, Option<u32>) = conn.query_row(
+        "SELECT MIN(first),MAX(last) FROM indexed_ranges WHERE scope=?1 AND first<=?2 AND last>=?3",
+        params![
+            scope,
+            i64::from(range.through) + 1,
+            range.from.saturating_sub(1)
+        ],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
     if let (Some(first), Some(last)) = (first, last) {
         if first <= range.from && last >= range.through {
             // Min/max can span distinct ranges with a gap; only skip when one row covers the input.
             let containing: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM indexed_ranges WHERE scope=?1 AND first<=?2 AND last>=?3)",
                 params![scope,range.from,range.through], |r| r.get(0))?;
-            if containing { return Ok(()); }
+            if containing {
+                return Ok(());
+            }
         }
-        conn.execute("DELETE FROM indexed_ranges WHERE scope=?1 AND first BETWEEN ?2 AND ?3", params![scope,first,last])?;
+        conn.execute(
+            "DELETE FROM indexed_ranges WHERE scope=?1 AND first BETWEEN ?2 AND ?3",
+            params![scope, first, last],
+        )?;
     }
-    conn.execute("INSERT INTO indexed_ranges VALUES (?1,?2,?3)", params![scope,first.unwrap_or(range.from).min(range.from),last.unwrap_or(range.through).max(range.through)])?;
+    conn.execute(
+        "INSERT INTO indexed_ranges VALUES (?1,?2,?3)",
+        params![
+            scope,
+            first.unwrap_or(range.from).min(range.from),
+            last.unwrap_or(range.through).max(range.through)
+        ],
+    )?;
     Ok(())
 }
 
 fn insert_records(conn: &Connection, records: &[Record]) -> Result<()> {
-    let mut insert = conn.prepare_cached("INSERT INTO records VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(hash) DO NOTHING")?;
+    let mut insert = conn.prepare_cached("INSERT INTO records VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT DO NOTHING")?;
     for r in records {
-        if insert.execute(params![r.hash,r.ledger,r.index,r.kind,r.rejected,r.account,r.id,r.reference,r.registration,r.bundle,r.counter])? == 0 {
-            let (ledger,index) = conn.query_row("SELECT ledger,tx_index FROM records WHERE hash=?1", [&r.hash], position)?;
-            if (ledger,index) != (r.ledger,r.index) { return Err(Error::Chain(r.ledger)); }
+        if insert.execute(params![
+            r.hash,
+            r.ledger,
+            r.index,
+            r.kind,
+            r.rejected,
+            r.account,
+            r.id,
+            r.reference,
+            r.registration,
+            r.bundle,
+            r.counter
+        ])? == 0
+        {
+            let stored = conn
+                .query_row(
+                    "SELECT ledger,tx_index FROM records WHERE hash=?1",
+                    [&r.hash],
+                    position,
+                )
+                .optional()?;
+            if stored != Some((r.ledger, r.index)) {
+                return Err(Error::Chain(r.ledger));
+            }
             continue;
         }
-        if r.rejected.is_some() { continue; }
+        if r.rejected.is_some() {
+            continue;
+        }
         if let Some((url, expires, id)) = &r.announcement {
             // XRPL stores u64 expiry. Values SQLite cannot represent are never usable advertisements.
             if let Ok(expires) = i64::try_from(*expires) {
-                conn.execute("INSERT INTO announcements VALUES (?1,?2,?3,?4)", params![r.hash,url,expires,&id[..]])?;
+                conn.execute(
+                    "INSERT INTO announcements VALUES (?1,?2,?3,?4)",
+                    params![r.hash, url, expires, &id[..]],
+                )?;
             }
         }
         if r.kind == PROOF {
@@ -341,11 +608,22 @@ fn insert_records(conn: &Connection, records: &[Record]) -> Result<()> {
         } else if r.kind == REVOKE {
             conn.execute("UPDATE reports SET due=0,generation=generation+1,checked_at=NULL,report_version=NULL,document=NULL
                 WHERE proof IN (SELECT p.hash FROM records c JOIN records p ON p.reference=c.hash
-                WHERE c.kind='galaxy/v1/capture' AND c.rejected IS NULL AND c.registration=?1
-                AND p.kind='galaxy/v1/proof' AND p.rejected IS NULL)", [&r.registration])?;
+                WHERE c.kind='galaxy/v1/capture' AND c.rejected IS NULL AND c.registration=?1 AND c.account=?2
+                AND p.kind='galaxy/v1/proof' AND p.rejected IS NULL AND p.account=c.account)", params![r.registration, r.account])?;
+        } else if r.kind == CAPTURE {
+            // Live closes may index a proof and revocation before backfill
+            // identifies their relationship through this capture.
+            conn.prepare_cached("UPDATE reports SET due=0,generation=generation+1,checked_at=NULL,report_version=NULL,document=NULL
+                WHERE EXISTS (SELECT 1 FROM records v WHERE v.kind='galaxy/v1/revoke' AND v.rejected IS NULL
+                    AND v.registration=?1 AND v.account=?2)
+                AND proof IN (SELECT p.hash FROM records p WHERE p.kind='galaxy/v1/proof' AND p.rejected IS NULL
+                    AND p.reference=?3 AND p.account=?2)")?
+                .execute(params![r.registration, r.account, r.hash])?;
         }
     }
     Ok(())
 }
 
-fn position(r: &Row<'_>) -> rusqlite::Result<(u32,u32)> { Ok((r.get(0)?,r.get(1)?)) }
+fn position(r: &Row<'_>) -> rusqlite::Result<(u32, u32)> {
+    Ok((r.get(0)?, r.get(1)?))
+}

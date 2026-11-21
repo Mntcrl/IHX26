@@ -4,13 +4,16 @@
 //! decide validity; every response is a hint that clients verify locally.
 
 mod api;
-pub mod client;
+mod client;
 mod config;
 mod db;
 mod discovery;
 mod records;
 mod sync;
 mod verify;
+
+#[cfg(test)]
+mod tests;
 
 use std::{sync::Arc, time::Duration};
 
@@ -39,7 +42,9 @@ pub enum Error {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Xrpl(#[from] galaxy_xrpl::Error),
-    #[error("ledger chain mismatch at ledger {0}: the endpoint history contradicts stored checkpoints")]
+    #[error(
+        "ledger chain mismatch at ledger {0}: the endpoint history contradicts stored checkpoints"
+    )]
     Chain(u32),
     #[error("internal invariant: {0}")]
     Invariant(&'static str),
@@ -56,32 +61,57 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub async fn run(config: Config) -> Result<()> {
     #[cfg(feature = "test-faults")]
     if let Some(fault) = config.node.test_fault {
-        tracing::warn!(?fault, "test fault injection enabled; this node serves incorrect lookup results on purpose");
+        tracing::warn!(
+            ?fault,
+            "test fault injection enabled; this node serves incorrect lookup results on purpose"
+        );
     }
     let config = Arc::new(config);
     let db = Arc::new(db::Db::open(&config)?);
     let identity = Arc::new(discovery::Identity::load_or_create(&config.node.data_dir)?);
     let rpc = sync::rpc_client(&config)?;
-    let limiter = Arc::new(sync::Limiter::new(config.node.limits.sync_requests_per_second));
-    let wake = Arc::new(Notify::new());
+    let sources = Arc::new(sync::Sources::new(&config)?);
+    let limiter = Arc::new(sync::Limiter::new(
+        config.node.limits.sync_requests_per_second,
+    ));
+    let resync = Arc::new(Notify::new());
+    let proof = Arc::new(Notify::new());
     let listener = tokio::net::TcpListener::bind(config.node.listen).await?;
     tracing::info!(listen = %config.node.listen, network = %config.network.name, "galaxy-node started");
 
     let mut tasks = tokio::task::JoinSet::new();
-    tasks.spawn(sync::run(config.clone(), db.clone(), rpc.clone(), limiter.clone(), wake.clone()));
+    tasks.spawn(sync::run(
+        config.clone(),
+        db.clone(),
+        sources.clone(),
+        limiter.clone(),
+        resync.clone(),
+        proof.clone(),
+    ));
     if config.node.live {
-        tasks.spawn(sync::live(config.clone(), db.clone(), rpc.clone(), limiter.clone(), wake.clone()));
+        tasks.spawn(sync::live(
+            config.clone(),
+            db.clone(),
+            rpc.clone(),
+            sources,
+            limiter.clone(),
+            resync,
+            proof.clone(),
+        ));
     }
-    tasks.spawn(verify::run(config.clone(), db.clone(), rpc, limiter, wake));
+    tasks.spawn(verify::run(config.clone(), db.clone(), rpc, limiter, proof));
     if config.node.discovery {
         tasks.spawn(discovery::run(config.clone(), db.clone(), identity.clone()));
     }
     let app = api::router(api::State::new(config, db, identity));
     tasks.spawn(async move {
-        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-            .with_graceful_shutdown(shutdown())
-            .await
-            .map_err(Error::from)
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(shutdown())
+        .await
+        .map_err(Error::from)
     });
     tokio::select! {
         () = shutdown() => Ok(()),
@@ -95,10 +125,11 @@ pub async fn run(config: Config) -> Result<()> {
 async fn shutdown() {
     #[cfg(unix)]
     {
-        let mut term = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(signal) => signal,
-            Err(_) => return std::future::pending().await,
-        };
+        let mut term =
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(signal) => signal,
+                Err(_) => return std::future::pending().await,
+            };
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {},
             _ = term.recv() => {},
@@ -111,11 +142,11 @@ async fn shutdown() {
 /// Backfill to the current validated tip (or `end_ledger`), verify every
 /// queued PROOF once, and return the local status document.
 pub async fn sync_once(config: Config) -> Result<Value> {
-    let config = Arc::new(config);
-    let db = Arc::new(db::Db::open(&config)?);
+    let db = db::Db::open(&config)?;
     let rpc = sync::rpc_client(&config)?;
+    let sources = sync::Sources::new(&config)?;
     let limiter = sync::Limiter::new(config.node.limits.sync_requests_per_second);
-    sync::catch_up(&config, &db, &rpc, &limiter).await?;
+    sync::catch_up(&config, &db, &sources, &limiter).await?;
     verify::drain(&config, &db, &rpc, &limiter).await?;
     api::status_document(&config, &db)
 }
@@ -150,8 +181,15 @@ pub async fn peers(url: &str) -> Result<Value> {
     client::get_json(url, "v1/peers", true).await
 }
 
+/// `GET {url}/health`; like [`status`], the caller chooses the destination.
+pub async fn health(url: &str) -> Result<Value> {
+    client::get_json(url, "health", true).await
+}
+
 pub(crate) fn unix_now() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 pub(crate) const RETRY_DELAY: Duration = Duration::from_secs(10);

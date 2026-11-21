@@ -11,7 +11,7 @@ use galaxy_verifier::{
     recorded::{Recorder, Recording},
     verify_by_photo_id, verify_photo, verify_proof_only, verify_proof_transaction, CircuitInfo, LookupError,
     LookupResult, LookupSource, Refs, Report, RpcTrust, State, Status, TrustReport, VerifyContext,
-    MAX_LOOKUP_NODES, MAX_LOOKUP_RESPONSE_BYTES,
+    DEFAULT_LOOKUP_PAGE_SIZE, MAX_LOOKUP_NODES, MAX_LOOKUP_PAGES, MAX_LOOKUP_RESPONSE_BYTES,
 };
 use galaxy_xrpl::{ledger::RpcLedger, native::RpcClient, LedgerSource};
 use serde_json::{json, Value};
@@ -473,20 +473,43 @@ impl LookupSource for HttpNode {
 
     async fn lookup(&self, photo_id: &Hash32, network_id: u32) -> Result<LookupResult, LookupError> {
         let fail = |detail: &str| LookupError(detail.to_owned());
-        let mut url = self.base.join(&format!("v1/photos/{}", hex::encode(photo_id))).map_err(|_| fail("invalid node URL"))?;
-        url.query_pairs_mut().append_pair("network_id", &network_id.to_string());
-        let mut response = self.client.get(url).send().await.map_err(|_| fail("node request failed"))?;
-        if response.status() != reqwest::StatusCode::OK {
-            return Err(LookupError(format!("node answered HTTP {}", response.status().as_u16())));
+        let mut base = self.base.join(&format!("v1/photos/{}", hex::encode(photo_id))).map_err(|_| fail("invalid node URL"))?;
+        base.query_pairs_mut().append_pair("network_id", &network_id.to_string());
+        let mut result = LookupResult::default();
+        let mut seen = std::collections::HashSet::new();
+        let mut cursor: Option<String> = None;
+        for index in 0..MAX_LOOKUP_PAGES {
+            let mut url = base.clone();
+            if let Some(cursor) = &cursor { url.query_pairs_mut().append_pair("cursor", cursor); }
+            let page = async {
+                let mut response = self.client.get(url).send().await.map_err(|_| fail("node request failed"))?;
+                if response.status() != reqwest::StatusCode::OK {
+                    return Err(LookupError(format!("node answered HTTP {}", response.status().as_u16())));
+                }
+                if response.content_length().is_some_and(|n| n > MAX_LOOKUP_RESPONSE_BYTES as u64) {
+                    return Err(fail("oversized node response"));
+                }
+                let mut body = Vec::new();
+                while let Some(chunk) = response.chunk().await.map_err(|_| fail("node response interrupted"))? {
+                    if chunk.len() > MAX_LOOKUP_RESPONSE_BYTES - body.len() { return Err(fail("oversized node response")); }
+                    body.extend_from_slice(&chunk);
+                }
+                parse_lookup_response(&body, photo_id, network_id, DEFAULT_LOOKUP_PAGE_SIZE)
+            }.await;
+            let page = match page {
+                Ok(page) => page,
+                Err(error) if index == 0 => return Err(error),
+                Err(_) => break,
+            };
+            result.candidates.extend(page.result.candidates);
+            result.ranges = page.result.ranges;
+            result.incomplete |= page.result.incomplete;
+            let Some(next) = page.next_cursor else { return Ok(result); };
+            if !seen.insert(next.clone()) { break; }
+            cursor = Some(next);
         }
-        let mut body = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|_| fail("node response interrupted"))? {
-            if body.len() + chunk.len() > MAX_LOOKUP_RESPONSE_BYTES {
-                return Err(fail("oversized node response"));
-            }
-            body.extend_from_slice(&chunk);
-        }
-        parse_lookup_response(&body)
+        result.incomplete = true;
+        Ok(result)
     }
 }
 

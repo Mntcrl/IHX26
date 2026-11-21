@@ -1,0 +1,7 @@
+network_config = "../networks/xrpl-testnet.toml"
+data_dir = "../../target/galaxy-node-data"
+listen = "127.0.0.1:8080"
+public_url = "http://127.0.0.1:8080"
+allow_private_peers = true
+# Only enable private peer connections in a controlled local environment.
+discovery = false

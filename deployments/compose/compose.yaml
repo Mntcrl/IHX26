@@ -1,0 +1,40 @@
+name: galaxy
+
+x-node: &node
+  image: ${GALAXY_NODE_IMAGE:-galaxy-node:local}
+  build:
+    context: ../..
+    dockerfile: deployments/docker/Dockerfile
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  init: true
+
+services:
+  node-a:
+    <<: *node
+    ports: ['127.0.0.1:8081:8080']
+    volumes:
+      - state-a:/var/lib/galaxy
+      - ${GALAXY_NODE_CONFIG_DIR:-../node}/node-a.toml:/etc/galaxy/node.toml:ro
+      - ${GALAXY_NETWORK_CONFIG:-../networks/xrpl-testnet.toml}:/etc/galaxy/network.toml:ro
+  node-b:
+    <<: *node
+    ports: ['127.0.0.1:8082:8080']
+    volumes:
+      - state-b:/var/lib/galaxy
+      - ${GALAXY_NODE_CONFIG_DIR:-../node}/node-b.toml:/etc/galaxy/node.toml:ro
+      - ${GALAXY_NETWORK_CONFIG:-../networks/xrpl-testnet.toml}:/etc/galaxy/network.toml:ro
+  node-c:
+    <<: *node
+    ports: ['127.0.0.1:8083:8080']
+    volumes:
+      - state-c:/var/lib/galaxy
+      - ${GALAXY_NODE_CONFIG_DIR:-../node}/node-c.toml:/etc/galaxy/node.toml:ro
+      - ${GALAXY_NETWORK_CONFIG:-../networks/xrpl-testnet.toml}:/etc/galaxy/network.toml:ro
+
+volumes:
+  state-a:
+  state-b:
+  state-c:

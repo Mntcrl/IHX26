@@ -527,10 +527,25 @@ async fn hostile_inputs_do_not_panic() {
     let report = verify_photo(&png_bytes, None, &ctx).await;
     assert!(matches!(report.state, State::Invalid | State::Unsupported), "{report}");
 
-    assert!(galaxy_verifier::parse_lookup_response(b"{}").is_err());
-    let parsed = galaxy_verifier::parse_lookup_response(
-        br#"{"candidates":[{"manifest_tx":"00000000000000000000000000000000000000000000000000000000000000AB","proof_tx":null}],"ranges":[{"min":1,"max":2}],"incomplete":false}"#,
-    )
-    .unwrap();
-    assert_eq!(parsed.candidates[0].manifest_tx[31], 0xab);
+    let parse = galaxy_verifier::parse_lookup_response;
+    let photo = [0xabu8; 32];
+    assert!(parse(b"{}", &photo, 1, 1).is_err());
+    let mut document = serde_json::json!({
+        "protocol":"galaxy-node/v1","network":"xrpl-testnet","network_id":1,"software_version":"0.1.0",
+        "photo_id":hex::encode(photo),"indexed_from":1,"indexed_through":2,
+        "indexed_ranges":[{"from":1,"through":2}],"incomplete":false,"next_cursor":"page-2",
+        "extra":"forward-compatible",
+        "captures":[{"capture_id":hex::encode([0xafu8;32]),"manifest_tx":hex::encode_upper([0xabu8;32]),"ledger_index":2,"proof_tx":null}]
+    });
+    let body = document.to_string();
+    let parsed = parse(body.as_bytes(), &photo, 1, 1).unwrap();
+    assert_eq!(parsed.result.candidates[0].manifest_tx, [0xab; 32]);
+    assert_eq!(parsed.next_cursor.as_deref(), Some("page-2"));
+    assert!(parse(body.as_bytes(), &[0; 32], 1, 1).is_err());
+    assert!(parse(body.as_bytes(), &photo, 2, 1).is_err());
+    document["captures"][0]["manifest_tx"] = hex::encode([0xabu8; 32]).into();
+    assert!(parse(document.to_string().as_bytes(), &photo, 1, 1).is_err());
+    document["captures"][0]["manifest_tx"] = hex::encode_upper([0xabu8; 32]).into();
+    document.as_object_mut().unwrap().remove("next_cursor");
+    assert!(parse(document.to_string().as_bytes(), &photo, 1, 1).is_err());
 }
