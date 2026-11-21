@@ -50,5 +50,6 @@ Format: Context / Decision / Consequences. Ranges per agent are listed in spec Â
 | [0107](0107-node-peer-transport.md) | Guarded outbound peer transport |
 | [0108](0108-node-request-budgets.md) | Request budgets |
 | [0109](0109-node-independent-deployment.md) | Independent deployment and test faults |
+| [0110](0110-browser-verifier-network-policy.md) | Browser verifier network policy is inherited by a Blob worker |
 
 Ranges: orchestrator 0001-0009, ProtocolCrypto 0010-0019, ImageEvidence 0020-0029, Geometry 0030-0039, CircuitCore 0040-0044, CircuitGeo 0045-0049, XRPL 0050-0059, Attestation 0060-0069, IOS 0070-0079, MobileProver 0080-0089, Verifier 0090-0099, Node 0100-0109, WebVerifier 0110-0119, Security 0120-0129.
