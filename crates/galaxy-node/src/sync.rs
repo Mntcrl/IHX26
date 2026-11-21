@@ -1,5 +1,6 @@
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
+use futures_util::{stream, StreamExt};
 use galaxy_protocol::{AccountId, Hash32};
 use galaxy_xrpl::{
     keys,
@@ -18,6 +19,8 @@ use crate::{
     records::{self, Record},
     Config, Error, Result, RETRY_DELAY,
 };
+
+const HISTORY_IN_FLIGHT: usize = 16;
 
 pub(crate) struct Limiter {
     next: Mutex<Instant>,
@@ -226,6 +229,61 @@ async fn scan_account(
     )))
 }
 
+async fn fetch_history(
+    available: &[(&RpcClient, Vec<Range>)],
+    limiter: &Limiter,
+    index: u32,
+    next_source: usize,
+    mut error: Error,
+) -> Result<(usize, LedgerBackfill)> {
+    for (source, (rpc, ranges)) in available.iter().enumerate().skip(next_source) {
+        if !ranges.iter().any(|r| (r.from..=r.through).contains(&index)) {
+            continue;
+        }
+        limiter.acquire().await;
+        match rpc.ledger_transactions(index).await {
+            Ok(ledger) => return Ok((source, ledger)),
+            Err(e) => error = e.into(),
+        }
+    }
+    Err(error)
+}
+
+async fn scan_history(
+    config: &Config,
+    db: &Db,
+    available: &[(&RpcClient, Vec<Range>)],
+    limiter: &Limiter,
+    range: Range,
+) -> Result<()> {
+    // Fetch ahead on the shared limiter, but never commit a later result
+    // across an earlier RPC or checkpoint error in this contiguous range.
+    let mut results = std::pin::pin!(stream::iter(range.from..=range.through)
+        .map(|index| fetch_history(
+            available,
+            limiter,
+            index,
+            0,
+            Error::Invariant("no endpoint claims an available ledger"),
+        ))
+        .buffered(HISTORY_IN_FLIGHT));
+    while let Some(result) = results.next().await {
+        let (mut source, mut ledger) = result?;
+        let index = ledger.header.ledger_index;
+        loop {
+            match store_ledger(config, db, ledger) {
+                Ok(()) => break,
+                Err(error @ (Error::Xrpl(_) | Error::Chain(_))) => {
+                    (source, ledger) =
+                        fetch_history(available, limiter, index, source + 1, error).await?;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn scan_scope(
     config: &Config,
     db: &Db,
@@ -257,6 +315,34 @@ async fn scan_scope(
         let gap_end = db
             .next_covered(scope, missing)?
             .map_or(end, |covered| end.min(covered - 1));
+        if scope.is_empty() {
+            let through = available
+                .iter()
+                .flat_map(|(_, ranges)| ranges)
+                .filter(|r| (r.from..=r.through).contains(&missing))
+                .map(|r| r.through)
+                .max()
+                .ok_or(Error::Invariant("no endpoint claims an available ledger"))?
+                .min(gap_end)
+                .min(missing.saturating_add(budget - 1));
+            scan_history(
+                config,
+                db,
+                available,
+                limiter,
+                Range {
+                    from: missing,
+                    through,
+                },
+            )
+            .await?;
+            budget -= through - missing + 1;
+            let Some(next) = through.checked_add(1) else {
+                return Ok(false);
+            };
+            start = next;
+            continue;
+        }
         let mut progress = None;
         let mut error = Error::Invariant("no endpoint claims an available ledger");
         for (rpc, ranges) in available {
@@ -266,33 +352,21 @@ async fn scan_scope(
             else {
                 continue;
             };
-            let through = if scope.is_empty() {
-                missing
-            } else {
-                gap_end
-                    .min(covers.through)
-                    .min(missing.saturating_add(budget.min(128) - 1))
-            };
-            let result = if scope.is_empty() {
-                limiter.acquire().await;
-                match rpc.ledger_transactions(missing).await {
-                    Ok(ledger) => store_ledger(config, db, ledger),
-                    Err(error) => Err(error.into()),
-                }
-            } else {
-                scan_account(
-                    rpc,
-                    config,
-                    db,
-                    limiter,
-                    scope,
-                    Range {
-                        from: missing,
-                        through,
-                    },
-                )
-                .await
-            };
+            let through = gap_end
+                .min(covers.through)
+                .min(missing.saturating_add(budget.min(128) - 1));
+            let result = scan_account(
+                rpc,
+                config,
+                db,
+                limiter,
+                scope,
+                Range {
+                    from: missing,
+                    through,
+                },
+            )
+            .await;
             match result {
                 Ok(()) => {
                     progress = Some(through);

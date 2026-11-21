@@ -22,6 +22,7 @@ use galaxy_xrpl::{
 use serde_json::{json, Value};
 use tokio::{
     net::TcpListener,
+    sync::Notify,
     task::JoinHandle,
     time::{sleep, timeout},
 };
@@ -411,6 +412,64 @@ async fn resumes_at_gap_and_serves_replayed_proof_report() {
         .iter()
         .any(|check| check["id"] == "capture.photo_binding" && check["status"] == "not_applicable"));
     assert_eq!(report["proof_tx"], refs["proof_tx"]);
+}
+
+#[tokio::test]
+async fn backfill_fetches_ahead_without_committing_past_an_rpc_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let listener = bind().await;
+    let network =
+        REPLAY_NETWORK.replace("https://s.altnet.rippletest.net:51234/", &origin(&listener));
+    let fixture = Arc::new(Fixture::new());
+    fixture.gap.store(false, Ordering::Relaxed);
+    let fetched_ahead = Arc::new(Notify::new());
+    let _rpc = serve(
+        listener,
+        Router::new()
+            .route(
+                "/",
+                post(
+                    |State((fixture, fetched_ahead)): State<(Arc<Fixture>, Arc<Notify>)>,
+                     Json(request): Json<Value>| async move {
+                        if request["method"] != "ledger" {
+                            return rpc(State(fixture), Json(request)).await;
+                        }
+                        match request["params"][0]["ledger_index"].as_u64().unwrap() {
+                            1000 => fetched_ahead.notified().await,
+                            1001 => return Json(json!({"result":{"status":"error","error":"tooBusy"}})),
+                            _ => {}
+                        }
+                        let is_later = request["params"][0]["ledger_index"] == 1002;
+                        let response = rpc(State(fixture), Json(request)).await;
+                        if is_later {
+                            fetched_ahead.notify_one();
+                        }
+                        response
+                    },
+                ),
+            )
+            .with_state((fixture, fetched_ahead)),
+    );
+    let listener = bind().await;
+    let config = config(
+        dir.path(),
+        address(&listener),
+        &network,
+        "live = false\ndiscovery = false\nend_ledger = 1002",
+    );
+    let db = Db::open(&config).unwrap();
+    let sources = sync::Sources::new(&config).unwrap();
+    let limiter = sync::Limiter::new(50);
+    let result = timeout(
+        Duration::from_secs(5),
+        sync::catch_up(&config, &db, &sources, &limiter),
+    )
+    .await
+    .expect("the first ledger is withheld until the third is fetched");
+    assert!(matches!(result, Err(Error::Xrpl(_))));
+    assert!(db.hash(1000).unwrap().is_some());
+    assert!(db.hash(1001).unwrap().is_none());
+    assert!(db.hash(1002).unwrap().is_none());
 }
 
 #[tokio::test]

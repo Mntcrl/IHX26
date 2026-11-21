@@ -1,0 +1,12 @@
+network_config = "../networks/xrpl-testnet.toml"
+data_dir = "../../target/photon-node/ledger"
+listen = "127.0.0.1:8100"
+public_url = "https://cowboy-annex-ministry-marc.trycloudflare.com"
+trusted_proxies = ["127.0.0.1", "::1"]
+sync_mode = "ledger"
+live = true
+discovery = false
+
+[limits]
+sync_requests_per_second = 20
+ledgers_per_pass = 512

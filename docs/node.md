@@ -22,6 +22,26 @@ For another configuration set `GALAXY_NODE_CONFIG=/path/to/node.toml`. The execu
 - Optional top-level `trusted_proxies = ["127.0.0.1", "::1"]` allows those exact TCP peer IPs to supply one bare client IP in `X-Forwarded-For`. The default is empty. Configure trusted proxies to **overwrite**, not append to, any client-supplied `X-Forwarded-For`. Missing, invalid, repeated, or comma-separated values use the TCP peer's bucket.
 - `log_filter` defaults to `galaxy_node=info`; `RUST_LOG` overrides it for the standalone daemon. No request/photo IDs are logged by default.
 
+## Demo node on this PC
+
+For the PHØTON demo, build the release binary and start both Testnet profiles with the user systemd manager:
+
+```sh
+CARGO_TARGET_DIR=target/NodeOps1 scripts/with-slot.sh --heavy cargo build --locked --release -p galaxy-node
+scripts/photon-node.sh start
+scripts/photon-node.sh status
+curl -fsS "$(scripts/photon-node.sh url)/v1/status"
+```
+
+The quick tunnel forwards HTTPS to a loopback ingress on port 8098; the ingress sends one validated `CF-Connecting-IP` as `X-Forwarded-For` and never passes a caller-supplied `X-Forwarded-For` to the node. The API is read-only, and only the tunnel is publicly reachable. This workstation uses `--protocol http2` because QUIC to Cloudflare timed out; HTTP/2 uses outbound TCP port 7844.
+
+- The public route initially serves the account profile (port 8099). It scans the phone and desktop publishers and discovers additional accounts from live Galaxy notices. Its lookup can find a capture but does not establish global absence: an empty response has `incomplete: true`.
+- The ledger profile (port 8100) scans from Testnet inception, ledger 22,480,444, with live updates. It fetches up to 16 historical ledgers concurrently under the shared sync budget and commits historical results in order. Run `scripts/photon-node.sh promote` once the ledger status reports `incomplete: false`. This switches the local route without changing the public origin or restarting `cloudflared`.
+- State and runtime TOML files live under `target/photon-node/` (separate account and ledger databases). Do not publish the directory. The default rate is set in [`photon-demo.toml`](../deployments/node/photon-demo.toml). To change it, stop only `photon-node.service`, edit that rate, and run `scripts/photon-node.sh start ledger`; the database is reused.
+- The units survive an operator shell or harness exit. Check `loginctl show-user "$USER" -p Linger` for logout behavior; transient units do not survive reboot. The tunnel does not automatically restart. `status` compares the running URL with the configured one and checks that the public endpoint responds. An explicit `scripts/photon-node.sh stop` also stops the tunnel; a subsequent `start` will get a new URL. Update the web verifier's default origin if this happens.
+
+The first live backfill measured 9.34 contiguous historical ledgers/s over two minutes at the configured 20 logical RPC calls/s ceiling. Use the end of the range starting at 22,480,444 to measure historical progress; the highest indexed ledger can already be near the tip because of the live subscription.
+
 ## Cache and coverage
 
 `index.sqlite3` and its SQLite sidecars are disposable. Stop the daemon before `galaxy-node rebuild --config node.toml`; it clears the cache and resynchronizes while preserving `node.ed25519`. The node identity is a private Ed25519 seed (owner-only on Unix), not a wallet key. Never publish the state directory.
