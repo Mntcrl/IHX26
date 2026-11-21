@@ -72,7 +72,7 @@ struct CaptureProgressScreen: View {
                 }
             }
             .background(Color(uiColor: .systemGroupedBackground))
-            .navigationTitle("Galaxy · XRPL Testnet")
+            .navigationTitle("PHØTON · XRPL Testnet")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -216,7 +216,7 @@ struct CaptureProgressScreen: View {
                     .accessibilityHidden(true)
                 Text("CERTIFIED")
             }.font(.title2.bold()).foregroundStyle(.green)
-            Text("Physical consistency certified under the Galaxy policy on XRPL Testnet.")
+            Text("Physical consistency certified under the pinned policy on XRPL Testnet.")
             if let details {
                 Text("Photo ID").font(.caption).foregroundStyle(.secondary)
                 Text(details.photoId).font(.caption.monospaced()).textSelection(.enabled)

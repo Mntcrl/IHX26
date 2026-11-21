@@ -1,4 +1,4 @@
-# XRPL Galaxy
+# PHØTON
 
 SwiftUI camera app that registers with Apple App Attest, submits to XRPL Testnet and generates a Groth16 proof on the iPhone. It exports the original PNG or JPEG with verification references after the PROOF validates.
 

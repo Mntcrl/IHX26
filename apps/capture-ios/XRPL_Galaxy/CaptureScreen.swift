@@ -94,7 +94,7 @@ struct CaptureScreen: View {
                 .accessibilityLabel("Scene class of the next capture")
             } else {
                 Button { showCertification = true } label: {
-                    Chip(systemImage: "checkmark.shield", text: model.readyToCapture ? "Galaxy · Testnet" : "Certification & setup")
+                    Chip(systemImage: "checkmark.shield", text: model.readyToCapture ? "PHØTON · Testnet" : "Certification & setup")
                 }
             }
             Spacer()

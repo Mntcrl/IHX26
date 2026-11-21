@@ -31,8 +31,8 @@ enum FlowError: Error {
         case .ProofVerification: return "The generated proof did not verify locally."
         case .Image: return "The certified image could not be packaged."
         case .EvidenceBundle: return "The protected evidence bundle could not be restored."
-        case .Transaction: return "GalaxyCore rejected the transaction."
-        default: return "GalaxyCore could not complete the operation."
+        case .Transaction: return "PHØTON rejected the transaction."
+        default: return "PHØTON could not complete the operation."
         }
     }
 }

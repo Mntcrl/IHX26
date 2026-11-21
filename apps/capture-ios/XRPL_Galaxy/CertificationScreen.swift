@@ -70,7 +70,7 @@ struct CertificationScreen: View {
                     }
                 }
             }
-            .navigationTitle("Galaxy Certification")
+            .navigationTitle("PHØTON Certification")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
     }
