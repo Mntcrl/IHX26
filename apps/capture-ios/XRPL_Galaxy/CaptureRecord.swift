@@ -59,6 +59,7 @@ nonisolated struct CaptureRecord: Codable, Identifiable, Sendable {
             throw CaptureStore.Failure.invalidTransition
         }
         state = next
+        certification?.enteredAt[next.rawValue] = Date()
         self.reasons = reasons
     }
 }

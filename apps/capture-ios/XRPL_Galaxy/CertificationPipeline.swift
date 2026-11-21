@@ -12,6 +12,8 @@ struct CertificationPipeline {
 
     func run(record: CaptureRecord, cancellation: ProvingCancellation,
              onUpdate: (CaptureRecord) -> Void, onCleanupWarning: () -> Void,
+             onWaiting: @escaping @MainActor @Sendable (UInt32, UInt32?) -> Void,
+             onChallenge: (ChallengeReveal) -> Void,
              onProgress: @escaping @Sendable (CaptureProgressInfo) -> Void) async throws {
         guard var journal = record.certification, journal.descriptorId == pin.id,
               journal.network == pin.settings.xrpl.networkId,
@@ -22,15 +24,14 @@ struct CertificationPipeline {
         var row = record
         let checkpoint = store.evidenceURL(row)
         var resolvedChallenge: CaptureChallenge?
-        var evaluation: CaptureEvaluation?
         var witness: CaptureWitness?
 
         func advance(_ next: CaptureState, reasons: [String] = []) throws {
-            journal.enteredAt[next.rawValue] = Date()
             var updated = row
             updated.certification = journal
             try updated.transition(to: next, reasons: reasons)
             try store.save(updated)
+            if let saved = updated.certification { journal = saved }
             row = updated
             onUpdate(row)
         }
@@ -41,9 +42,13 @@ struct CertificationPipeline {
                   let inclusion = journal.captureLedger, let selection = journal.selection else {
                 throw FlowError.paused("The saved CAPTURE or selection header is incomplete. No new challenge will be chosen.")
             }
+            let start = Date()
             let fixed = try pin.circuit.deriveChallenge(core: statement.core, captureTx: capture.hash,
                                                        captureLedger: inclusion, selectionLedger: selection.value)
             resolvedChallenge = fixed
+            let end = Date()
+            onChallenge(ChallengeReveal(ledger: selection.index, tiles: Array(fixed.info().sampledTiles),
+                                        startedAt: start, revealedAt: end))
             return fixed
         }
 
@@ -86,37 +91,54 @@ struct CertificationPipeline {
                 case .waitingSelectionLedger:
                     guard let statement = journal.statement, let inclusion = journal.captureLedger else { throw incompleteJournal }
                     let index = try pin.circuit.selectionLedgerIndex(core: statement.core, captureLedger: inclusion)
+                    onWaiting(index, nil)
                     if journal.captureCloseTime == nil {
                         journal.captureCloseTime = try await ledger.header(index: inclusion).closeTime
                     }
-                    journal.selection = LedgerHeader(try await ledger.waitForHeader(index: index))
+                    journal.selection = LedgerHeader(try await ledger.waitForHeader(index: index) { validated in
+                        onWaiting(index, validated)
+                    })
                     try advance(.generatingWitness)
                 case .generatingWitness:
                     let fixed = try challenge()
+                    proofTrace("witness preparation: check proof window")
                     try await requireProofWindow(fixed.info().proofDeadline)
+                    proofTrace("witness preparation: await pinned prover")
                     try await host.open(pin)
+                    proofTrace("witness preparation: evaluate evidence")
                     let evaluated = try await host.evaluate(challenge: fixed, checkpoint: checkpoint)
-                    evaluation = evaluated
+                    proofTrace("witness preparation: build witness input")
                     witness = try await host.witness(evaluation: evaluated)
+                    proofTrace("witness input returned; checkpoint generating proof")
                     try advance(.generatingProof)
+                    proofTrace("generating proof checkpoint returned")
                 case .generatingProof:
-                    let fixed = try challenge()
-                    try await requireProofWindow(fixed.info().proofDeadline)
-                    try await host.open(pin)
                     let readyWitness: CaptureWitness
-                    if let witness { readyWitness = witness }
-                    else if let evaluation { readyWitness = try await host.witness(evaluation: evaluation) }
-                    else {
+                    if let witness {
+                        readyWitness = witness
+                    } else {
+                        // A resumed operation has no in-memory witness or fresh window check.
+                        let fixed = try challenge()
+                        proofTrace("recovery: await proof window")
+                        try await requireProofWindow(fixed.info().proofDeadline)
+                        proofTrace("proof window returned; await pinned prover")
+                        try await host.open(pin)
+                        proofTrace("pinned prover returned")
+                        proofTrace("await evidence evaluation")
                         let restored = try await host.evaluate(challenge: fixed, checkpoint: checkpoint)
+                        proofTrace("evidence evaluation returned; await witness build")
                         readyWitness = try await host.witness(evaluation: restored)
+                        proofTrace("witness build returned")
                     }
+                    proofTrace("await prove")
                     let proof = try await host.prove(witness: readyWitness, cancellation: cancellation, progress: onProgress)
-                    evaluation = nil
+                    proofTrace("prove returned; checkpoint proof")
                     witness = nil
                     journal.proofBytes = proof.proof
                     journal.witnessSeconds = proof.witnessSeconds
                     journal.proveSeconds = proof.proveSeconds
                     try advance(.localProofVerification)
+                    proofTrace("proof checkpoint returned")
                 case .localProofVerification:
                     guard let proof = journal.proofBytes else { throw incompleteJournal }
                     let fixed = try challenge()
@@ -137,6 +159,7 @@ struct CertificationPipeline {
                         let index = try await ledger.confirm(proof, address: wallet.classicAddress)
                         guard index > selected.index, index <= fixed.info().proofDeadline else { throw GalaxyError.LedgerWindow }
                         journal.proofLedger = index
+                        journal.proofValidatedAt = Date()
                         var updated = row
                         updated.certification = journal
                         try store.save(updated)

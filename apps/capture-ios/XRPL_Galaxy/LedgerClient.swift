@@ -108,13 +108,26 @@ private struct WalletHead: Codable {
     let accountTxnId: Data
 }
 
+/// Inherited by structured child tasks (including parallel fee/account reads).
+enum LedgerRetry {
+    @TaskLocal static var report: (@MainActor @Sendable (UUID, Int?) -> Void)?
+}
+
 actor LedgerClient {
     private let network: XrplNetwork
-    private let endpoint: URL
+    private let endpoints: [URL]
+    private var preferredEndpoint = 0
+    private var checkedEndpoints: Set<URL> = []
     private let session: URLSession
     private let responseLimit = 1_048_576
     private let headFile: URL
     private static let preparationPurpose = "account-prepare"
+    private static let requestSeconds: TimeInterval = 8
+    private static let retryDelay: Duration = .milliseconds(300)
+
+    private enum TransportFailure: Error {
+        case transientHTTP
+    }
 
     init(configuration: CaptureNetwork) throws {
         guard configuration.xrpl.networkId == 1, !configuration.xrpl.allowMainnet,
@@ -123,11 +136,14 @@ actor LedgerClient {
             throw FlowError.failed("The configured network is not an HTTPS XRPL Testnet endpoint.")
         }
         self.network = configuration.xrpl
-        self.endpoint = endpoint
+        // Official public Testnet alternatives (xrpl.org/docs/tutorials/public-servers).
+        endpoints = [endpoint, URL(string: "https://testnet.xrpl-labs.com/")!,
+                     URL(string: "https://testnet.honeycluster.io/")!]
         headFile = try RegistrationStore.root().appending(path: "wallet-head.json")
         let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 20
-        config.timeoutIntervalForResource = 25
+        config.timeoutIntervalForRequest = Self.requestSeconds
+        config.timeoutIntervalForResource = Self.requestSeconds
+        config.waitsForConnectivity = false
         config.urlCache = nil
         config.httpShouldSetCookies = false
         session = URLSession(configuration: config, delegate: NoRedirects(), delegateQueue: nil)
@@ -148,9 +164,14 @@ actor LedgerClient {
         return try xrplParseValidatedLedger(index: index, body: body)
     }
 
-    func waitForHeader(index: UInt32) async throws -> ValidatedLedger {
-        while try await latestIndex() < index { try await waitForLedger() }
-        return try await header(index: index)
+    func waitForHeader(index: UInt32,
+                       onValidated: @MainActor @Sendable (UInt32) -> Void) async throws -> ValidatedLedger {
+        while true {
+            let validated = try await latestIndex()
+            await onValidated(validated)
+            if validated >= index { return try await header(index: index) }
+            try await Task.sleep(for: .seconds(1))
+        }
     }
 
     func funding(address: String) async throws -> FundingStatus {
@@ -252,6 +273,10 @@ actor LedgerClient {
     func confirm(_ stored: JournalTransaction, address: String) async throws -> UInt32 {
         let signed = stored.value
         var submitted = false
+        var submitRetries = 0
+        let retryID = UUID()
+        let report = LedgerRetry.report
+        do {
         while true {
             try Task.checkCancellation()
             let latest = try await latestIndex()
@@ -265,25 +290,44 @@ actor LedgerClient {
                     throw FlowError.failed("The transaction validated without tesSUCCESS. XRPL may have charged its fee.")
                 }
                 // Validated tec transactions do not advance AccountTxnID.
+                if submitRetries > 0 { await report?(retryID, nil) }
                 try storeHead(signed, address: address)
                 return index
             case .expired:
                 throw FlowError.failed("The signed transaction expired without validated inclusion.")
             case .pending:
                 if latest < signed.lastLedger && !submitted {
-                    let response = try await rpc(xrplSubmitRequest(network: network, record: signed, validatedLedger: latest))
-                    _ = try xrplParseSubmit(network: network, record: signed, body: response)
+                    do {
+                        let response = try await rpc(xrplSubmitRequest(network: network, record: signed, validatedLedger: latest),
+                                                     allowReplay: false)
+                        _ = try xrplParseSubmit(network: network, record: signed, body: response)
+                        if submitRetries > 0 { await report?(retryID, nil) }
+                    } catch {
+                        try Task.checkCancellation()
+                        guard Self.isTransient(error), submitRetries < endpoints.count - 1 else { throw error }
+                        submitRetries += 1
+                        await report?(retryID, submitRetries)
+                        // The server may have received the blob. Fail over and query the
+                        // persisted hash before even considering another submit.
+                        try await Task.sleep(for: Self.retryDelay)
+                        continue
+                    }
                     submitted = true
                 }
             }
             try await waitForLedger()
+        }
+        } catch {
+            if submitRetries > 0 { await report?(retryID, nil) }
+            throw error
         }
     }
 
     private func waitForLedger() async throws { try await Task.sleep(for: .seconds(3)) }
 
     private func request(url: URL, body: Data) -> URLRequest {
-        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData,
+                                 timeoutInterval: Self.requestSeconds)
         request.httpMethod = "POST"
         request.httpBody = body
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -295,10 +339,72 @@ actor LedgerClient {
               http.url == expected else { throw GalaxyError.Rpc }
     }
 
-    private func rpc(_ body: String) async throws -> String {
+    private func rpc(_ body: String, allowReplay: Bool = true) async throws -> String {
+        let id = UUID()
+        let report = LedgerRetry.report
+        let originalEndpoint = preferredEndpoint
+        let maxAttempts = allowReplay ? endpoints.count : 1
+        let payload = Data(body.utf8)
+        do {
+            for attempt in 0..<maxAttempts {
+                try Task.checkCancellation()
+                if attempt > 0 {
+                    await report?(id, attempt)
+                    try await Task.sleep(for: Self.retryDelay)
+                }
+                let index = (originalEndpoint + attempt) % endpoints.count
+                let endpoint = endpoints[index]
+                do {
+                    let serverInfo = xrplServerInfoRequest()
+                    let response: String
+                    if body == serverInfo {
+                        response = try await send(payload, to: endpoint)
+                        _ = try xrplLatestValidated(network: network, body: response)
+                        checkedEndpoints.insert(endpoint)
+                    } else {
+                        if !checkedEndpoints.contains(endpoint) {
+                            let info = try await send(Data(serverInfo.utf8), to: endpoint)
+                            _ = try xrplLatestValidated(network: network, body: info)
+                            checkedEndpoints.insert(endpoint)
+                        }
+                        response = try await send(payload, to: endpoint)
+                    }
+                    preferredEndpoint = index
+                    if attempt > 0 { await report?(id, nil) }
+                    return response
+                } catch {
+                    try Task.checkCancellation()
+                    guard Self.isTransient(error) else { throw error }
+                    if !allowReplay { preferredEndpoint = (index + 1) % endpoints.count }
+                    if attempt + 1 == maxAttempts { throw error }
+                }
+            }
+            throw GalaxyError.Rpc
+        } catch {
+            await report?(id, nil)
+            if error is TransportFailure && allowReplay { throw GalaxyError.Rpc }
+            throw error
+        }
+    }
+
+    private static func isTransient(_ error: Error) -> Bool {
+        if error is TransportFailure { return true }
+        switch (error as? URLError)?.code {
+        case .timedOut, .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed,
+             .networkConnectionLost, .notConnectedToInternet, .resourceUnavailable:
+            return true
+        default: return false
+        }
+    }
+
+    private func send(_ body: Data, to endpoint: URL) async throws -> String {
         try Task.checkCancellation()
-        let (stream, response) = try await session.bytes(for: request(url: endpoint, body: Data(body.utf8)))
+        let (stream, response) = try await session.bytes(for: request(url: endpoint, body: body))
         defer { stream.task.cancel() }
+        if let http = response as? HTTPURLResponse, http.url == endpoint,
+           http.statusCode == 429 || (500..<600).contains(http.statusCode) {
+            throw TransportFailure.transientHTTP
+        }
         try check(response, expected: endpoint)
         guard response.expectedContentLength <= Int64(responseLimit) else { throw GalaxyError.Rpc }
         var bytes = Data()

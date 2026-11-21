@@ -1,5 +1,6 @@
 import ARKit
 import SwiftUI
+import UIKit
 
 struct CaptureScreen: View {
     @Environment(\.scenePhase) private var scenePhase
@@ -8,9 +9,17 @@ struct CaptureScreen: View {
     @State private var showDeveloper = false
     @State private var showCertification = false
     @State private var showGallery = false
+    @State private var showProgress = false
+    @State private var excludedAttempt: UUID?
 
     private var canShutter: Bool {
         capture.isCalibration ? capture.canCapture && model.idle : capture.canCertify && model.readyToCapture
+    }
+
+    private var shouldRunCamera: Bool {
+        // Keep the sensors through t+ and the IMU window. Once the frozen samples
+        // are handed to the writer, the rest of certification needs no live sensors.
+        scenePhase == .active && (model.pending == nil || (model.takingPicture && !capture.writing))
     }
 
     var body: some View {
@@ -54,9 +63,15 @@ struct CaptureScreen: View {
             capture.onFinished = { [weak model] row in model?.cameraFinished(row) }
             capture.onStorageFailure = { [weak model] row in model?.cameraStorageFailed(row) }
             if !capture.isStaticDiagnostic { model.setActive(phase == .active) }
-            capture.setActive(phase == .active)
         }
+        .onChange(of: shouldRunCamera, initial: true) { _, run in capture.setActive(run) }
         .onChange(of: model.pin?.limits, initial: true) { _, limits in capture.policyLimits = limits }
+        .onChange(of: scenePhase == .active && model.isCertifying, initial: true) { _, keepAwake in
+            UIApplication.shared.isIdleTimerDisabled = keepAwake
+        }
+        .fullScreenCover(isPresented: $showProgress) {
+            CaptureProgressScreen(model: model, excluding: excludedAttempt)
+        }
         .sheet(isPresented: $showDeveloper) { DeveloperScreen(capture: capture) }
         .sheet(isPresented: $showCertification) { CertificationScreen(model: model) }
         .sheet(isPresented: $showGallery) { GalleryScreen(model: model) }
@@ -117,7 +132,13 @@ struct CaptureScreen: View {
                     Text(String(format: "%.0f fps", capture.overlay.framesPerSecond))
                         .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
                 } else if let label = model.busy {
-                    Chip(systemImage: "hourglass", text: label)
+                    if model.isCertifying {
+                        Button { openProgress() } label: { Chip(systemImage: "hourglass", text: "Certification progress") }
+                    } else {
+                        Chip(systemImage: "hourglass", text: label)
+                    }
+                } else if model.lastAttempt != nil {
+                    Button { openProgress() } label: { Chip(systemImage: "list.bullet", text: "Last attempt") }
                 }
             }
             HStack(spacing: 6) {
@@ -140,7 +161,14 @@ struct CaptureScreen: View {
     private var shutter: some View {
         Button {
             if capture.isCalibration { capture.capture() }
-            else { model.shutter(capture) }
+            else {
+                let prior = model.lastAttempt?.id
+                model.shutter(capture)
+                if model.preparingShutter {
+                    excludedAttempt = prior
+                    showProgress = true
+                }
+            }
         } label: {
             ZStack {
                 Circle().stroke(.white, lineWidth: 4).frame(width: 74, height: 74)
@@ -150,6 +178,11 @@ struct CaptureScreen: View {
         .disabled(!canShutter)
         .accessibilityLabel("Capture photo and depth")
         .accessibilityHint(capture.isCalibration ? "Private calibration only" : "Publishes to XRPL Testnet if the capture is eligible")
+    }
+
+    private func openProgress() {
+        excludedAttempt = nil
+        showProgress = true
     }
 
     // MARK: - Status text

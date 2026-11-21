@@ -15,8 +15,15 @@ final class CertificationController {
     private(set) var artifactMessage: String?
     private(set) var artifactsReady = false
     private(set) var loaded = false
+    private(set) var preparingShutter = false
     private(set) var takingPicture = false
     private(set) var progress: CaptureProgressInfo?
+    private(set) var proofPhases: [CaptureProgressInfo] = []
+    private(set) var challengeReveal: ChallengeReveal?
+    private(set) var selectionTarget: UInt32?
+    private(set) var validatedIndex: UInt32?
+    private var ledgerRetries: [UUID: Int] = [:]
+    var ledgerRetry: Int? { ledgerRetries.values.max() }
     var imageFormat: CaptureImageFormat = .jpeg
     var keepEvidence = false
 
@@ -37,6 +44,7 @@ final class CertificationController {
     var hasRegistration: Bool { registration?.registrationTx != nil }
     var idle: Bool { busy == nil && !takingPicture }
     var readyToCapture: Bool { loaded && artifactsReady && wallet != nil && hasRegistration && pending == nil && idle }
+    var isCertifying: Bool { preparingShutter || takingPicture || (pending != nil && busy != nil) }
     var readyToRegister: Bool {
         guard loaded, let wallet, let build, let pin, idle, pending == nil, !hasRegistration else { return false }
         if let registration {
@@ -145,12 +153,18 @@ final class CertificationController {
     }
 
     func shutter(_ acquisition: Acquisition) {
-        guard readyToCapture, acquisition.canCertify, let pin, let ledger, let wallet, let registration,
+        guard active, readyToCapture, acquisition.canCertify, let pin, let ledger, let wallet, let registration,
               let deviceTx = registration.registrationTx else { return }
         pausedByUser = false
         let format = imageFormat
         let retain = keepEvidence
+        preparingShutter = true
+        proofPhases.removeAll()
+        challengeReveal = nil
+        selectionTarget = nil
+        validatedIndex = nil
         perform("Reading pre-capture ledger") { [self, weak acquisition] in
+            defer { preparingShutter = false }
             let nonce = try randomBytes(count: 32)
             let header = try await ledger.latestHeader()
             try Task.checkCancellation()
@@ -164,8 +178,7 @@ final class CertificationController {
                                                accountId: wallet.accountId, preledger: LedgerHeader(header),
                                                imageFormat: format, keepEvidence: retain, nonce: nonce,
                                                accountAddress: wallet.classicAddress,
-                                               attestationEnvironment: registration.build.environmentName,
-                                               enteredAt: [CaptureState.acquiring.rawValue: Date()])
+                                               attestationEnvironment: registration.build.environmentName)
             acquisition.capture(certification: journal)
             guard let row = acquisition.record, row.certification?.nonce == nonce, row.state == .acquiring else {
                 throw FlowError.paused("The shutter could not start. Check protected storage and try again.")
@@ -202,6 +215,7 @@ final class CertificationController {
         let cancellation = ProvingCancellation()
         let token = UUID()
         progressToken = token
+        if row.state == .generatingWitness || row.state == .generatingProof { proofPhases.removeAll() }
         provingCancellation = cancellation
         perform("Certifying capture") { [self] in
             defer { provingCancellation = nil; progress = nil; progressToken = nil }
@@ -209,9 +223,21 @@ final class CertificationController {
                                             registration: registration, store: store)
                 .run(record: row, cancellation: cancellation, onUpdate: { replace($0) }, onCleanupWarning: {
                     message = "The certified file is safe, but this phone could not remove its temporary private evidence."
+                }, onWaiting: { [weak self] target, validated in
+                    guard let self, self.progressToken == token else { return }
+                    self.selectionTarget = target
+                    self.validatedIndex = validated
+                }, onChallenge: { reveal in
+                    if challengeReveal?.ledger != reveal.ledger { challengeReveal = reveal }
                 }, onProgress: { [weak self] tick in
                     Task { @MainActor [weak self] in
                         guard let self, self.progressToken == token else { return }
+                        if let index = self.proofPhases.firstIndex(where: { $0.phase == tick.phase }) {
+                            if tick.seconds == nil && self.proofPhases[index].seconds != nil { return }
+                            self.proofPhases[index] = tick
+                        } else {
+                            self.proofPhases.append(tick)
+                        }
                         self.progress = tick
                     }
                 })
@@ -268,13 +294,18 @@ final class CertificationController {
         busy = label
         message = nil
         operation = Task { [self] in
-            do { try await body() }
+            do {
+                try await LedgerRetry.$report.withValue({ [weak self] id, retry in
+                    self?.ledgerRetries[id] = retry
+                }) { try await body() }
+            }
             catch is CancellationError { message = "Paused. Resume to continue with the same ledger statement and signed transactions." }
             catch {
                 if Task.isCancelled { message = "Paused. Resume to continue with the saved operation." }
                 else { message = FlowError.message(error) }
             }
             operation = nil
+            ledgerRetries.removeAll()
             busy = nil
             if scheduledResume {
                 scheduledResume = false

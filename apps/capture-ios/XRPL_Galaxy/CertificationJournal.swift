@@ -33,6 +33,7 @@ struct CertificationJournal: Codable, Sendable {
     var proofMemo: JournalMemo?
     var proof: JournalTransaction?
     var proofLedger: UInt32?
+    var proofValidatedAt: Date?
     var witnessSeconds: Double?
     var proveSeconds: Double?
     var enteredAt: [String: Date] = [:]
@@ -77,4 +78,11 @@ extension CaptureStore {
 struct CaptureProgressInfo: Sendable {
     let phase: String
     let seconds: Double?
+}
+
+struct ChallengeReveal: Sendable {
+    let ledger: UInt32
+    let tiles: [UInt8]
+    let startedAt: Date
+    let revealedAt: Date
 }

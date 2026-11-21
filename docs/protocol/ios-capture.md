@@ -8,6 +8,7 @@ The capture app acquires synchronized ARKit RGB/LiDAR and motion, obtains a real
 |---|---|
 | `XRPL_GalaxyApp.swift` | entry point; DEBUG launch argument `--app-attest-probe` selects the App Attest diagnostic |
 | `CaptureScreen.swift` | portrait/landscape camera, shutter, certification entry and state |
+| `CaptureProgressScreen.swift` | live certification timeline, XRPL ledger ticker, sampled-tile reveal and result card |
 | `DeveloperScreen.swift` | sensor status, selected video format, depth coverage, current baseline, IMU/AR clock summary, "Export last raw capture" |
 | `Acquisition.swift` | ARKit session, rolling buffer, t−/t0/t+ selection, quality gates, freeze, state transitions |
 | `FrameSnapshot.swift` | copies the needed parts of an `ARFrame` (never retains it); capture issue codes |
@@ -70,6 +71,14 @@ The app persists the assertion, the signed CAPTURE before first submission, vali
 
 Pause, network failure, an RPC history gap or a lock/unlock never authorize a new CAPTURE or challenge. A journaled transaction is queried by hash first and only the same blob may be resubmitted while valid. Validated `tec` or conclusively searched expiry is terminal. Proving may be restarted on the same inputs before signing the PROOF. **Certification & setup** exposes status, resume and pause; its history includes attempts that produced no image.
 
+## Live certification view
+
+Press the certification shutter to open the progress view. The phase timeline follows the saved attempt; phase times are elapsed between journal checkpoints and can include network waits or pauses. The proof substeps report their actual callback timings, and the constraint count comes from the bundled circuit descriptor.
+
+After the CAPTURE validates, the app reads the validated Testnet index about once a second until the challenge ledger is available. The countdown measures ledgers, not seconds. The reveal highlights the actual sampled tiles on the sensor-native image. The phone stays awake while the attempt is running in the foreground. After the shutter window freezes, ARKit, motion and Bluetooth pause until the attempt ends; the camera then reacquires tracking and depth. **Hide** closes the progress view without pausing certification; reopen it from the progress or last-attempt chip.
+
+The **CERTIFIED → Verify** link opens that photo’s ID, Testnet transaction references and export actions. Export the original and verify it independently with the browser verifier or CLI; a transaction explorer page alone does not verify an image. **INCONCLUSIVE** names the checks that failed and suggests a way to retry; it does not publish a PROOF.
+
 ## Gallery and exports
 
 - Tap the photo icon on the camera screen to open **Gallery**. Certification attempts with a saved image are shown newest first, with state and failure reasons. **Calibration captures** lists matching `<uuid>.gxrw` / `<uuid>.label.json` pairs in `Documents/galaxy-fixtures` separately as **Not certified**. Gallery reads these fixtures without changing or sharing either file.
@@ -95,6 +104,10 @@ Generate an App Attest key, read the exact validated registration ledger, and jo
 ## App Attest client
 
 The default `capture-off` build omits the App Attest entitlement and uses the observed development environment (ADR 0070). Explicit `capture-development` or `capture-production` builds use the corresponding entitlement and matching Info.plist value and require a compatible profile. The build’s app ID is checked against the Rust-pinned Testnet list; it is not inferred from an error or the RPC. A single-party proving setup is shown as **Development setup (Testnet)**; certification is not a production trust claim.
+
+## Offline proving self-test (Debug only)
+
+Open **Developer → Proving self-test → Run proving self-test**. The app pauses the capture sensors and reads one existing genuine calibration GXRW without modifying it. The test runs on the phone without network requests, signing, or transaction publication; it cannot certify a photo. It records only wall-clock timings, memory footprint, thread count and thermal state in `Documents/galaxy-proving-diagnostics/<UUID>.log`, with complete file protection and backup exclusion.
 
 ## Morning checklist (Mac and physical iPhone)
 

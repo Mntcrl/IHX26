@@ -1,8 +1,19 @@
 import SwiftUI
+import UIKit
 
 struct DeveloperScreen: View {
     @Environment(\.dismiss) private var dismiss
     let capture: Acquisition
+
+    #if DEBUG
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var provingTask: Task<Void, Never>?
+    @State private var cancellation: ProvingCancellation?
+    @State private var provingStatus = "Not run"
+    private var isTesting: Bool { provingTask != nil }
+    #else
+    private var isTesting: Bool { false }
+    #endif
 
     var body: some View {
         NavigationStack {
@@ -31,9 +42,73 @@ struct DeveloperScreen: View {
                         .disabled(capture.lastRaw == nil)
                     if let notice = capture.notice { Text(notice).font(.caption) }
                 }
+                #if DEBUG
+                Section("Proving self-test") {
+                    Text("Offline development diagnostic using a private calibration capture and fixed local ledger values. No transaction is signed or submitted.")
+                    if isTesting {
+                        ProgressView(provingStatus)
+                        Button("Cancel self-test", role: .cancel) { cancelSelfTest() }
+                    } else {
+                        Button("Run proving self-test", action: startSelfTest)
+                            .disabled(!capture.canCapture)
+                        Text(provingStatus).font(.caption)
+                    }
+                }
+                #endif
             }
             .navigationTitle("Developer")
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }.disabled(isTesting)
+                }
+            }
+            .interactiveDismissDisabled(isTesting)
+            #if DEBUG
+            .onChange(of: scenePhase) { _, phase in
+                if phase != .active { cancelSelfTest() }
+            }
+            #endif
         }
     }
+
+    #if DEBUG
+    private func startSelfTest() {
+        guard !isTesting, scenePhase == .active, capture.canCapture else { return }
+        let token = ProvingCancellation()
+        let wasKeepingAwake = UIApplication.shared.isIdleTimerDisabled
+        UIApplication.shared.isIdleTimerDisabled = true
+        capture.setActive(false)
+        cancellation = token
+        provingStatus = "Starting local proof"
+        provingTask = Task {
+            defer {
+                provingTask = nil
+                cancellation = nil
+                UIApplication.shared.isIdleTimerDisabled = wasKeepingAwake
+                if scenePhase == .active { capture.setActive(true) }
+            }
+            do {
+                let result = try await ProverHost().selfTest(cancellation: token) { tick in
+                    guard tick.seconds == nil else { return }
+                    Task { @MainActor in
+                        guard cancellation === token, provingTask?.isCancelled == false else { return }
+                        provingStatus = tick.phase.replacingOccurrences(of: "_", with: " ").capitalized
+                    }
+                }
+                try Task.checkCancellation()
+                provingStatus = String(format: "Verified locally · %.2f s witness · %.2f s prove",
+                                       result.witnessSeconds, result.proveSeconds)
+            } catch {
+                provingStatus = Task.isCancelled ? "Cancelled" : FlowError.message(error)
+            }
+        }
+    }
+
+    private func cancelSelfTest() {
+        guard let provingTask, !provingTask.isCancelled else { return }
+        provingStatus = "Cancelling"
+        provingTask.cancel()
+        cancellation?.cancel()
+    }
+    #endif
 }
