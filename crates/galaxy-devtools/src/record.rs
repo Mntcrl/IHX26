@@ -23,17 +23,27 @@ pub(crate) struct RecordArgs {
 
 pub(crate) async fn run(config: &NetworkConfig, args: RecordArgs) -> Result<()> {
     let image = storage::read(&args.image, galaxy_image::MAX_IMAGE_BYTES)?;
-    let recorder = Recorder::new(rpc(config)?);
-    let ledger = RpcLedger::new(&recorder);
-    let ctx = VerifyContext::new(&ledger, config);
+    let client = rpc(config)?;
+    let mut endpoints = client.pinned_endpoints().peekable();
     let started = Instant::now();
-    let report = verify_photo(&image, None, &ctx).await;
+    let (report, recorder) = loop {
+        let (_, endpoint) = endpoints.next().ok_or_else(|| error("no Testnet RPC endpoint"))?;
+        let recorder = Recorder::new(endpoint);
+        let ledger = RpcLedger::new(&recorder);
+        let ctx = VerifyContext::new(&ledger, config);
+        let report = verify_photo(&image, None, &ctx).await;
+        if endpoints.peek().is_none() || !report.needs_rpc_retry() {
+            break (report, recorder);
+        }
+    };
     let verify_ms = started.elapsed().as_millis();
-    // Only persist a complete RPC session for a proven development image. The
-    // verifier must establish the binding and pairing, not merely reach UNSUPPORTED.
+    // Only persist a complete RPC session for a proven development image.
     if report.state != State::Unsupported
         || !report.summary.contains("development unattested credential")
-        || !["capture.photo_binding", "capture.rgb_binding", "proof.groth16"].iter().all(|id| {
+        || ![
+            "capture.photo_binding", "capture.rgb_binding", "proof.groth16",
+            "registration.txn_chain", "capture.txn_chain", "history.complete",
+        ].iter().all(|id| {
             report.checks.iter().any(|check| check.id == *id && check.status == Status::Pass)
         })
         || report.checks.iter().any(|check| match check.status {

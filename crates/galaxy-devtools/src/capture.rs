@@ -126,7 +126,8 @@ async fn check_history(session: &Session<'_>, first: &LedgerTx, second: &LedgerT
     let mut capture_seen = 0;
     let mut proof_seen = 0;
     loop {
-        let page = session.rpc.account_tx(&session.wallet.account_id(), first.ledger_index, second.ledger_index, marker, 1).await?;
+        // Testnet raises smaller limits; the transport rejects oversized pages.
+        let page = session.rpc.account_tx(&session.wallet.account_id(), first.ledger_index, second.ledger_index, marker, 200).await?;
         for tx in page.transactions {
             capture_seen += usize::from(tx == *first || (tx.hash == first.hash && tx.tx_blob == first.tx_blob && tx.transaction_result == "tesSUCCESS"));
             proof_seen += usize::from(tx == *second || (tx.hash == second.hash && tx.tx_blob == second.tx_blob && tx.transaction_result == "tesSUCCESS"));

@@ -12,7 +12,7 @@ session=$(realpath -- "$1")
 artifacts=${GALAXY_E2E_ARTIFACTS:-circuits/artifacts/v1m}
 sources=${GALAXY_E2E_SOURCES:-fixtures/real/calibration/classes/genuine-3d}
 wallet=${GALAXY_E2E_FAULT_WALLET:-galaxy-e2e-development-faults}
-target=${CARGO_TARGET_DIR:-target/Integration2}
+target=${CARGO_TARGET_DIR:-target/Integration}
 dev=${GALAXY_DEV:-$target/release/galaxy-dev}
 galaxy=${GALAXY_CLI:-$target/release/galaxy}
 shopt -s nullglob

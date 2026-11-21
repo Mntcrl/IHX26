@@ -9,7 +9,7 @@ if (( $# != 1 )); then
 fi
 run=$(realpath -- "$1")
 [[ $run == "$(realpath fixtures/real)"/* ]] || { echo 'development: private session must be inside fixtures/real' >&2; exit 2; }
-target=${CARGO_TARGET_DIR:-target/Integration2}
+target=${CARGO_TARGET_DIR:-target/Integration}
 node=${GALAXY_NODE:-$target/release/galaxy-node}
 port=${GALAXY_E2E_NODE_PORT:-18090}
 [[ $port =~ ^[1-9][0-9]{0,4}$ ]] && (( port <= 65535 )) || { echo 'development: invalid loopback node port' >&2; exit 2; }

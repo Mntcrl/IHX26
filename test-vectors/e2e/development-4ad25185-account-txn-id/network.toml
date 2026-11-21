@@ -1,0 +1,36 @@
+# XRPL Galaxy network configuration (spec §12, ADR 0009). Parsed strictly by
+# galaxy_protocol::network::NetworkConfig (unknown keys are rejected).
+# accepted_circuits / accepted_app_ids / accepted_attestation_environments are the
+# verifier's explicit trust anchors; they are never taken from the ledger or from peers.
+
+name = "xrpl-testnet"
+network_id = 1
+json_rpc = "https://s.altnet.rippletest.net:51234/"
+websocket = "wss://s.altnet.rippletest.net:51233/"
+# Optional: a local rippled that the operator trusts (queried before json_rpc).
+# trusted_local_rippled = "http://127.0.0.1:5005/"
+
+# Validated ledger index reported by server_info on s.altnet.rippletest.net
+# when this file was written (2026-11-20T19:44Z, network_id 1). Verifiers and
+# nodes never scan for Galaxy transactions below this ledger.
+inception_ledger = 22480444
+
+max_fee_drops = 1000
+allow_mainnet = false
+
+explorer_tx = "https://testnet.xrpl.org/transactions/{hash}"
+explorer_ledger = "https://testnet.xrpl.org/ledgers/{index}"
+
+# App Attest relying party: TEAMID.bundle.id of the capture app.
+accepted_app_ids = ["PPS57BF3X3.utcq.XRPL-Galaxy"]
+
+# Testnet accepts both App Attest environments; the environment is always reported.
+# (Dev-unattested credentials have no environment and can never reach VERIFIED.)
+accepted_attestation_environments = ["development", "production"]
+
+# Final calibrated development circuit, registered on XRPL Testnet.
+[[accepted_circuits]]
+circuit_id = "a0bed7f1cdad94c33f9ff22e8b6cdd1bdb7e7f873ce73c8038e8a403213fa68b"
+vk_digest = "7cf9640233d89ee56677b2737f846cb9af215faaabe9fe8fd05062df5463a908"
+policy_id = "4ad25185f11bfb52af5dee5a1ab39d4e2428c1c83188c7483db1777d22367073"
+registration_tx = "B0C14DC5C6BEC26A5C43CD236383EC1893F164DF0047498ACF38F67C4DC75D66"

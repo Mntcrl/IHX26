@@ -103,7 +103,12 @@ try {
     const actual = await readReport();
     const elapsed = Math.round(performance.now() - start);
     assert.ok(rpcCounts.get(profile) > 0 && issues.length === 0, 'browser must use only expected replay requests');
-    assert.equal(actual.checks.find(check => check.id === 'proof.groth16').status, 'pass');
+    for (const id of [
+      'capture.photo_binding', 'capture.rgb_binding', 'registration.txn_chain',
+      'capture.txn_chain', 'history.complete', 'proof.groth16',
+    ]) {
+      assert.equal(actual.checks.find(check => check.id === id)?.status, 'pass', id);
+    }
     assert.equal(actual.state, 'UNSUPPORTED');
     // The transport provenance is intentionally different; compare every other field.
     assert.deepEqual(actual.trust.rpc_endpoints, [`${origin}/xrpl/${profile}/`]);

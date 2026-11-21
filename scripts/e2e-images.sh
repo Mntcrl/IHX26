@@ -10,7 +10,7 @@ fi
 run=$(realpath -- "$1")
 [[ $run == "$(realpath fixtures/real)"/* ]] || { echo 'development: private session must be inside fixtures/real' >&2; exit 2; }
 node=${2-}
-galaxy=${GALAXY_CLI:-${CARGO_TARGET_DIR:-target/Integration2}/release/galaxy}
+galaxy=${GALAXY_CLI:-${CARGO_TARGET_DIR:-target/Integration}/release/galaxy}
 network="$run/network.toml"
 png_attempt="$run/$(cat "$run/png-v1.attempt")"
 jpg_attempt="$run/$(cat "$run/jpeg-v1.attempt")"
@@ -20,7 +20,9 @@ python3 tests/integration/prepare.py images "$png_attempt/development.png" "$jpg
     "$jpg_attempt/development-jpeg-raster.png" "$variants"
 
 pass='(.summary | contains("development unattested credential")) and
-    (any(.checks[]; .id == "proof.groth16" and .status == "pass")) and
+    (([.checks[] | select(.status == "pass") | .id]) as $passed |
+        ["capture.photo_binding", "capture.rgb_binding", "registration.txn_chain",
+         "capture.txn_chain", "history.complete", "proof.groth16"] - $passed == []) and
     (all(.checks[]; if .id == "registration.attestation" then .status == "fail"
        elif .id == "evidence.bluetooth" or .id == "evidence.noise" then .status == "not_applicable"
        elif .id == "capture.counter" or .id == "refs.metadata" then (.status == "pass" or .status == "not_applicable")
@@ -31,8 +33,10 @@ verify() {
     local name=$1 recording=$2 file=$3 expected=$4 exit_code=$5 checks=$6
     shift 6
     local status=0
-    "$galaxy" --network-config "$network" --recording "$run/$recording.recording.json" \
-        --json verify "$file" "$@" > "$variants/$name.json" || status=$?
+    local -a ledger=()
+    if [[ -n $recording ]]; then ledger=(--recording "$run/$recording.recording.json"); fi
+    "$galaxy" --network-config "$network" "${ledger[@]}" --json verify "$file" "$@" \
+        > "$variants/$name.json" || status=$?
     if [[ $status != "$exit_code" ]] || ! jq -e --arg state "$expected" ".state == \$state and ($checks)" "$variants/$name.json" >/dev/null; then
         printf 'development: %s expected %s (exit %s), observed exit %s\n' "$name" "$expected" "$exit_code" "$status" >&2
         jq -c '{state,summary,checks:[.checks[] | select(.status != "pass") | {id,status,detail}]}' "$variants/$name.json" >&2
@@ -54,12 +58,19 @@ if [[ -z $node ]]; then
         ".mode == \"manual\" and ($pass)" --no-discovery \
         --manifest-tx "$(jq -er .capture.tx "$png_attempt/run.json")" \
         --proof-tx "$(jq -er .proof.tx "$png_attempt/run.json")"
+    verify jpeg-raster-metadata-removed-manual jpeg-v1 "$variants/metadata-removed-jpeg-raster.png" UNSUPPORTED 60 \
+        ".mode == \"manual\" and ($pass)" --no-discovery \
+        --manifest-tx "$(jq -er .capture.tx "$jpg_attempt/run.json")" \
+        --proof-tx "$(jq -er .proof.tx "$jpg_attempt/run.json")"
     network="$variants/unrecognized-circuit.toml"
     python3 tests/integration/prepare.py network "$run/network.toml" "$run/circuit.json" --unrecognized > "$network"
     verify unrecognized-circuit png-v1 "$png_attempt/development.png" UNSUPPORTED 60 \
         'any(.checks[]; .id == "circuit.accepted" and .status == "fail")' --no-discovery
 else
-    verify metadata-removed png-v1 "$variants/metadata-removed.png" UNSUPPORTED 60 ".mode == \"lookup\" and ($pass)" --node "$node"
-    verify unregistered png-v1 "$variants/unregistered.png" NOT_FOUND 40 \
+    verify metadata-removed '' "$variants/metadata-removed.png" UNSUPPORTED 60 \
+        ".mode == \"lookup\" and ($pass)" --lookup --node "$node"
+    verify original-jpeg-lookup '' "$jpg_attempt/development.jpg" UNSUPPORTED 60 \
+        ".mode == \"lookup\" and ($pass)" --lookup --node "$node"
+    verify unregistered '' "$variants/unregistered.png" NOT_FOUND 40 \
         '.mode == "lookup" and (.candidates | length) == 0 and (.trust.ledger_ranges | length) > 0' --lookup --node "$node"
 fi

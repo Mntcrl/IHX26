@@ -77,9 +77,9 @@ The final 876,639-constraint development circuit `a0bed7f1cdad94c33f9ff22e8b6cdd
 
 All 7 transactions validated with `tesSUCCESS` in ledgers 22,486,119–22,486,132. Publication and historical readback of the 4,283-byte GXCB took 59.105 s and cost 70 drops.
 
-## Final calibrated device captures — before DepositAuth hardening
+## Final calibrated device capture — before AccountTxnID hardening
 
-This run reused the historical development DEVICE registration above. It is evidence of the calibrated circuit and live proof flow, not evidence that the registration passes the newer DepositAuth checks. Re-register the device with the hardened publisher before testing the updated verifier.
+This historical run reused the initial DEVICE registration. It demonstrates the calibrated circuit and live proof flow, but its DEVICE and CAPTURE lack the `AccountTxnID` required by the current verifier.
 
 | Profile | `L0` | `Lsel` | `Lproof` | Transactions per photo | Fee (drops) |
 |---|---:|---:|---:|---:|---:|
@@ -97,3 +97,62 @@ This run reused the historical development DEVICE registration above. It is evid
 | Live shared verifier with RPC recording | 7.738 s |
 
 PNG [CAPTURE](https://testnet.xrpl.org/transactions/3DB9B6D178054422A2477E73AEF2F21E2610EF5AFBD2A7CE94DFD3182B94A971) and [PROOF](https://testnet.xrpl.org/transactions/4F1DEC5B73FB09938626B6AE0760728DD061E17A84E0F9C6945476F4F2C97434) both validated. Image binding and Groth16 passed; `galaxy verify` returned `UNSUPPORTED` for the dev-unattested credential. The PNG recording contains 12 exchanges (58,189 bytes).
+
+## Device registration with AccountTxnID
+
+Fresh faucet-funded development account `rnzVNEmtDoY4rHmbdnwzrsAzqqsccAJKfW` reused the already pinned final CIRCUIT above. Its DEVICE registration required **3 validated transactions / 30 drops** excluding the faucet funding payment. Publication plus readback was **32.789 s**. All three transactions validated with `tesSUCCESS`.
+
+| Transaction | Ledger | MemoData bytes | Serialized Memos bytes | Signed blob bytes | AccountTxnID bytes | Fee (drops) |
+|---|---:|---:|---:|---:|---:|---:|
+| [AccountSet `SetFlag: 5`](https://testnet.xrpl.org/transactions/805D418D763EBF953DB5E21E446617E2B754D3D3DA32EC5D08AD67B7CBBB896A) | 22,489,687 | 0 | 0 | 152 | 0 | 10 |
+| [DEVICE chunk](https://testnet.xrpl.org/transactions/C138C1D5D16EBD7DC026CB4F911536D19D5B84015C9E13069788F014DF19A937) | 22,489,690 | 245 | 302 | 481 | 33 | 10 |
+| [DEVICE manifest](https://testnet.xrpl.org/transactions/7AED77759566E8FA3582433915F2568228F90F21EAF343ED0F591EF3AC7443D3) | 22,489,693 | 141 | 191 | 370 | 33 | 10 |
+
+The chunk signed the zero sentinel and the manifest signed the chunk hash. Removing `AccountTxnID` and re-encoding measured 33 bytes of overhead per chained record (one field header byte plus 32 payload bytes); the memo sizes did not change.
+
+## Real-device captures after AccountTxnID hardening
+
+Both profiles used previously unused genuine-3D sensor captures, the new DEVICE above and the final accepted CIRCUIT. Each PROOF was checked locally before submission. Every CAPTURE and PROOF below validated with `tesSUCCESS`.
+
+| Profile | CAPTURE | PROOF | `L0` | `Lsel` | `Lproof` | Fee (drops) |
+|---|---|---|---:|---:|---:|---:|
+| `png-v1` | [157D7D4E…](https://testnet.xrpl.org/transactions/157D7D4E04814A16319C2FB4815FB54D38CC3C8B92BCCFF60A589AED251B73B5) | [A10B1227…](https://testnet.xrpl.org/transactions/A10B1227F33E5CA6EBB01F79CF7C18CE5E544C757981377F7765F32BA7BFED12) | 22,489,766 | 22,489,771 | 22,489,776 | 20 |
+| `jpeg-v1` | [B344A453…](https://testnet.xrpl.org/transactions/B344A45348DC7EC41BB7B0D60ED4923649B690CC8CF59D296C9177D3EC3BD891) | [AC7D58AA…](https://testnet.xrpl.org/transactions/AC7D58AAA5262A576B9B3E6AE50FB4CD0BBF4C6A4155B44ACB407CC2ADBD7CF5) | 22,489,787 | 22,489,792 | 22,489,798 | 20 |
+
+CAPTURE: **366 B** MemoData, **418 B** serialized Memos, **597 B** signed blob. PROOF: **361 B** MemoData, **411 B** serialized Memos, **590 B** signed blob. Both included **33 B** of `AccountTxnID` and cost **10 drops** per transaction. Each PROOF signed its CAPTURE hash. With no intervening own transactions, the JPEG CAPTURE signed the PNG PROOF hash. XMP exports were 1,140,851 B (`png-v1`), 208,438 B (`jpeg-v1`), and 1,040,664 B for the lossless PNG export of the decoded JPEG raster.
+
+| Timing / memory | `png-v1` | `jpeg-v1` |
+|---|---:|---:|
+| CAPTURE submit → observed validated | 7.800 s | 4.498 s |
+| CAPTURE → selection, ledger close times | 19 s | 19 s |
+| Selection → PROOF, ledger close times | 12 s | 12 s |
+| PROOF submit → observed validated | 4.895 s | 6.113 s |
+| Ingest and persist evidence | 127 ms | 147 ms |
+| Commitments | 974 ms | 980 ms |
+| Reference policy and build witness input | 107 ms | 95 ms |
+| Desktop witness generation | 0.398 s | 0.517 s |
+| Desktop Groth16 prove | 9.659 s | 9.693 s |
+| Desktop prover self-check | 4.073 ms | 3.685 ms |
+| Peak process RSS (`VmHWM`), entire capture command | 1,299,096 KiB | 876,784 KiB |
+| Live shared verifier with RPC recording | 5.540 s | 5.325 s |
+| Chromium browser UI, offline RPC replay | 1.261 s | 1.428 s |
+
+Direct and manual `galaxy verify` returned **`UNSUPPORTED` (exit 60)** for both images: `registration.txn_chain`, `capture.txn_chain`, `history.complete`, both image bindings and `proof.groth16` passed. The image matrix also rejected substituted XMP, a modified pixel and JPEG recompression (`INVALID`); crops and resized images failed profile decoding (`UNSUPPORTED`). Both metadata-stripped rasters verified with explicit references. In Chromium, 31 replay RPCs per image produced the same full reports as the native CLI, apart from the RPC endpoint label. The [public RPC-only fixtures](../test-vectors/e2e/development-4ad25185-account-txn-id) contain 14 exchanges each (61,762 B PNG; 68,798 B JPEG); proof-only replays omit image binding.
+
+Six distinct preceding CAPTUREs returned `INCONCLUSIVE` on their own ledger-derived challenges. Each cost 10 drops, published no PROOF, and was not re-challenged.
+
+The local lookup node indexed Testnet ledgers 22,489,766–22,489,807. Live lookup returned `UNSUPPORTED` with all six checks above for both the stripped PNG and the original JPEG, and `NOT_FOUND` for an unregistered image within the node's coverage. Three independent SQLite indexes also recovered the JPEG binding and discovered both peers from one bootstrap each. A good index preserved the result alongside incorrect, omitting or failed peers; an omitting, failed or late index alone returned `UNAVAILABLE`. Direct XMP verification still passed after stopping every test node.
+
+Before the history stress run, the JPEG verifier read one `account_tx` page in each window: 10 rows for CAPTURE, 1 for PROOF and 11 for REVOKE. It ignored no rows and did not walk the chain.
+
+## Third-party history on Testnet (walk fallback)
+
+A second funded development wallet sent **201 Payments** (10 drops each, ledgers 22,489,817–22,490,013; hashes in the private session's `payments.jsonl`, first [FBA99DD5…](https://testnet.xrpl.org/transactions/FBA99DD51B628015B254BE8EC430C2A115E8809C222ABA011AF4E84C771DBFCA)) to the registration account after the JPEG PROOF. `scripts/e2e-history.sh` then re-verified the JPEG with `--history-pages 1` (the verifier after the first hardening pass, three scans):
+
+| Window | `account_tx` pages / rows | Non-records ignored | AccountTxnID steps |
+|---|---:|---:|---:|
+| A: CAPTURE | 1 / 10 | 0 | 0 |
+| C: REVOKE | 1 / 200 | 189 | 12 |
+| B: PROOF | 1 / 200 | 199 | 2 |
+
+The verdict was unchanged (`UNSUPPORTED`, dev-unattested credential) with `history.complete`, `registration.txn_chain`, `capture.txn_chain`, `capture.unique` and `proof.groth16` passing: the third-party rows exhausted the one-page budget, the partial scans were discarded, and the verifier walked the account's own `AccountTxnID` chain instead. The second hardening pass (ADR 0093) merges B and C into one scan; on the offline padded recording it reduced the RPC calls from 218 to 144.

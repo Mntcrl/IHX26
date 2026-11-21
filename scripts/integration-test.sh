@@ -7,16 +7,16 @@ umask 077
 base=${GALAXY_E2E_CONFIG:-deployments/networks/xrpl-testnet.toml}
 artifacts=${GALAXY_E2E_ARTIFACTS:-circuits/artifacts/v1m}
 sources=${GALAXY_E2E_SOURCES:-fixtures/real/calibration/classes/genuine-3d}
-wallet=${GALAXY_E2E_WALLET:-galaxy-e2e-development}
+wallet=${GALAXY_E2E_WALLET:-galaxy-e2e-account-txn-id}
 device=${GALAXY_E2E_DEVICE:-dev-device}
-target=${CARGO_TARGET_DIR:-target/Integration2}
+target=${CARGO_TARGET_DIR:-target/Integration}
 dev=${GALAXY_DEV:-$target/release/galaxy-dev}
 galaxy=${GALAXY_CLI:-$target/release/galaxy}
 
 if [[ ! -x $dev || ! -x $galaxy ]]; then
     CARGO_TARGET_DIR="$target" scripts/with-slot.sh cargo build --release -p galaxy-devtools -p galaxy-cli
 fi
-for f in circuit_bundle.bin main_v1m.graph.bin main_v1m.zkey; do
+for f in circuit_id.hex main_v1m.graph.bin main_v1m.zkey; do
     [[ -s $artifacts/$f ]] || { printf 'development: missing artifact %s\n' "$artifacts/$f" >&2; exit 2; }
 done
 shopt -s nullglob
@@ -25,6 +25,10 @@ captures=("$sources"/*.gxrw)
 mkdir -p fixtures/real/e2e-development
 run=$(mktemp -d fixtures/real/e2e-development/session-XXXXXXXX)
 echo "development: private run directory $run"
+
+python3 tests/integration/prepare.py configured-circuit "$base" "$artifacts/circuit_id.hex" > "$run/circuit.json"
+cp -- "$base" "$run/network.toml"
+circuit_tx=$(jq -er .registration_tx "$run/circuit.json")
 
 cli=("$dev" --config "$base" --wallet "$wallet")
 if ! "${cli[@]}" wallet show-address > "$run/wallet.json"; then
@@ -38,11 +42,18 @@ if ! "${cli[@]}" wallet balance > "$run/balance.json"; then
     done
     jq -e '.balance_drops_before_reserve > 0' "$run/balance.json" > /dev/null
 fi
-"${cli[@]}" register-circuit "$artifacts/circuit_bundle.bin" > "$run/circuit.json"
 "${cli[@]}" register-dev-device --device "$device" > "$run/device.json"
-python3 tests/integration/prepare.py network "$base" "$run/circuit.json" > "$run/network.toml"
-circuit_tx=$(jq -er .registration_tx "$run/circuit.json")
 device_tx=$(jq -er .registration_tx "$run/device.json")
+
+verify_report() {
+    jq -e --arg mode "$1" '
+        .state == "UNSUPPORTED" and .mode == $mode and
+        (.summary | contains("development unattested credential")) and
+        (([.checks[] | select(.status == "pass") | .id]) as $passed |
+            ["capture.photo_binding", "capture.rgb_binding", "registration.txn_chain",
+             "capture.txn_chain", "history.complete", "proof.groth16"] - $passed == [])
+    ' "$2" > /dev/null
+}
 
 index=0
 for profile in png-v1 jpeg-v1; do
@@ -74,7 +85,15 @@ for profile in png-v1 jpeg-v1; do
         status=0
         "$galaxy" --network-config "$run/network.toml" --json verify --no-discovery "$image" \
             > "$run/$profile.verify.json" || status=$?
-        [[ $status == 60 ]] || { echo "development: CLI did not report UNSUPPORTED for $profile (exit $status)" >&2; exit 1; }
+        [[ $status == 60 ]] && verify_report direct "$run/$profile.verify.json" ||
+            { echo "development: direct verification did not pass for $profile (exit $status)" >&2; exit 1; }
+        status=0
+        "$galaxy" --network-config "$run/network.toml" --json verify --no-discovery "$image" \
+            --manifest-tx "$(jq -er .capture.tx "$attempt/run.json")" \
+            --proof-tx "$(jq -er .proof.tx "$attempt/run.json")" \
+            > "$run/$profile.manual.json" || status=$?
+        [[ $status == 60 ]] && verify_report manual "$run/$profile.manual.json" ||
+            { echo "development: manual verification did not pass for $profile (exit $status)" >&2; exit 1; }
         "$dev" --config "$run/network.toml" record "$image" --output "$run/$profile.recording.json" \
             > "$run/$profile.record.json"
         jq -er --arg profile "$profile" '"development: \($profile) \(.state) after \(.rpc_exchanges) recorded RPC exchanges"' "$run/$profile.record.json"

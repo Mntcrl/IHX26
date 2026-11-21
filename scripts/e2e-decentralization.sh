@@ -9,7 +9,7 @@ if (( $# != 1 )); then
 fi
 session=$(realpath -- "$1")
 [[ $session == "$(realpath fixtures/real)"/* ]] || { echo 'development: private session must be inside fixtures/real' >&2; exit 2; }
-target=${CARGO_TARGET_DIR:-target/Integration2}
+target=${CARGO_TARGET_DIR:-target/Integration}
 node=${GALAXY_NODE_FAULTS:-$target/release/galaxy-node}
 galaxy=${GALAXY_CLI:-$target/release/galaxy}
 if [[ -z ${GALAXY_NODE_FAULTS:-} ]]; then
@@ -112,12 +112,16 @@ start_node a "$start" "$(bootstrap_for "$((base + 1))")"
 start_node b "$start" "$(bootstrap_for "$((base + 2))")"
 start_node c "$start" "$(bootstrap_for "$base")"
 coverage=".indexed_from == $start and .indexed_through == $scan_end"
+pass='.summary | contains("development unattested credential")'
+pass="($pass) and (([.checks[] | select(.status == \"pass\") | .id]) as \$passed |
+    [\"capture.photo_binding\", \"capture.rgb_binding\", \"registration.txn_chain\",
+     \"capture.txn_chain\", \"history.complete\", \"proof.groth16\"] - \$passed == [])"
 for i in 0 1 2; do
     wait_for "$i" status "$coverage"
     wait_for "$i" peers '([.peers[].node_id] | unique | length) >= 2'
     result=$(curl -fsS --max-time 4 "${urls[i]}/v1/photos/$photo?network_id=1")
     jq -e --arg manifest "$manifest" --arg proof "$proof" 'any(.captures[]; .manifest_tx == $manifest and .proof_tx == $proof)' <<< "$result" > /dev/null
-    verify "node-${names[i]}" UNSUPPORTED 60 'any(.checks[]; .id == "proof.groth16" and .status == "pass")' "$stripped" --lookup --node "${urls[i]}"
+    verify "node-${names[i]}" UNSUPPORTED 60 "$pass" "$stripped" --lookup --node "${urls[i]}"
 done
 printf '%s\n' 'development: three independent backfills agreed; each node discovered its two peers from one bootstrap'
 
@@ -127,7 +131,6 @@ start_node fail "$start" '[]' fail-lookup
 start_node late "$((start + 1))" '[]'
 for i in 3 4 5; do wait_for "$i" status "$coverage"; done
 wait_for 6 status ".indexed_from == $((start + 1)) and .indexed_through == $scan_end and .incomplete == true"
-pass='any(.checks[]; .id == "proof.groth16" and .status == "pass")'
 verify wrong-with-good UNSUPPORTED 60 "$pass" "$stripped" --lookup --node "${urls[3]}" --node "${urls[0]}"
 verify omit-with-good UNSUPPORTED 60 "$pass" "$stripped" --lookup --node "${urls[4]}" --node "${urls[0]}"
 verify fail-with-good UNSUPPORTED 60 "$pass" "$stripped" --lookup --node "${urls[5]}" --node "${urls[0]}"

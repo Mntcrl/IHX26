@@ -32,6 +32,8 @@ pub(crate) struct TxObservation {
     pub memo_data_bytes: usize,
     pub memos_bytes: usize,
     pub blob_bytes: usize,
+    pub account_txn_id: Option<String>,
+    pub account_txn_id_bytes: usize,
     pub fee_drops: u64,
 }
 
@@ -50,10 +52,17 @@ pub(crate) fn observe(tx: &LedgerTx, fee_cap: u64) -> Result<TxObservation> {
     let memos_bytes = tx.tx_blob.len().checked_sub(codec::encode(&without_memos)?.len())
         .filter(|&size| size <= MAX_MEMOS_BYTES && size == Memo { kind: &memo.kind, data: &memo.data }.serialized_len())
         .ok_or_else(|| error("serialized Memos size does not match Galaxy envelope"))?;
+    let account_txn_id_bytes = if without_memos.as_object_mut().and_then(|obj| obj.remove("AccountTxnID")).is_some() {
+        (tx.tx_blob.len() - memos_bytes).checked_sub(codec::encode(&without_memos)?.len())
+            .ok_or_else(|| error("invalid serialized AccountTxnID size"))?
+    } else {
+        0
+    };
     Ok(TxObservation {
         tx: hex::encode_upper(tx.hash), ledger: tx.ledger_index,
         transaction_index: tx.transaction_index, result: tx.transaction_result.clone(), last_ledger_sequence,
         memo_type: memo.kind, memo_data_bytes: memo.data.len(), memos_bytes,
+        account_txn_id: memo.account_txn_id.map(hex::encode_upper), account_txn_id_bytes,
         blob_bytes: tx.tx_blob.len(), fee_drops,
     })
 }
