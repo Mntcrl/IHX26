@@ -38,6 +38,7 @@ Format: Context / Decision / Consequences. Ranges per agent are listed in spec Â
 | [0070](0070-app-attest-development-environment.md) | App Attest in the development environment without the entitlement |
 | [0071](0071-aqua-session-build-runner.md) | Aqua-session build runner for signed iOS builds |
 | [0072](0072-ios-galaxy-core.md) | One pinned Rust library for iOS capture |
+| [0073](0073-ios-versioned-proving-files.md) | Install iOS proving files separately by circuit ID |
 | [0080](0080-mobile-prover-backend.md) | Mobile proving backend |
 | [0090](0090-verifier-states-and-proof-selection.md) | Verifier states, development credentials and PROOF selection |
 | [0091](0091-offline-recordings-and-cli-discovery.md) | Offline XRPL recordings, verifier test vectors and CLI discovery |
