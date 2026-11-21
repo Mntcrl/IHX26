@@ -37,6 +37,7 @@ Format: Context / Decision / Consequences. Ranges per agent are listed in spec Â
 | [0060](0060-apple-app-attest-verification.md) | Verify the Apple App Attest wire profile |
 | [0070](0070-app-attest-development-environment.md) | App Attest in the development environment without the entitlement |
 | [0071](0071-aqua-session-build-runner.md) | Aqua-session build runner for signed iOS builds |
+| [0072](0072-ios-galaxy-core.md) | One pinned Rust library for iOS capture |
 | [0080](0080-mobile-prover-backend.md) | Mobile proving backend |
 | [0090](0090-verifier-states-and-proof-selection.md) | Verifier states, development credentials and PROOF selection |
 | [0091](0091-offline-recordings-and-cli-discovery.md) | Offline XRPL recordings, verifier test vectors and CLI discovery |
@@ -51,5 +52,6 @@ Format: Context / Decision / Consequences. Ranges per agent are listed in spec Â
 | [0108](0108-node-request-budgets.md) | Request budgets |
 | [0109](0109-node-independent-deployment.md) | Independent deployment and test faults |
 | [0110](0110-browser-verifier-network-policy.md) | Browser verifier network policy is inherited by a Blob worker |
+| [0120](0120-bounded-decoder-properties.md) | Bounded decoder property tests |
 
 Ranges: orchestrator 0001-0009, ProtocolCrypto 0010-0019, ImageEvidence 0020-0029, Geometry 0030-0039, CircuitCore 0040-0044, CircuitGeo 0045-0049, XRPL 0050-0059, Attestation 0060-0069, IOS 0070-0079, MobileProver 0080-0089, Verifier 0090-0099, Node 0100-0109, WebVerifier 0110-0119, Security 0120-0129.
