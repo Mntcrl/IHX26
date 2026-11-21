@@ -5,8 +5,9 @@
 //! the caller pins (the file is hashed before use; mismatch fails closed).
 //! Phase 2 is a single contribution: delta is sampled from the OS RNG inside
 //! this process and dropped when it returns. Whoever runs it knows delta and
-//! could produce proofs of false statements, so the output must never be an
-//! accepted circuit key. It exists because `snarkjs groth16 setup` exceeds the
+//! could produce proofs of false statements. The resulting key is for
+//! development networks only; never use it in production configs.
+//! This tool exists because `snarkjs groth16 setup` exceeds the
 //! shared build machine's memory at ~1M constraints (snarkjs materializes the
 //! whole R1CS as JS objects: 5.4 GB RSS at 500k constraints).
 //!

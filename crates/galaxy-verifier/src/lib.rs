@@ -22,18 +22,18 @@ pub struct Refs {
     pub proof_tx: Option<Hash32>,
 }
 
-/// Work limits for each registration history window.
+/// Work limits for each history scan (window A, then the shared B/C scan).
 #[derive(Clone, Copy, Debug)]
 pub struct VerifierConfig {
     /// Number of 200-row account_tx pages; zero goes directly to AccountTxnID.
     pub history_pages: u16,
     /// Maximum own-transaction steps in an AccountTxnID walk.
-    pub history_walk: u16,
+    pub history_walk: u32,
 }
 
 impl VerifierConfig {
     pub const DEFAULT_HISTORY_PAGES: u16 = 64;
-    pub const DEFAULT_HISTORY_WALK: u16 = 4_096;
+    pub const DEFAULT_HISTORY_WALK: u32 = 4_096;
 }
 
 impl Default for VerifierConfig {

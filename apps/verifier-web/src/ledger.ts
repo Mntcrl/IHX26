@@ -76,6 +76,7 @@ class LedgerSocket {
 
 export class BrowserLedger implements JsLedgerSource {
   private readonly sockets = new Map<string, LedgerSocket>();
+  private readonly checkedEndpoints = new Set<number>();
   private readonly urls: string[];
   private nextId = 1;
 
@@ -97,24 +98,31 @@ export class BrowserLedger implements JsLedgerSource {
   close(): void {
     for (const socket of this.sockets.values()) socket.stop('Verification finished');
     this.sockets.clear();
+    this.checkedEndpoints.clear();
   }
 
   private async request(method: Method, json: string, index: number): Promise<string> {
     const params = object(JSON.parse(json));
-    const preflight = { api_version: params.api_version };
     const url = this.urls[index];
     if (url === undefined) throw new Error('No XRPL endpoint configured at that index');
     try {
-      const probe = await this.call(url, 'server_info', preflight);
-      const info = object(probe.info);
-      const seq = object(info.validated_ledger).seq;
-      if (probe.error !== undefined || (probe.status !== undefined && probe.status !== 'success')
-          || info.network_id !== this.network || !u32(seq) || seq === 0
-          || typeof info.complete_ledgers !== 'string') throw new Error('XRPL endpoint failed the network check');
+      if (method === 'server_info') {
+        this.checkedEndpoints.delete(index);
+        const probe = await this.call(url, method, params);
+        const info = object(probe.info);
+        const seq = object(info.validated_ledger).seq;
+        if (probe.error !== undefined || (probe.status !== undefined && probe.status !== 'success')
+            || info.network_id !== this.network || !u32(seq) || seq === 0
+            || typeof info.complete_ledgers !== 'string') throw new Error('XRPL endpoint failed the network check');
+        this.checkedEndpoints.add(index);
+        return JSON.stringify(probe);
+      }
+      if (!this.checkedEndpoints.has(index)) throw new Error('XRPL endpoint was not checked');
       // Return command errors unchanged. Rust decides whether to restart verification.
-      const result = method === 'server_info' ? probe : await this.call(url, method, params);
+      const result = await this.call(url, method, params);
       return JSON.stringify(result);
     } catch (error) {
+      this.checkedEndpoints.delete(index);
       this.sockets.get(url)?.stop('Abandoning XRPL endpoint');
       this.sockets.delete(url);
       throw error;

@@ -7,7 +7,7 @@ use galaxy_protocol::{
     wire::{CircuitBundle, CircuitManifest},
     Hash32,
 };
-use galaxy_xrpl::registry::{fetch_bundle, Manifest};
+use galaxy_xrpl::{ledger::ServerInfo, registry::{fetch_bundle, fetch_bundle_from_tx, Manifest}, Error as XrplError};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -35,7 +35,7 @@ pub async fn inspect_circuit<L: LedgerSource>(
     ctx: &VerifyContext<'_, L>,
 ) -> Result<CircuitInfo, crate::Report> {
     let mut report = ctx.report("circuit-inspect");
-    match resolve(ctx, &circuit_id, None).await {
+    match resolve(ctx, &circuit_id, None, None).await {
         Ok(circuit) => Ok(circuit.info),
         Err(stop) => {
             stop.apply(&mut report);
@@ -61,6 +61,7 @@ pub(crate) async fn resolve<L: LedgerSource>(
     ctx: &VerifyContext<'_, L>,
     circuit_id: &Hash32,
     policy_id: Option<&Hash32>,
+    server_info: Option<&ServerInfo>,
 ) -> Result<Circuit, Stop> {
     let entry = accepted(ctx, circuit_id, policy_id)?;
     let network = ctx.config.network_id.as_u32();
@@ -71,8 +72,17 @@ pub(crate) async fn resolve<L: LedgerSource>(
     let (bundle, manifest, source, ignored_chunks) = if let Some(bytes) = ctx.local_circuit {
         (CircuitBundle::decode(bytes).map_err(|err| Stop::invalid(check, err.to_string()))?, None, "local-digest-pinned", 0)
     } else {
-        let fetched = fetch_bundle(ctx.ledger, &entry.registration_tx, network, ctx.config.allow_mainnet)
-            .await.map_err(|err| Stop::from_rpc(check, &err, true))?;
+        let hash = &entry.registration_tx;
+        let fetched = async {
+            if let Some(info) = server_info {
+                let tx = ctx.ledger.tx(hash).await
+                    .map_err(|_| XrplError::HistoryUnavailable("registry manifest transaction unavailable"))?
+                    .ok_or(XrplError::HistoryUnavailable("registry manifest not found"))?;
+                fetch_bundle_from_tx(ctx.ledger, hash, &tx, info, network, ctx.config.allow_mainnet).await
+            } else {
+                fetch_bundle(ctx.ledger, hash, network, ctx.config.allow_mainnet).await
+            }
+        }.await.map_err(|err| Stop::from_rpc(check, &err, true))?;
         let Manifest::Circuit(manifest) = fetched.manifest else {
             return Err(Stop::invalid(check, "Configured registration is not a CIRCUIT manifest"));
         };

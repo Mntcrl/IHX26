@@ -131,11 +131,18 @@ fn history_diagnostics_can_force_a_walk_and_bound_its_steps() {
     let checks = report["checks"].as_array().unwrap();
     let history = checks.iter().find(|check| check["id"] == "history.complete").unwrap();
     assert_eq!(history["status"], "pass");
-    assert_eq!(history["detail"].as_str().unwrap().matches("0 account_tx pages").count(), 3);
+    assert_eq!(history["detail"].as_str().unwrap().matches("0 account_tx pages").count(), 2);
 
     let (code, output) = galaxy(&["--json", "--history-pages", "0", "--history-walk", "1", "inspect", &manifest]);
     assert_eq!(code, 50, "{output}");
     assert!(json(&output)["summary"].as_str().unwrap().contains("walk budget exhausted"));
+
+    let (code, output) = galaxy(&["--json", "--history-walk", "65536", "inspect", &manifest]);
+    assert_eq!(code, 60, "{output}");
+    for out_of_range in ["0", "65537"] {
+        let (code, _) = galaxy(&["--history-walk", out_of_range, "inspect", &manifest]);
+        assert_eq!(code, 2);
+    }
 }
 
 #[test]

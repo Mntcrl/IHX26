@@ -65,6 +65,7 @@ const failover = JSON.parse(await verify(image, {
   ...options, mode: 'direct', rpc_endpoints: ['https://first.example', 'https://second.example'],
 }, restarted));
 assert.deepEqual(calls.slice(0, 5), [[0, 'server_info'], [0, 'tx'], [0, 'ledger_header'], [1, 'server_info'], [1, 'tx']]);
+assert.equal(calls.filter(([, method]) => method === 'server_info').length, 2, 'one preflight per WASM attempt');
 assert.equal(failover.state, refs.expected_state);
 assert.deepEqual(failover.trust.rpc_endpoints, ['https://second.example']);
 console.log('WASM endpoint failure: restarted from server_info and CAPTURE on second endpoint');
@@ -100,11 +101,12 @@ try {
   assert.equal(run.code, refs.expected_exit_code, run.stderr);
   const report = JSON.parse(run.stdout);
   assert.equal(report.state, refs.expected_state);
-  assert.deepEqual(firstCalls.filter(([method]) => method !== 'server_info'), [
-    ['tx', refs.manifest_tx], ['ledger', undefined],
+  assert.deepEqual(firstCalls, [
+    ['server_info', undefined], ['tx', refs.manifest_tx], ['ledger', undefined],
   ]);
   assert.deepEqual(secondCalls[0], ['server_info', undefined]);
-  assert.deepEqual(secondCalls.find(([method]) => method !== 'server_info'), ['tx', refs.manifest_tx]);
+  assert.deepEqual(secondCalls[1], ['tx', refs.manifest_tx]);
+  assert.equal(secondCalls.filter(([method]) => method === 'server_info').length, 1);
   assert.deepEqual(report.trust.rpc_endpoints, [second.endpoint]);
   console.log('Native endpoint failure: restarted from server_info and CAPTURE on second endpoint');
 } finally {

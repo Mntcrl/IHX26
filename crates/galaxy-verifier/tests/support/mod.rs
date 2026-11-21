@@ -171,7 +171,7 @@ impl Chain {
         }
         let mut queries = self.queries.clone();
         for &(account, from, to) in &self.queries {
-            if from == DEVICE_MANIFEST && to.is_none() {
+            if to.is_none() {
                 let address = classic_address(&account);
                 let anchor = self.txs.iter().filter(|tx| tx.account == account && tx.result == "tesSUCCESS" && self.validated(tx))
                     .max_by_key(|tx| (tx.ledger, tx.index)).map_or([0; 32], |tx| tx.hash);
@@ -183,9 +183,8 @@ impl Chain {
                 }));
                 for tx in self.txs.iter().filter(|tx| tx.account == account && self.validated(tx) && tx.ledger >= from) {
                     queries.push((account, from, Some(tx.ledger)));
-                    let select = tx.ledger + 5;
-                    let through = (select + 300).min(self.tip);
-                    if select < through { queries.push((account, select + 1, Some(through))); }
+                    queries.push((account, tx.ledger, Some(self.tip)));
+                    if tx.ledger < self.tip { queries.push((account, tx.ledger + 1, Some(self.tip))); }
                 }
             }
         }
@@ -448,19 +447,24 @@ impl World {
     }
 }
 
-/// Publish chunks, then the DEVICE manifest two ledgers later, and register the account_tx queries.
+/// Publish chunks, then the DEVICE manifest the following ledger.
 pub fn register_device(chain: &mut Chain, device: &Wallet, bundle: &DeviceBundle) -> Hash32 {
+    register_device_at(chain, device, bundle, DEVICE_CHUNKS)
+}
+
+pub fn register_device_at(chain: &mut Chain, device: &Wallet, bundle: &DeviceBundle, chunk_ledger: u32) -> Hash32 {
+    let manifest_ledger = chunk_ledger + 1;
     let bytes = bundle.encode();
-    let (bundle_id, total) = publish_bundle(chain, device, MemoKind::DeviceChunk, &bytes, DEVICE_CHUNKS);
+    let (bundle_id, total) = publish_bundle(chain, device, MemoKind::DeviceChunk, &bytes, chunk_ledger);
     let manifest = DeviceManifest {
         network: NETWORK, bundle_id, bundle_len: bytes.len() as u32, chunk_total: total,
-        first_chunk_ledger: DEVICE_CHUNKS, last_chunk_ledger: DEVICE_CHUNKS, kind: bundle.kind, env: bundle.env,
+        first_chunk_ledger: chunk_ledger, last_chunk_ledger: chunk_ledger, kind: bundle.kind, env: bundle.env,
         key_id: bundle.key_id, account_id: device.account_id(), reg_ledger_index: bundle.reg_ledger_index,
         reg_ledger_hash: bundle.reg_ledger_hash,
     };
-    let tx = chain.add(device, MemoKind::Device.as_str(), &manifest.encode(), DEVICE_MANIFEST);
-    chain.queries.push((device.account_id(), DEVICE_CHUNKS, Some(DEVICE_CHUNKS)));
-    chain.queries.push((device.account_id(), DEVICE_MANIFEST, None));
+    let tx = chain.add(device, MemoKind::Device.as_str(), &manifest.encode(), manifest_ledger);
+    chain.queries.push((device.account_id(), chunk_ledger, Some(chunk_ledger)));
+    chain.queries.push((device.account_id(), manifest_ledger, None));
     tx
 }
 

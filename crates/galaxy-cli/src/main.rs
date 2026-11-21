@@ -53,14 +53,14 @@ struct Global {
     /// Time limit for network work, in seconds.
     #[arg(long, global = true, default_value_t = 300, value_parser = clap::value_parser!(u64).range(1..=3600))]
     timeout: u64,
-    /// Maximum account_tx pages (200 rows each) in one history window; 0 forces the walk.
+    /// Maximum account_tx pages per history scan (200 rows each); 0 forces the walk.
     #[arg(long, global = true, default_value_t = VerifierConfig::DEFAULT_HISTORY_PAGES,
         value_parser = clap::value_parser!(u16).range(0..=i64::from(VerifierConfig::DEFAULT_HISTORY_PAGES)))]
     history_pages: u16,
-    /// Maximum AccountTxnID steps in one history window.
+    /// Maximum AccountTxnID steps per history scan (1–65,536).
     #[arg(long, global = true, default_value_t = VerifierConfig::DEFAULT_HISTORY_WALK,
-        value_parser = clap::value_parser!(u16).range(1..=i64::from(VerifierConfig::DEFAULT_HISTORY_WALK)))]
-    history_walk: u16,
+        value_parser = clap::value_parser!(u32).range(1..=65_536))]
+    history_walk: u32,
 }
 
 #[derive(Subcommand)]

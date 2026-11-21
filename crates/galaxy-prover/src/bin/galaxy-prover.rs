@@ -217,7 +217,7 @@ fn run() -> Result<(), String> {
             )
             .map_err(err)?;
             eprintln!(
-                "[DEVELOPMENT setup: ptau phase 1 + single-party phase 2, never for accepted circuits] {info:?} in {:.1} s",
+                "[DEVELOPMENT setup: ptau phase 1 + single-party phase 2, development networks only; never in production configs] {info:?} in {:.1} s",
                 t.elapsed().as_secs_f64()
             );
             Ok(())

@@ -17,6 +17,18 @@ use galaxy_xrpl::keys::Wallet;
 use serde_json::json;
 use support::*;
 
+struct CountedRecording {
+    recording: Recording,
+    counts: std::sync::Mutex<std::collections::BTreeMap<String, usize>>,
+}
+
+impl galaxy_xrpl::ledger::RpcTransport for &CountedRecording {
+    async fn request(&self, method: &str, params: serde_json::Value) -> Result<serde_json::Value, galaxy_xrpl::Error> {
+        *self.counts.lock().unwrap().entry(method.into()).or_default() += 1;
+        self.recording.request(method, params).await
+    }
+}
+
 fn status(report: &Report, id: &str) -> Status {
     report.check(id).unwrap_or_else(|| panic!("check {id} missing")).status
 }
@@ -364,7 +376,7 @@ async fn replayed_capture_id_is_invalid() {
 }
 
 #[tokio::test]
-async fn changed_nonce_is_not_a_rechallenge_and_lookup_uses_the_earliest_evidence() {
+async fn changed_nonce_does_not_make_a_new_challenge_and_lookup_uses_the_earliest_photo() {
     let mut world = World::new();
     let rgb = raster(1);
     let core = world.core(&rgb, 1);
@@ -388,6 +400,169 @@ async fn changed_nonce_is_not_a_rechallenge_and_lookup_uses_the_earliest_evidenc
     assert_eq!(report.candidates[1].manifest_tx, hex::encode_upper(retry.hash));
     assert!(report.candidates[1].summary.starts_with("Not evaluated"));
     assert_check(&report, "proof.groth16", Status::Skipped);
+    assert!(report.summary.contains("1 other CAPTUREs of this photo"));
+}
+
+#[tokio::test]
+async fn equal_evidence_with_different_photo_is_invalid() {
+    let mut world = World::new();
+    let first = world.publish_capture(world.core(&raster(1), 1), L0);
+    let retry = world.publish_capture(world.core_with(&raster(2), 2, first.core.evidence_root), L0 + 1);
+    assert_ne!(first.core.photo_id, retry.core.photo_id);
+    assert_ne!(first.core.rgb_root, retry.core.rgb_root);
+    let ledger = world.chain.ledger();
+    let report = verify_proof_only(retry.hash, &world.ctx(&ledger)).await;
+    assert_eq!(report.state, State::Invalid, "{report}");
+    assert_check(&report, "capture.unique", Status::Fail);
+}
+
+fn add_registration(world: &mut World, device: Wallet) {
+    let key = ed25519_dalek::SigningKey::from_bytes(&[0x77; 32]);
+    let public = key.verifying_key().to_bytes();
+    let bundle = DeviceBundle {
+        kind: DeviceKind::DevUnattested, env: AttestationEnv::NotApplicable, app_id: APP_ID.into(),
+        key_id: ids::dev_key_id(&public), network: NETWORK, reg_ledger_index: REG_LEDGER,
+        reg_ledger_hash: ledger_hash(REG_LEDGER), reg_nonce: [0x55; 32], account_id: device.account_id(),
+        attestation: public.to_vec(),
+    };
+    world.registration_tx = register_device_at(&mut world.chain, &device, &bundle, DEVICE_MANIFEST + 1);
+    world.device = device;
+    world.dev_key = key;
+}
+
+#[tokio::test]
+async fn same_account_cannot_rechallenge_under_another_registration_in_window_a() {
+    let mut world = World::new();
+    let rgb = raster(1);
+    let first_core = world.core(&rgb, 1);
+    let device = Wallet::from_entropy(&[0x22; 16]);
+    let first_key = world.dev_key.clone();
+    add_registration(&mut world, device);
+    let second_key = std::mem::replace(&mut world.dev_key, first_key);
+    let first = world.publish_capture(first_core, L0);
+    world.dev_key = second_key;
+    let retry = world.publish_capture(world.core(&rgb, 2), L0 + 1);
+    assert_ne!(first.core.registration_tx, retry.core.registration_tx);
+    assert_ne!(first.core.evidence_root, retry.core.evidence_root);
+    let ledger = world.chain.ledger();
+    for pages in [0, 64] {
+        let mut ctx = world.ctx(&ledger);
+        ctx.options.history_pages = pages;
+        let report = verify_proof_only(retry.hash, &ctx).await;
+        assert_eq!(report.state, State::Invalid, "{report}");
+        assert_check(&report, "capture.unique", Status::Fail);
+        assert!(report.check("capture.unique").unwrap().detail.contains("earlier CAPTURE of this account"));
+    }
+}
+
+#[tokio::test]
+async fn earliest_image_bound_lookup_capture_decides_across_accounts_even_when_invalid() {
+    let mut world = World::new();
+    let rgb = raster(1);
+    let mut first_core = world.core(&rgb, 1);
+    first_core.preledger_hash = ledger_hash(LPRE - 1);
+    let first = world.publish_capture(first_core, L0);
+    add_registration(&mut world, Wallet::from_entropy(&[0x78; 16]));
+    let later = world.publish_capture(world.core(&rgb, 2), L0 + 1);
+    let proof = world.publish_proof(&later, PROOF_LEDGER);
+    let ledger = world.chain.ledger();
+    let ctx = world.ctx(&ledger);
+    let later_report = verify_proof_only(later.hash, &ctx).await;
+    assert_check(&later_report, "proof.groth16", Status::Pass);
+
+    let node = StaticNode::new(vec![
+        Refs { manifest_tx: later.hash, proof_tx: Some(proof) },
+        Refs { manifest_tx: first.hash, proof_tx: None },
+    ], INCEPTION, TIP);
+    let report = verify_by_photo_id(&png(&rgb), &[node], &ctx).await;
+    assert_eq!(report.state, State::Invalid, "{report}");
+    assert_check(&report, "ledger.preledger_window", Status::Fail);
+    assert_eq!(report.capture.as_ref().unwrap().manifest_tx, hex::encode_upper(first.hash));
+    assert_eq!(report.candidates[1].manifest_tx, hex::encode_upper(later.hash));
+    assert!(report.candidates[1].summary.starts_with("Not evaluated"));
+    assert!(report.summary.contains("1 other CAPTUREs of this photo"));
+    assert!(report.limitations.iter().any(|text| text.contains("limited to the consulted nodes")));
+}
+
+fn resign_own_tx(world: &mut World, hash: [u8; 32], change: impl FnOnce(&mut serde_json::Map<String, serde_json::Value>)) -> [u8; 32] {
+    let tx = world.chain.tx_mut(&hash);
+    let mut object = galaxy_xrpl::codec::decode(&tx.blob).unwrap();
+    let fields = object.as_object_mut().unwrap();
+    fields.remove("SigningPubKey");
+    fields.remove("TxnSignature");
+    change(fields);
+    let signed = galaxy_xrpl::transaction::sign_transaction(object, &world.device).unwrap();
+    tx.blob = signed.blob;
+    tx.hash = signed.hash;
+    signed.hash
+}
+
+#[tokio::test]
+async fn capture_requires_a_nonzero_account_txn_id() {
+    for prior in [None, Some([0u8; 32])] {
+        let mut world = World::new();
+        let capture = world.publish_capture(world.core(&raster(1), 1), L0);
+        let hash = resign_own_tx(&mut world, capture.hash, |object| {
+            if let Some(prior) = prior {
+                object.insert("AccountTxnID".into(), json!(hex::encode_upper(prior)));
+            } else {
+                object.remove("AccountTxnID");
+            }
+        });
+        let ledger = world.chain.ledger();
+        let report = verify_proof_only(hash, &world.ctx(&ledger)).await;
+        assert_eq!(report.state, State::Invalid, "{report}");
+        assert_check(&report, "capture.txn_chain", Status::Fail);
+    }
+}
+
+#[tokio::test]
+async fn account_txn_id_walk_fails_closed_at_reset_in_either_scan() {
+    for reset_ledger in [DEVICE_MANIFEST + 1, L0 + 1] {
+        let mut world = World::new();
+        let core = world.core(&raster(1), 1);
+        let capture = (reset_ledger > L0).then(|| world.publish_capture(core.clone(), L0));
+        let clear = world.chain.add(&world.device, "galaxy/test/fixture", &[1], reset_ledger);
+        resign_own_tx(&mut world, clear, |object| {
+            object.remove("Memos");
+            object.insert("ClearFlag".into(), json!(5));
+        });
+        let reset = world.chain.add(&world.device, "galaxy/test/fixture", &[2], reset_ledger);
+        resign_own_tx(&mut world, reset, |object| {
+            object.remove("Memos");
+            object.remove("AccountTxnID");
+            object.insert("SetFlag".into(), json!(5));
+        });
+        let first = world.chain.add(&world.device, "galaxy/test/fixture", &[3], reset_ledger);
+        resign_own_tx(&mut world, first, |object| {
+            object.insert("AccountTxnID".into(), json!(hex::encode_upper([0u8; 32])));
+        });
+        let capture = capture.unwrap_or_else(|| world.publish_capture(core, L0));
+        let ledger = world.chain.ledger();
+        let mut ctx = world.ctx(&ledger);
+        ctx.options.history_pages = 0;
+        let report = verify_proof_only(capture.hash, &ctx).await;
+        assert_eq!(report.state, State::Unavailable, "{report}");
+        assert_check(&report, "history.complete", Status::Unavailable);
+        assert!(report.summary.contains("chain ends before completing the requested window"), "{report}");
+    }
+}
+
+#[tokio::test]
+async fn account_txn_id_walk_cannot_skip_the_device_manifest() {
+    let mut world = World::new();
+    let capture = world.publish_capture(world.core(&raster(1), 1), L0);
+    let chunk = world.chain.txs.iter().find(|tx| tx.ledger == DEVICE_CHUNKS).unwrap().hash;
+    let hash = resign_own_tx(&mut world, capture.hash, |object| {
+        object.insert("AccountTxnID".into(), json!(hex::encode_upper(chunk)));
+    });
+    let ledger = world.chain.ledger();
+    let mut ctx = world.ctx(&ledger);
+    ctx.options.history_pages = 0;
+    let report = verify_proof_only(hash, &ctx).await;
+    assert_eq!(report.state, State::Unavailable, "{report}");
+    assert_check(&report, "history.complete", Status::Unavailable);
+    assert!(report.summary.contains("chain skipped the DEVICE manifest"), "{report}");
 }
 
 #[tokio::test]
@@ -426,7 +601,7 @@ async fn mis_signed_history_revocation_is_ignored_and_counted() {
 }
 
 #[tokio::test]
-async fn bounded_history_restarts_on_the_account_chain_in_every_window() {
+async fn bounded_history_reuses_a_and_walks_once_for_b_and_c() {
     let mut case = valid_case();
     // A legacy own REVOKE has no signed chain field; its authenticated
     // publication still counts, and its predecessor is in metadata.
@@ -449,7 +624,7 @@ async fn bounded_history_restarts_on_the_account_chain_in_every_window() {
     let meta = hex::encode_upper(galaxy_xrpl::codec::encode(&json!({
         "AffectedNodes": [], "TransactionResult": "tesSUCCESS", "TransactionIndex": 1,
     })).unwrap());
-    for (from, to) in [(DEVICE_MANIFEST, L0), (LSEL + 1, DEADLINE), (DEVICE_MANIFEST, TIP)] {
+    for (from, to) in [(DEVICE_MANIFEST, L0), (L0, TIP)] {
         recording.exchanges.retain(|x| x.method != "account_tx" || x.params["account"] != address
             || x.params["ledger_index_min"] != from || x.params["ledger_index_max"] != to);
         let row = json!({"ledger_index": from, "validated": true, "tx_blob": hex::encode_upper(&signed.blob), "meta_blob": meta});
@@ -466,13 +641,22 @@ async fn bounded_history_restarts_on_the_account_chain_in_every_window() {
     let predecessor = case.world.chain.txs.iter().find(|tx| tx.ledger == DEVICE_CHUNKS).unwrap().hash;
     let mut broken = recording.clone();
     broken.exchanges.retain(|x| x.method != "tx" || x.params["transaction"] != hex::encode_upper(predecessor));
-    let ledger = recording.into_ledger();
-    let report = verify_proof_only(case.capture.hash, &case.world.ctx(&ledger)).await;
+    let measured = CountedRecording { recording, counts: Default::default() };
+    let ledger = galaxy_xrpl::ledger::RpcLedger::new(&measured);
+    let ctx = galaxy_verifier::VerifyContext::new(&ledger, &case.world.config);
+    let report = verify_proof_only(case.capture.hash, &ctx).await;
+    {
+        let counts = measured.counts.lock().unwrap();
+        eprintln!("Padded recording RPC counts: {counts:?}; total {}", counts.values().sum::<usize>());
+        assert_eq!(counts.iter().map(|(method, &count)| (method.as_str(), count)).collect::<Vec<_>>(), [
+            ("account_info", 1), ("account_tx", 130), ("ledger", 5), ("server_info", 1), ("tx", 7),
+        ]);
+    }
     assert_eq!(report.state, State::Unsupported, "{report}");
     assert_check(&report, "proof.groth16", Status::Pass);
     let detail = &report.check("history.complete").unwrap().detail;
-    assert_eq!(detail.matches("64 account_tx pages, 12800 rows, 12800 non-records ignored").count(), 3, "{detail}");
-    assert_eq!(detail.matches("(1 metadata links)").count(), 2, "{detail}");
+    assert_eq!(detail.matches("64 account_tx pages, 12800 rows, 12800 non-records ignored").count(), 2, "{detail}");
+    assert_eq!(detail.matches("(1 metadata links)").count(), 1, "{detail}");
     let ledger = broken.into_ledger();
     let report = verify_proof_only(case.capture.hash, &case.world.ctx(&ledger)).await;
     assert_eq!(report.state, State::Unavailable, "{report}");
@@ -501,6 +685,25 @@ async fn revocation_rules() {
     let report = run(1100, 1200).await;
     assert_check(&report, "registration.revocation", Status::Pass);
     assert!(report.check("registration.revocation").unwrap().detail.contains("ignored"));
+}
+
+#[tokio::test]
+async fn both_history_paths_honor_same_ledger_revocation_even_after_capture() {
+    for after_capture in [false, true] {
+        let mut world = World::new();
+        if !after_capture { world.revoke(L0, 0); }
+        let capture = world.publish_capture(world.core(&raster(1), 1), L0);
+        if after_capture { world.revoke(L0, 0); }
+        world.chain.tip = L0;
+        let ledger = world.chain.ledger();
+        for pages in [0, 64] {
+            let mut ctx = world.ctx(&ledger);
+            ctx.options.history_pages = pages;
+            let report = verify_proof_only(capture.hash, &ctx).await;
+            assert_eq!(report.state, State::Invalid, "{report}");
+            assert_check(&report, "registration.revocation", Status::Fail);
+        }
+    }
 }
 
 #[tokio::test]

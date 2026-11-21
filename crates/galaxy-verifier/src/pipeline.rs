@@ -18,13 +18,13 @@ use galaxy_xrpl::{
     codec,
     keys::{classic_address, decode_address, tx_hash},
     ledger::{LedgerHeader, LedgerTx, ServerInfo},
-    registry::{covers, fetch_bundle, Manifest},
+    registry::{covers, fetch_bundle_from_tx, Manifest},
     transaction::{account_txn_id, decode_galaxy_memo, decode_galaxy_object, GalaxyMemo},
     Error as XrplError, LedgerSource,
 };
 use std::collections::{BTreeMap, HashSet};
 
-/// XRPL account_tx request page size; the page count is configurable per window.
+/// XRPL account_tx request page size; the page count is configurable per scan.
 const PAGE_LIMIT: u16 = 200;
 const MAX_LOOKUP_RANGES: usize = 64;
 /// PROOF candidates evaluated per capture (each costs one pairing check).
@@ -166,7 +166,7 @@ pub async fn verify_photo<L: LedgerSource>(
         report.summary = "No Galaxy references in this image and none supplied; no capture was consulted. Supply a CAPTURE hash or use photo-id lookup.".into();
         return report;
     };
-    evaluate(ctx, report, Some(identity), refs).await.0
+    evaluate(ctx, report, Some(identity), refs).await
 }
 
 /// Manual mode by CAPTURE hash; without an image this is proof-only mode.
@@ -179,7 +179,7 @@ pub async fn verify_manifest<L: LedgerSource>(
     } else {
         let mut report = ctx.report("proof-only");
         mark_no_image(&mut report);
-        evaluate(ctx, report, None, refs).await.0
+        evaluate(ctx, report, None, refs).await
     }
 }
 
@@ -198,8 +198,8 @@ pub async fn verify_proof_transaction<L: LedgerSource>(proof_tx: Hash32, ctx: &V
     pipeline.finish(result)
 }
 
-/// Lookup mode: untrusted nodes supply CAPTURE hints for the photo ID; every
-/// hint is verified from XRPL and only image-bound candidates are aggregated.
+/// Lookup mode: untrusted nodes supply CAPTURE hints for the photo ID.
+/// The earliest authenticated, image-bound hint in XRPL order decides.
 pub async fn verify_by_photo_id<L: LedgerSource, N: LookupSource>(
     image_bytes: &[u8], nodes: &[N], ctx: &VerifyContext<'_, L>,
 ) -> Report {
@@ -208,6 +208,7 @@ pub async fn verify_by_photo_id<L: LedgerSource, N: LookupSource>(
         Ok((identity, _)) => identity,
         Err(stop) => { stop.apply(&mut report); return report; }
     };
+    report.limitations.push("Lookup completeness is limited to the consulted nodes; an earlier CAPTURE may be missing.");
     let mut hints = BTreeMap::new();
     let mut incomplete = nodes.is_empty() || nodes.len() > MAX_LOOKUP_NODES;
     for node in nodes.iter().take(MAX_LOOKUP_NODES) {
@@ -251,25 +252,24 @@ pub async fn verify_by_photo_id<L: LedgerSource, N: LookupSource>(
         };
         ordered.push((key, hash, advertised_proof, tx));
     }
-    ordered.sort_unstable_by_key(|(key, hash, _, _)| (key.map_or((u32::MAX, u32::MAX), |(position, _)| position), *hash));
+    ordered.sort_unstable_by_key(|(key, hash, _, _)| (key.is_none(), *key, *hash));
     let mut report = lookup.report;
-    let mut earliest = HashSet::new();
+    let mut other_captures = 0;
     let mut candidates = Vec::new();
-    let mut best: Option<(State, Report)> = None;
+    let mut earliest: Option<Report> = None;
     let mut ranges = std::mem::take(&mut report.trust.ledger_ranges);
     for (key, manifest_tx, advertised_proof, tx) in ordered {
-        if let Some((_, group)) = key {
-            if !earliest.insert(group) {
-                candidates.push(Candidate {
-                    manifest_tx: hex::encode_upper(manifest_tx),
-                    proof_tx: advertised_proof.map(hex::encode_upper),
-                    state: State::Invalid,
-                    summary: "Not evaluated: an earlier CAPTURE of this registration commits to the same evidence".into(),
-                    checks: vec![Check::new("capture.unique", Status::Fail, "Later CAPTURE shares the earliest candidate's evidence root")],
-                    proofs: Vec::new(),
-                });
-                continue;
-            }
+        if key.is_some() && earliest.is_some() {
+            other_captures += 1;
+            candidates.push(Candidate {
+                manifest_tx: hex::encode_upper(manifest_tx),
+                proof_tx: advertised_proof.map(hex::encode_upper),
+                state: State::Invalid,
+                summary: "Not evaluated: an earlier CAPTURE in XRPL order binds to this photo".into(),
+                checks: vec![Check::new("capture.unique", Status::Fail, "Later CAPTURE matches the same photo as the earliest hint")],
+                proofs: Vec::new(),
+            });
+            continue;
         }
         let refs = Refs { manifest_tx, proof_tx: None };
         let mut pipeline = Pipeline::new(ctx, report.clone());
@@ -277,11 +277,10 @@ pub async fn verify_by_photo_id<L: LedgerSource, N: LookupSource>(
             Ok(tx) => pipeline.capture(refs, Some(identity), info.as_ref().expect("lookup tip"), None, tx).await,
             Err(stop) => Err(stop),
         };
-        let binding = pipeline.binding;
         let mut candidate = pipeline.finish(result);
         ranges.append(&mut candidate.trust.ledger_ranges);
         // Non-binding hints are discarded; an untrusted node must not make an unrelated photo look invalid.
-        let state = if binding == Binding::Matches || candidate.state == State::Unavailable {
+        let state = if key.is_some() || candidate.state == State::Unavailable {
             candidate.state
         } else {
             State::NotFound
@@ -299,13 +298,14 @@ pub async fn verify_by_photo_id<L: LedgerSource, N: LookupSource>(
             },
             checks: candidate.checks.clone(), proofs: std::mem::take(&mut candidate.candidates),
         });
-        if binding == Binding::Matches && priority(state) > best.as_ref().map_or(0, |(s, _)| priority(*s)) {
-            best = Some((state, candidate));
+        if key.is_some() {
+            earliest = Some(candidate);
         }
     }
-    if let Some((state, candidate)) = best.filter(|(state, _)| !incomplete || priority(*state) > priority(State::Invalid)) {
+    if let Some(candidate) = earliest.filter(|candidate| !incomplete ||
+        matches!(candidate.state, State::Verified | State::Pending | State::Unsupported | State::Inconclusive))
+    {
         report = candidate;
-        report.state = state;
     } else if incomplete {
         report.state = State::Unavailable;
         report.summary = "Lookup or required ledger history is incomplete; absence of a capture is not established.".into();
@@ -313,47 +313,33 @@ pub async fn verify_by_photo_id<L: LedgerSource, N: LookupSource>(
         report.state = State::NotFound;
         report.summary = "No capture bound to this image was found in the consulted index ranges and nodes.".into();
     }
+    if other_captures > 0 {
+        report.summary.push_str(&format!(" {other_captures} other CAPTUREs of this photo."));
+    }
     report.trust.ledger_ranges = ranges;
     report.candidates = candidates;
     report
 }
 
-type LookupCaptureKey = ((u32, u32), (Hash32, Hash32));
-
-fn lookup_capture_key(tx: &LedgerTx, image: PhotoIdentity, network: u32, tip: u32) -> Option<LookupCaptureKey> {
+fn lookup_capture_key(tx: &LedgerTx, image: PhotoIdentity, network: u32, tip: u32) -> Option<(u32, u32)> {
     if !tx.validated || tx.ledger_index > tip || tx.transaction_result != "tesSUCCESS" { return None; }
     let envelope = decode_kind(tx, MemoKind::Capture, "capture.decode").ok()?;
     let core = CaptureMemo::decode(&envelope.data).ok()?.core;
     (core.network == network && network_field(&envelope, network)
         && core.account_id == envelope.account && image.photo_id == core.photo_id && image.rgb_root == core.rgb_root)
-        .then_some(((tx.ledger_index, tx.transaction_index), (core.registration_tx, core.evidence_root)))
+        .then_some((tx.ledger_index, tx.transaction_index))
 }
-
-fn priority(state: State) -> u8 {
-    match state {
-        State::Verified => 5,
-        State::Pending => 4,
-        State::Unsupported => 3,
-        State::Inconclusive => 2,
-        State::Invalid => 1,
-        State::NotFound | State::Unavailable => 0,
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Binding { Unchecked, Matches, Mismatch }
 
 async fn evaluate<L: LedgerSource>(
     ctx: &VerifyContext<'_, L>, report: Report, image: Option<PhotoIdentity>, refs: Refs,
-) -> (Report, Binding) {
+) -> Report {
     let mut pipeline = Pipeline::new(ctx, report);
     let result = async {
         let info = pipeline.server_info().await?;
         let tx = pipeline.tx(&refs.manifest_tx, "capture.found").await?;
         pipeline.capture(refs, image, &info, None, tx).await
     }.await;
-    let binding = pipeline.binding;
-    (pipeline.finish(result), binding)
+    pipeline.finish(result)
 }
 
 /// The values every PROOF for one capture must bind to.
@@ -402,7 +388,19 @@ impl ProofOutcome {
 #[derive(Clone, Copy)]
 enum HistoryAnchor {
     Capture { predecessor: Hash32, before: (u32, u32), registration: Hash32 },
-    Tip { index: u32, registration: Option<Hash32> },
+    Tip { capture: Hash32, at: (u32, u32), lsel: u32, proof_max: u32 },
+}
+
+impl HistoryAnchor {
+    fn accepts(self, kind: MemoKind, at: (u32, u32)) -> bool {
+        match self {
+            Self::Capture { before, .. } => kind == MemoKind::Revoke || (kind == MemoKind::Capture && at < before),
+            Self::Tip { at: capture, lsel, proof_max, .. } => {
+                (kind == MemoKind::Revoke && at > capture)
+                    || (kind == MemoKind::Proof && at.0 > lsel && at.0 <= proof_max)
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -411,7 +409,7 @@ struct HistoryScan {
     pages: usize,
     rows: usize,
     ignored: usize,
-    walked: usize,
+    walked: u32,
     rpc_links: usize,
 }
 
@@ -425,13 +423,12 @@ impl HistoryScan {
 struct Pipeline<'ctx, 'data, L: LedgerSource> {
     ctx: &'ctx VerifyContext<'data, L>,
     report: Report,
-    binding: Binding,
     dev_credential: bool,
 }
 
 impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
     fn new(ctx: &'ctx VerifyContext<'data, L>, report: Report) -> Self {
-        Self { ctx, report, binding: Binding::Unchecked, dev_credential: false }
+        Self { ctx, report, dev_credential: false }
     }
 
     fn network(&self) -> u32 { self.ctx.config.network_id.as_u32() }
@@ -529,7 +526,6 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
         if let Some(image) = image {
             let photo_matches = core.photo_id == image.photo_id;
             let rgb_matches = core.rgb_root == image.rgb_root;
-            self.binding = if photo_matches && rgb_matches { Binding::Matches } else { Binding::Mismatch };
             self.report.set("capture.photo_binding", if photo_matches { Status::Pass } else { Status::Fail },
                 if photo_matches { "CAPTURE photo ID equals the presented raster's ID" } else { "CAPTURE photo ID differs from the presented raster" });
             self.report.set("capture.rgb_binding", if rgb_matches { Status::Pass } else { Status::Fail },
@@ -569,7 +565,7 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
         });
         circuit::accepted(self.ctx, &core.circuit_id, Some(&core.policy_id))?;
         self.report.pass("circuit.accepted", "Circuit, policy and VK digest are explicitly pinned in the network config");
-        let circuit = circuit::resolve(self.ctx, &core.circuit_id, Some(&core.policy_id)).await?;
+        let circuit = circuit::resolve(self.ctx, &core.circuit_id, Some(&core.policy_id), Some(info)).await?;
         if let Some((min, max)) = circuit.chunk_range { self.report.note_range("CIRCUIT chunks", min, max); }
         self.report.pass("circuit.registration", format!(
             "Circuit descriptor, policy and verifying-key digests match ({}; {} non-records ignored)",
@@ -593,26 +589,31 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
         });
         let before = (l0, tx.transaction_index);
         let anchor = HistoryAnchor::Capture { predecessor, before, registration: core.registration_tx };
-        let earlier = self.history("A: CAPTURE", &envelope.account, manifest_ledger, l0, MemoKind::Capture, anchor, info).await?;
+        let earlier = self.history("A: CAPTURE/REVOKE", &envelope.account, manifest_ledger, l0, anchor, info).await?;
         let mut counters = Vec::new();
-        for (entry, memo) in earlier {
-            let here = (entry.ledger_index, entry.transaction_index);
-            if here >= before { continue; }
+        for (entry, memo) in &earlier.records {
+            if memo.kind != MemoKind::Capture.as_str() { continue; }
             let Ok(other) = CaptureMemo::decode(&memo.data) else { continue };
-            if other.core.registration_tx != core.registration_tx { continue; }
-            let other_core = other.core.encode();
-            if same_capture(core, &other.core) || ids::capture_id(&other_core) == capture_id {
+            if same_capture(core, &other.core) {
                 return Err(Stop::invalid("capture.unique", format!(
-                    "An earlier CAPTURE of this registration in ledger {} shares the capture ID, photo ID, RGB root or evidence root", entry.ledger_index,
+                    "An earlier CAPTURE of this account in ledger {} shares the photo ID, RGB root or evidence root", entry.ledger_index,
                 )));
             }
+            if other.core.registration_tx != core.registration_tx { continue; }
+            let other_core = other.core.encode();
+            if ids::capture_id(&other_core) == capture_id {
+                return Err(Stop::invalid("capture.unique", format!(
+                    "An earlier CAPTURE of this registration in ledger {} shares the capture ID", entry.ledger_index,
+                )));
+            }
+            let here = (entry.ledger_index, entry.transaction_index);
             if let Ok(assertion) = verify_capture_assertion(&credential, &other_core, &other.assertion) {
                 if let Some(counter) = assertion.counter {
                     counters.push(CounterRecord { ledger_index: here.0, tx_index: here.1, counter });
                 }
             }
         }
-        self.report.pass("capture.unique", "No earlier CAPTURE of this registration shares the capture ID, photo ID, RGB root or evidence root");
+        self.report.pass("capture.unique", "No earlier CAPTURE in window A from this account shares the capture ID, photo ID, RGB root or evidence root");
         match assertion.counter {
             Some(counter) => {
                 verify_counter(CounterRecord { ledger_index: l0, tx_index: tx.transaction_index, counter }, &counters)
@@ -625,11 +626,26 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
             None => self.report.set("capture.counter", Status::NotApplicable,
                 "Development credential has no authenticated counter; only the re-challenge check applies"),
         }
-        let anchor = HistoryAnchor::Tip { index: info.validated_ledger, registration: Some(core.registration_tx) };
-        let revokes = self.history("C: REVOKE", &envelope.account, manifest_ledger, info.validated_ledger, MemoKind::Revoke, anchor, info).await?;
+        let windows = circuit.info.policy.windows;
+        let lsel = l0.checked_add(windows.sel_offset).ok_or_else(|| Stop::invalid("ledger.selection", "Selection ledger overflows"))?;
+        let deadline = lsel.checked_add(windows.w_proof).ok_or_else(|| Stop::invalid("proof.window", "Proof deadline overflows"))?;
+        let tip = info.validated_ledger;
+        let proof_max = deadline.min(tip);
+        self.report.note_range("C: REVOKE", manifest_ledger, tip);
+        if lsel < proof_max { self.report.note_range("B: PROOF", lsel + 1, proof_max); }
+        // Paging saw all of L0. A walk from the CAPTURE's predecessor
+        // missed its same-ledger successors, so include that suffix in B/C.
+        let recent = if earlier.walked == 0 && l0 == tip {
+            HistoryScan::default()
+        } else {
+            let from = if earlier.walked == 0 { l0 + 1 } else { l0 };
+            let anchor = HistoryAnchor::Tip { capture: tx.hash, at: before, lsel, proof_max };
+            self.history("B/C: PROOF/REVOKE", &envelope.account, from, tip, anchor, info).await?
+        };
         let mut revoked_from = None;
         let mut ignored_revokes = 0;
-        for (entry, memo) in revokes {
+        for (entry, memo) in earlier.records.iter().chain(&recent.records) {
+            if memo.kind != MemoKind::Revoke.as_str() { continue; }
             let Ok(revoke) = RevokeMemo::decode(&memo.data) else { ignored_revokes += 1; continue };
             if revoke.registration_tx != core.registration_tx { continue; }
             let effective = if revoke.effective_ledger == 0 { entry.ledger_index } else { revoke.effective_ledger };
@@ -639,6 +655,7 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
             }
             if revoked_from.is_none_or(|(current, _)| effective < current) { revoked_from = Some((effective, entry.hash)); }
         }
+        drop(earlier);
         let ignored = if ignored_revokes > 0 {
             format!("; {ignored_revokes} REVOKE record(s) ignored as malformed, future-dated or out of range")
         } else {
@@ -656,7 +673,6 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
             "No applicable REVOKE; credential state as of ledger {}{ignored}", info.validated_ledger,
         ));
 
-        let windows = circuit.info.policy.windows;
         if lpre == 0 || lpre >= l0 || l0 - lpre > windows.w_cap {
             return Err(Stop::invalid("ledger.preledger_window", format!(
                 "CAPTURE ledger {l0} is outside the window ({lpre}, {lpre} + {}]", windows.w_cap,
@@ -667,8 +683,6 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
             return Err(Stop::invalid("ledger.preledger_window", format!("CAPTURE Lpre hash differs from validated ledger {lpre}")));
         }
         self.report.pass("ledger.preledger_window", format!("Validated Lpre {lpre}; CAPTURE included at {l0}, within {} ledgers", windows.w_cap));
-        let lsel = l0.checked_add(windows.sel_offset).ok_or_else(|| Stop::invalid("ledger.selection", "Selection ledger overflows"))?;
-        let deadline = lsel.checked_add(windows.w_proof).ok_or_else(|| Stop::invalid("proof.window", "Proof deadline overflows"))?;
         if let Some(proof) = &mut self.report.proof { proof.lsel = Some(lsel); proof.deadline = Some(deadline); }
         if lsel > info.validated_ledger {
             return Err(Stop::pending("ledger.selection", format!(
@@ -692,20 +706,14 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
             lsel_hash: selection.hash, deadline, public: public_inputs_v1(&rgb, &evidence, &capture_id, &seed, &tiles),
         };
         let mut discovered = Vec::new();
-        let proof_max = deadline.min(info.validated_ledger);
-        if lsel < proof_max {
-            let anchor = HistoryAnchor::Tip { index: info.validated_ledger, registration: None };
-            let window = self.history("B: PROOF", &envelope.account, lsel + 1, proof_max, MemoKind::Proof, anchor, info).await?;
-            for (entry, memo) in window {
-                if ProofMemo::decode(&memo.data).is_ok_and(|proof| proof.manifest_tx == tx.hash)
-                {
-                    if discovered.len() >= MAX_PROOFS {
-                        return Err(Stop::unavailable("proof.found", format!(
-                            "More than {MAX_PROOFS} PROOF transactions reference this CAPTURE; not evaluated",
-                        )));
-                    }
-                    discovered.push(entry);
+        for (entry, memo) in recent.records {
+            if memo.kind == MemoKind::Proof.as_str() && ProofMemo::decode(&memo.data).is_ok_and(|proof| proof.manifest_tx == tx.hash) {
+                if discovered.len() >= MAX_PROOFS {
+                    return Err(Stop::unavailable("proof.found", format!(
+                        "More than {MAX_PROOFS} PROOF transactions reference this CAPTURE; not evaluated",
+                    )));
                 }
+                discovered.push(entry);
             }
         }
         self.proofs(refs, &statement, &circuit, info, discovered, exact).await
@@ -729,7 +737,7 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
             return Err(Stop::invalid("registration.txn_chain", "DEVICE has no nonzero AccountTxnID predecessor"));
         }
         self.report.pass("registration.txn_chain", "DEVICE binds its AccountTxnID predecessor in the master-key signature");
-        let fetched = fetch_bundle(self.ctx.ledger, &core.registration_tx, self.network(), self.ctx.config.allow_mainnet)
+        let fetched = fetch_bundle_from_tx(self.ctx.ledger, &core.registration_tx, &registration, info, self.network(), self.ctx.config.allow_mainnet)
             .await.map_err(|err| Stop::from_rpc("registration.bundle", &err, true))?;
         let Manifest::Device(manifest) = fetched.manifest else {
             return Err(Stop::invalid(check, "The CAPTURE registration is not a DEVICE manifest"));
@@ -788,11 +796,10 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
         Ok((credential, fetched.manifest_ledger))
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn history(
         &mut self, name: &'static str, account: &AccountId, from: u32, to: u32,
-        kind: MemoKind, anchor: HistoryAnchor, info: &ServerInfo,
-    ) -> Result<Vec<(LedgerTx, GalaxyMemo)>, Stop> {
+        anchor: HistoryAnchor, info: &ServerInfo,
+    ) -> Result<HistoryScan, Stop> {
         const CHECK: &str = "history.complete";
         self.report.note_range(name, from, to);
         if !covers(&info.complete_ledgers, from, to) {
@@ -816,12 +823,12 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
                 let envelope = if entry.validated && entry.transaction_result == "tesSUCCESS" {
                     decode_galaxy_memo(&entry.tx_blob).ok()
                 } else { None };
-                self.collect_record(&mut scan, account, kind, entry, envelope);
+                self.collect_record(&mut scan, account, anchor, entry, envelope);
             }
             marker = page.marker;
             let Some(next) = &marker else {
                 self.finish_history(name, &mut scan)?;
-                return Ok(scan.records);
+                return Ok(scan);
             };
             if !markers.insert(next.to_string()) {
                 return Err(Stop::unavailable(CHECK, format!("{}; account_tx pagination did not advance", scan.detail(name))));
@@ -829,14 +836,14 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
         }
         // Partial pagination must not contribute candidates to a fallback result.
         scan.records.clear();
-        if let Err(reason) = self.walk_history(account, from, to, kind, anchor, &mut scan).await {
+        if let Err(reason) = self.walk_history(account, from, to, anchor, &mut scan).await {
             return Err(Stop::unavailable(CHECK, format!("{}; {reason}", scan.detail(name))));
         }
         self.finish_history(name, &mut scan)?;
-        Ok(scan.records)
+        Ok(scan)
     }
 
-    fn collect_record(&self, scan: &mut HistoryScan, account: &AccountId, kind: MemoKind, entry: LedgerTx, envelope: Option<GalaxyMemo>) {
+    fn collect_record(&self, scan: &mut HistoryScan, account: &AccountId, anchor: HistoryAnchor, entry: LedgerTx, envelope: Option<GalaxyMemo>) {
         let Some((kind_found, memo)) = envelope.and_then(|memo| {
             if memo.account != *account || !network_field(&memo, self.network()) {
                 return None;
@@ -850,7 +857,7 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
             scan.ignored += 1;
             return;
         };
-        if kind_found == kind {
+        if anchor.accepts(kind_found, (entry.ledger_index, entry.transaction_index)) {
             scan.records.push((entry, memo));
         }
     }
@@ -875,19 +882,27 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
     }
 
     async fn walk_history(
-        &self, account: &AccountId, from: u32, to: u32, kind: MemoKind,
-        anchor: HistoryAnchor, scan: &mut HistoryScan,
+        &self, account: &AccountId, from: u32, to: u32, anchor: HistoryAnchor, scan: &mut HistoryScan,
     ) -> Result<(), &'static str> {
-        let (mut hash, mut before, registration) = match anchor {
-            HistoryAnchor::Capture { predecessor, before, registration } => (predecessor, before, Some(registration)),
-            HistoryAnchor::Tip { index, registration } => {
-                let root = self.ctx.ledger.account_root(account, index).await.map_err(|_| "validated AccountRoot unavailable")?;
+        let (mut hash, mut before) = match anchor {
+            HistoryAnchor::Capture { predecessor, before, .. } => (predecessor, before),
+            HistoryAnchor::Tip { .. } => {
+                let root = self.ctx.ledger.account_root(account, to).await.map_err(|_| "validated AccountRoot unavailable")?;
                 let hash = root.account_txn_id.filter(|hash| *hash != [0; 32]).ok_or("AccountRoot has no nonzero AccountTxnID")?;
-                (hash, (index, u32::MAX), registration)
+                (hash, (to, u32::MAX))
             }
         };
-        let mut reached_registration = registration.is_none();
-        while scan.walked < usize::from(self.ctx.options.history_walk) {
+        let mut reached_registration = false;
+        loop {
+            if let HistoryAnchor::Tip { capture, at, .. } = anchor {
+                // The boundary CAPTURE was already fetched and checked.
+                if hash == capture {
+                    return if at < before { Ok(()) } else { Err("AccountTxnID transaction has invalid status or order") };
+                }
+            }
+            if scan.walked >= self.ctx.options.history_walk {
+                return Err("AccountTxnID walk budget exhausted");
+            }
             let tx = self.tx(&hash, "history.complete").await
                 .map_err(|_| "AccountTxnID transaction unavailable or inconsistent")?
                 .ok_or("AccountTxnID transaction missing")?;
@@ -901,10 +916,18 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
             if signer.as_ref() != Some(account) {
                 return Err("AccountTxnID link does not name an own transaction");
             }
-            if here.0 < from {
-                return if reached_registration { Ok(()) } else { Err("AccountTxnID chain skipped the DEVICE manifest") };
+            match anchor {
+                HistoryAnchor::Capture { registration, .. } => {
+                    if here.0 < from {
+                        return if reached_registration { Ok(()) } else { Err("AccountTxnID chain skipped the DEVICE manifest") };
+                    }
+                    reached_registration |= here.0 == from && hash == registration;
+                }
+                HistoryAnchor::Tip { at, .. } => {
+                    if here <= at { return Err("AccountTxnID chain skipped the CAPTURE"); }
+                    if here.0 < from { return Ok(()); }
+                }
             }
-            reached_registration |= registration == Some(hash);
             let previous = match account_txn_id(&object).map_err(|_| "invalid signed AccountTxnID")? {
                 Some(previous) => previous,
                 None => {
@@ -914,19 +937,16 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
                     previous
                 }
             };
-            if here.0 <= to {
-                let envelope = decode_galaxy_object(&object).ok();
-                self.collect_record(scan, account, kind, tx, envelope);
-            }
+            let envelope = decode_galaxy_object(&object).ok();
+            self.collect_record(scan, account, anchor, tx, envelope);
             if previous == [0; 32] {
-                return if here.0 == from && registration.is_some() && reached_registration {
+                return if matches!(anchor, HistoryAnchor::Capture { .. }) && here.0 == from && reached_registration {
                     Ok(())
                 } else { Err("AccountTxnID chain ends before completing the requested window") };
             }
             before = here;
             hash = previous;
         }
-        Err("AccountTxnID walk budget exhausted")
     }
 
     fn evaluate_proof(&self, tx: &LedgerTx, statement: &Statement, circuit: &Circuit, latest: u32) -> ProofOutcome {

@@ -155,8 +155,8 @@ pub async fn verify(
     unreachable!("empty endpoints rejected above")
 }
 
-/// The JavaScript transport pins every endpoint to the configured network before use;
-/// the pipeline checks `server_info` again.
+/// One pinned endpoint per attempt; the pipeline starts with `server_info`
+/// and passes that same ledger snapshot to all verification stages.
 struct JsRpc<'a>(&'a JsLedger, usize);
 
 impl RpcTransport for JsRpc<'_> {

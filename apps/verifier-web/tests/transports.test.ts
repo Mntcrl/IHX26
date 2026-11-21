@@ -8,6 +8,7 @@ const BAD = 'wss://bad.example/';
 const RPC = 'https://rpc.example/';
 const NODE = 'https://node.example/galaxy';
 const INFO = { info: { network_id: 1, validated_ledger: { seq: 123 }, complete_ledgers: '1-123' } };
+const SERVER_INFO = '{"api_version":2}';
 const PARAMS = '{"transaction":"AA","api_version":2,"binary":true}';
 type Request = { id: number; command: string; transaction?: string; api_version: number };
 
@@ -53,13 +54,17 @@ describe('XRPL transport', () => {
     const bad = new MockSocket((req, sock) => sock.response(req.id, { info: { ...INFO.info, network_id: 0 } }));
     let ok: MockSocket | undefined;
     const ledger = new BrowserLedger([BAD, GOOD], 1, url => url === BAD ? bad : (ok = new MockSocket(good)));
-    await expect(ledger.tx(PARAMS, 0)).rejects.toThrow('failed the network check');
+    await expect(ledger.server_info(SERVER_INFO, 0)).rejects.toThrow('failed the network check');
+    await expect(ledger.tx(PARAMS, 0)).rejects.toThrow('was not checked');
     expect(ok).toBeUndefined();
+    await ledger.server_info(SERVER_INFO, 1);
+    expect(JSON.parse(await ledger.tx(PARAMS, 1))).toEqual({ transaction: 'AA' });
     expect(JSON.parse(await ledger.tx(PARAMS, 1))).toEqual({ transaction: 'AA' });
     expect(bad.sent).toEqual([{ id: 1, command: 'server_info', api_version: 2 }]);
     expect(ok?.sent).toEqual([
       { id: 2, command: 'server_info', api_version: 2 },
       { id: 3, command: 'tx', api_version: 2, transaction: 'AA', binary: true },
+      { id: 4, command: 'tx', api_version: 2, transaction: 'AA', binary: true },
     ]);
     ledger.close();
     expect(ok?.readyState).toBe(3);
@@ -71,6 +76,7 @@ describe('XRPL transport', () => {
       else sock.receive(JSON.stringify({ id: req.id, type: 'response', status: 'error', error: 'txnNotFound' }));
     });
     const ledger = new BrowserLedger([GOOD], 1, () => socket);
+    await ledger.server_info(SERVER_INFO, 0);
     expect(JSON.parse(await ledger.tx(PARAMS, 0))).toEqual({ error: 'txnNotFound' });
     ledger.close();
   });
@@ -80,7 +86,7 @@ describe('XRPL transport', () => {
     try {
       const sock = new MockSocket(good, false);
       const ledger = new BrowserLedger([GOOD], 1, () => sock, fetch, 50);
-      const rejection = expect(ledger.tx(PARAMS, 0)).rejects.toThrow('connect timed out');
+      const rejection = expect(ledger.server_info(SERVER_INFO, 0)).rejects.toThrow('connect timed out');
       await vi.advanceTimersByTimeAsync(50);
       await rejection;
       expect(sock.sent).toEqual([]);
@@ -92,7 +98,7 @@ describe('XRPL transport', () => {
     { kind: 'byte-oversized', payload: 'あ'.repeat(3 * 1024 * 1024) },
   ])('rejects $kind WebSocket responses', async ({ payload }) => {
     const ledger = new BrowserLedger([GOOD], 1, () => new MockSocket((_, sock) => sock.receive(payload)));
-    await expect(ledger.tx(PARAMS, 0)).rejects.toThrow(/invalid|oversized/i);
+    await expect(ledger.server_info(SERVER_INFO, 0)).rejects.toThrow(/invalid|oversized/i);
   });
 
   it('preflights and transports JSON-RPC over CORS without credentials or redirects', async () => {
@@ -101,10 +107,14 @@ describe('XRPL transport', () => {
       return Response.json({ id: request.id, result: request.method === 'server_info' ? INFO : { tx: 'data' } });
     });
     const ledger = new BrowserLedger([RPC], 1, undefined, fetcher);
+    await expect(ledger.tx(PARAMS, 0)).rejects.toThrow('was not checked');
+    await ledger.server_info(SERVER_INFO, 0);
+    expect(JSON.parse(await ledger.tx(PARAMS, 0))).toEqual({ tx: 'data' });
     expect(JSON.parse(await ledger.tx(PARAMS, 0))).toEqual({ tx: 'data' });
     expect(fetcher.mock.calls.map(([url, options]) => [url, JSON.parse(String(options?.body))])).toEqual([
       [RPC, { id: 1, method: 'server_info', params: [{ api_version: 2 }] }],
       [RPC, { id: 2, method: 'tx', params: [JSON.parse(PARAMS)] }],
+      [RPC, { id: 3, method: 'tx', params: [JSON.parse(PARAMS)] }],
     ]);
     for (const [, options] of fetcher.mock.calls) {
       expect(options).toMatchObject({ credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer' });

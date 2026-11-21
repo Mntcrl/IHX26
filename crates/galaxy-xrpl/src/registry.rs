@@ -2,7 +2,7 @@
 //! bytes; it does not establish trust in the device or the verifying key.
 
 use crate::keys::{classic_address, tx_hash, Wallet};
-use crate::ledger::{LedgerTx, RpcTransport};
+use crate::ledger::{LedgerTx, RpcTransport, ServerInfo};
 use crate::submission::{Submitter, TxState, TxStore};
 use crate::transaction::{decode_galaxy_memo, Memo};
 use crate::{AccountId, Error, Hash32, LedgerSource};
@@ -177,12 +177,27 @@ pub async fn fetch_bundle_in<L: LedgerSource>(
     source: &L, hash: &Hash32, network_id: u32, allow_mainnet: bool, namespace: Namespace,
 ) -> Result<FetchedBundle, Error> {
     if network_id == 0 && !allow_mainnet { return Err(Error::Network); }
-    let tx = source.tx(hash).await.map_err(|_| Error::HistoryUnavailable("registry manifest transaction unavailable"))?
-        .ok_or(Error::HistoryUnavailable("registry manifest not found"))?;
     let info = source.server_info().await.map_err(|_| Error::HistoryUnavailable("registry ledger coverage unavailable"))?;
     if info.network_id != network_id { return Err(Error::Network); }
+    let tx = source.tx(hash).await.map_err(|_| Error::HistoryUnavailable("registry manifest transaction unavailable"))?
+        .ok_or(Error::HistoryUnavailable("registry manifest not found"))?;
+    fetch_bundle_from_tx_in(source, hash, &tx, &info, network_id, namespace).await
+}
+
+/// Reconstructs a v1 bundle using the manifest and `server_info` snapshot
+/// already read from the same pinned ledger source for this attempt.
+pub async fn fetch_bundle_from_tx<L: LedgerSource>(
+    source: &L, hash: &Hash32, tx: &LedgerTx, info: &ServerInfo, network_id: u32, allow_mainnet: bool,
+) -> Result<FetchedBundle, Error> {
+    if (network_id == 0 && !allow_mainnet) || info.network_id != network_id { return Err(Error::Network); }
+    fetch_bundle_from_tx_in(source, hash, tx, info, network_id, Namespace::V1).await
+}
+
+async fn fetch_bundle_from_tx_in<L: LedgerSource>(
+    source: &L, hash: &Hash32, tx: &LedgerTx, info: &ServerInfo, network_id: u32, namespace: Namespace,
+) -> Result<FetchedBundle, Error> {
     if &tx.hash != hash || tx.ledger_index > info.validated_ledger { return Err(Error::Invalid("registry manifest identity mismatch")); }
-    validate_record(&tx)?;
+    validate_record(tx)?;
     let memo = decode_galaxy_memo(&tx.tx_blob)?;
     check_network(memo.network_id, network_id)?;
     let account = memo.account;

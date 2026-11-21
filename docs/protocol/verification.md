@@ -29,9 +29,9 @@ its digests match the config.
    canonical 1024×768 RGB8 raster; `photo_id = SHA256(...)` (§3) and the Poseidon
    `rgb_root` are recomputed from the presented pixels. Galaxy XMP is parsed but
    only used as a hint.
-2. **Ledger** — `server_info`: the endpoint must serve the configured NetworkID
-   and report a validated ledger (this is the evaluation tip, reported as
-   `trust.latest_validated`).
+2. **Ledger** — One `server_info` preflight per endpoint attempt checks the
+   configured NetworkID and sets the evaluation tip (`trust.latest_validated`).
+   Registry reads reuse this snapshot.
 3. **CAPTURE** — fetched by hash; the returned blob must hash to the requested
    id. Strict `galaxy/v1/capture` decoding. With an image, `photo_id` and
    `rgb_root` must equal the presented raster's (else INVALID in direct/manual
@@ -54,21 +54,27 @@ its digests match the config.
    for key possession only and labelled "development unattested credential".
 6. **Assertion** — `verify_capture_assertion` over the exact 299-byte core
    (App Attest ES256, or the dev Ed25519 signature).
-7. **Account history** — three bounded windows: A `[DEVICE, L0]` for earlier
+7. **Account history** — three logical windows: A `[DEVICE, L0]` for earlier
    CAPTUREs and counters; B `(Lsel, min(deadline, tip)]` for PROOF; C
-   `[DEVICE, tip]` for REVOKE. Each scans up to 64 `account_tx` pages of 200 rows
-   by default. If pagination exceeds the budget, discard that partial scan
-   and follow `AccountTxnID` (up to 4,096 own-transaction steps). A starts
-   at the CAPTURE's signed predecessor; B/C start at the validated tip's
-   AccountRoot `AccountTxnID`. Recompute each linked hash and require its
-   account, order and successful validation. If an own transaction has no
-   signed predecessor, read `PreviousFields.AccountTxnID` in RPC metadata.
+   `[DEVICE, tip]` for REVOKE. Reuse A for C through L0. A single remaining
+   scan covers B and C after L0, including any same-ledger successors of the
+   CAPTURE that a backward walk in A could not see.
+   Each scan uses at most 64 `account_tx` pages of 200 rows by default. On
+   exhaustion, discard partial results and follow `AccountTxnID` (default
+   4,096 steps). A starts at the CAPTURE's signed predecessor and must reach
+   its DEVICE manifest. The shared B/C walk starts at the validated tip's
+   AccountRoot and stops at L0: at the first own transaction in L0 if A
+   paged all of L0, otherwise at the CAPTURE after checking any successors
+   in L0. Recompute each linked hash and require its account, order and
+   successful validation. If an own transaction has no signed predecessor,
+   read `PreviousFields.AccountTxnID` in RPC metadata.
    Third-party, failed, unsigned and mis-signed rows are ignored and counted;
    incomplete history or a broken/exhausted walk returns UNAVAILABLE.
-8. **Uniqueness, counter, revocation** — an earlier CAPTURE of the same
-   registration that shares its capture ID, photo ID, RGB root or evidence root
-   → INVALID. App Attest counters must be strictly increasing (dev credentials
-   have none). REVOKE is honoured with or without the predecessor field.
+8. **Uniqueness, counter, revocation** — an earlier CAPTURE in A from the same
+   account that shares its photo ID, RGB root or evidence root → INVALID,
+   regardless of registration. Capture ID uniqueness and strictly increasing
+   App Attest counters are checked per registration (dev credentials have
+   no counter). REVOKE is honoured with or without the predecessor field.
    Under §10, effective ledger 0 = revoke ledger; backdating is allowed;
    future-dated or out-of-range revokes are ignored and reported; L0 ≥ effective
    → INVALID. The report states "credential state as of ledger N".
@@ -128,7 +134,7 @@ Report order; `proven_by` is fixed per check.
 | capture.assertion | attestation | assertion over the CAPTURE core |
 | capture.counter | attestation | counter strictly increasing |
 | history.complete | ledger-rpc | history windows complete, with page, ignored-row and walk counts |
-| capture.unique | ledger-rpc | no earlier CAPTURE of this registration shares capture ID, photo ID, RGB root or evidence root |
+| capture.unique | ledger-rpc | earlier CAPTUREs in A: unique capture ID per registration, unique photo ID, RGB root and evidence root per account |
 | registration.revocation | ledger-rpc | no applicable REVOKE up to the tip |
 | ledger.preledger_window | ledger-rpc | Lpre hash and capture window |
 | ledger.selection | ledger-rpc | Lsel validated |
@@ -158,15 +164,16 @@ listed under `candidates[]`.
 | UNAVAILABLE | 50 | RPC/node/history missing or rejected; nothing established |
 | UNSUPPORTED | 60 | unknown circuit, non-accepted app ID/environment, unsupported image, dev-unattested credential |
 
-Lookup aggregation (§13): hints whose CAPTURE does not bind to the image are
-listed as rejected hints (NOT_FOUND), never INVALID. Among binding candidates:
-VERIFIED > PENDING > UNSUPPORTED > INCONCLUSIVE > INVALID; INVALID only if every
-binding candidate is invalid. An incomplete lookup (node error, gaps, caps,
-unavailable candidate) yields UNAVAILABLE unless a state above INVALID was
-established. A complete lookup with no binding candidate yields NOT_FOUND with
-the consulted ranges and nodes.
-Only the earliest lookup candidate of a registration with a given evidence
-root is evaluated; later equal-evidence candidates are listed as re-challenges.
+Lookup (§13): use the earliest validated, master-key-signed CAPTURE that
+binds to this photo among the consulted hints, in XRPL transaction order
+across all registrations and accounts. Later binding CAPTUREs are counted
+and listed as not evaluated; their proofs cannot change the result.
+Non-binding hints are rejected, not INVALID. An incomplete lookup (node
+error, gaps, caps, unavailable ledger data) yields UNAVAILABLE unless the
+earliest binding hint establishes VERIFIED, PENDING, UNSUPPORTED or
+INCONCLUSIVE. A complete lookup with no binding candidate yields NOT_FOUND
+with the consulted ranges and nodes. Even a complete lookup cannot exclude
+an earlier CAPTURE omitted by those nodes.
 
 ## Report (`galaxy-report/v1`)
 
@@ -204,9 +211,10 @@ Limitations are always included.
 
 ## Resource limits
 
-Image ≤ 16 MiB; registry bundles ≤ 1 MiB; per history window defaults of 64
-pages × 200 `account_tx` rows, then ≤ 4,096 AccountTxnID steps; ≤ 32 PROOF
-candidates per capture; lookup: ≤ 16 nodes, ≤ 32 candidates, node response
+Image ≤ 16 MiB; registry bundles ≤ 1 MiB; each of the two history scans defaults
+to 64 pages × 200 `account_tx` rows, then ≤ 4,096 AccountTxnID steps (CLI
+configurable to 65,536); ≤ 32 PROOF candidates per capture; lookup: ≤ 16 nodes,
+≤ 32 candidates, node response
 ≤ 256 KiB; recordings ≤ 64 MiB. Network transports
 bound each request (galaxy-xrpl: timeouts and response caps); the CLI adds an
 overall `--timeout`. Hostile inputs produce INVALID/UNSUPPORTED/UNAVAILABLE
@@ -218,7 +226,8 @@ reports, never panics.
 `api_version` ignored when matching); an unmatched request is a transport error
 (UNAVAILABLE, never absence). `recorded::Recorder` wraps a live transport and
 captures a run (`galaxy --record FILE`). An AccountTxnID-walk recording includes
-the `account_info` anchors and linked `tx` results. The test suite
+the `account_info` anchor and linked `tx` results. Regenerate older recordings
+if they lack responses for the shared B/C scan’s new request range. The test suite
 (`crates/galaxy-verifier/tests/`) builds histories from real signed AccountSet
 transactions (throwaway wallets); `tests/main_v1m.rs` runs the real main_v1m
 circuit (development setup) with a proof made for its offline challenge

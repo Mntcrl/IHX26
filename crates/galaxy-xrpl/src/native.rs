@@ -2,7 +2,11 @@
 //! NetworkID before handing requests or notifications to callers. RPC data is
 //! still trusted for validation status, metadata and history coverage.
 
-use std::{collections::VecDeque, time::Duration};
+use std::{
+    collections::VecDeque,
+    sync::{atomic::{AtomicBool, Ordering}, Arc},
+    time::Duration,
+};
 
 use futures_util::{SinkExt, StreamExt};
 use reqwest::{redirect::Policy, Url};
@@ -42,6 +46,7 @@ pub struct RpcClient {
     http: reqwest::Client,
     urls: Vec<Url>,
     expected_network_id: u32,
+    attempt_checked: Option<Arc<AtomicBool>>,
 }
 
 impl RpcClient {
@@ -65,16 +70,18 @@ impl RpcClient {
             .timeout(REQUEST_TIMEOUT)
             .build()
             .map_err(|_| Error::Rpc("could not create XRPL HTTP client".into()))?;
-        Ok(Self { http, urls, expected_network_id })
+        Ok(Self { http, urls, expected_network_id, attempt_checked: None })
     }
 
-    /// One transport per configured endpoint. Verification callers may restart
-    /// with the next transport but must never merge responses across attempts.
+    /// One transport per configured endpoint and verification attempt. The
+    /// attempt must obtain checked `server_info` before making ledger requests.
+    /// To fail over, restart with the next transport; never combine answers.
     pub fn pinned_endpoints(&self) -> impl Iterator<Item = (&Url, Self)> {
         self.urls.iter().map(|url| (url, Self {
             http: self.http.clone(),
             urls: vec![url.clone()],
             expected_network_id: self.expected_network_id,
+            attempt_checked: Some(Arc::new(AtomicBool::new(false))),
         }))
     }
 
@@ -135,12 +142,29 @@ impl RpcTransport for RpcClient {
         params.as_object_mut()
             .ok_or(Error::Invalid("XRPL request parameters must be an object"))?
             .entry("api_version").or_insert_with(|| API_VERSION.into());
-        let preflight = json!({"api_version": API_VERSION});
         let cap = if method == "ledger" && params.get("transactions").and_then(Value::as_bool) == Some(true) {
             BACKFILL_RESPONSE_CAP
         } else {
             HTTP_RESPONSE_CAP
         };
+        if let Some(checked) = &self.attempt_checked {
+            let url = &self.urls[0];
+            if method == "server_info" {
+                checked.store(false, Ordering::Release);
+                let info = self.call(url, method, &params, PREFLIGHT_CAP).await?;
+                check_network(&info, self.expected_network_id)?;
+                checked.store(true, Ordering::Release);
+                return Ok(info);
+            }
+            if !is_read(method) {
+                return Err(Error::Invalid("unsupported request on a pinned verification attempt"));
+            }
+            if !checked.load(Ordering::Acquire) {
+                return Err(Error::Network);
+            }
+            return self.call(url, method, &params, cap).await;
+        }
+        let preflight = json!({"api_version": API_VERSION});
         let mut last_error = Error::Network;
         let mut missing_history = None;
         for url in &self.urls {
@@ -542,6 +566,33 @@ mod tests {
         wrong_task.await.unwrap();
         right_task.await.unwrap();
         assert!(check_network(&json!({"info": {"validated_ledger": {"seq": 1}}}), 0).is_err());
+    }
+
+    #[tokio::test]
+    async fn pinned_http_checks_once_per_attempt_and_never_queries_an_unchecked_endpoint() {
+        let (wrong, wrong_task) = http_fixture(vec![("server_info", http_ok(server_info(0)))]).await;
+        let (right, right_task) = http_fixture(vec![
+            ("server_info", http_ok(server_info(1))),
+            ("tx", http_ok(json!({"status": "success"}))),
+            ("ledger", http_ok(json!({"status": "success"}))),
+            ("server_info", http_ok(server_info(1))),
+        ]).await;
+        let client = RpcClient::new([wrong, right], 1, false).unwrap();
+        let mut attempts = client.pinned_endpoints();
+        let (_, wrong) = attempts.next().unwrap();
+        let (_, right) = attempts.next().unwrap();
+        assert!(matches!(wrong.server_info().await, Err(Error::Network)));
+        assert!(matches!(wrong.request("tx", json!({})).await, Err(Error::Network)));
+        assert!(matches!(right.request("tx", json!({})).await, Err(Error::Network)));
+        assert_eq!(right.server_info().await.unwrap().network_id, 1);
+        right.request("tx", json!({})).await.unwrap();
+        right.request("ledger", json!({})).await.unwrap();
+
+        let (_, retry) = client.pinned_endpoints().nth(1).unwrap();
+        assert!(matches!(retry.request("tx", json!({})).await, Err(Error::Network)));
+        assert_eq!(retry.server_info().await.unwrap().network_id, 1);
+        wrong_task.await.unwrap();
+        right_task.await.unwrap();
     }
 
     #[tokio::test]
