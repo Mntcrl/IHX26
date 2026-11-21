@@ -102,3 +102,64 @@ Production rehearsal did not produce any calibration exports for this table. To 
 
 | Rehearsal | PASS | Failing predicates and most frequent threshold misses | Suggested adjustment |
 |---|---:|---|---|
+
+## Production rehearsal follow-up: PNG versus JPEG
+
+JPEG was not the cause of the repeated failures. On the same 44 genuine 3-D calibration captures, the two image profiles used the same challenge identifier and 64 draws per capture so that every comparison opened the same pixels. PNG passed 2 more out of 2,816 evaluations, a difference of 0.07 percentage points. Ten draws passed only in PNG, and eight only in JPEG. Geometry, which does not read RGB, agreed on all 2,816 pairs.
+
+| Profile | PASS | Quality failures | Geometry failures | RGB–depth failures | Temporal failures | Motion failures | Captures ≥90% / 50–<90% / <50% |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| PNG | 2,013/2,816 (71.48%) | 0 | 208 | 597 | 179 | 0 | 15 / 19 / 10 |
+| JPEG | 2,011/2,816 (71.41%) | 0 | 208 | 599 | 183 | 0 | 14 / 19 / 11 |
+
+JPEG failure margins (subtest counts can overlap):
+
+- **RGB–depth:** 591/599 failures sampled fewer than six depth discontinuities (median 3; 97 had zero). Only eight failed edge agreement alone; 24 failed both. On the 32 draws with a nonzero discontinuity count and a failing match ratio, median agreement was 0% against 40%. There is no standalone minimum luma-edge count: the ≥5 luma-level gradient matters where the sampled depth changes.
+- **Geometry:** 96/208 had no usable central fit, 83 no usable global fit. 84 missed both strong-outlier criteria (median 0%; 0 tiles against 10% and 3 tiles). 30 exceeded the 80% central plane cap (median 83.8%); 19 missed the three-central-nonplanar-tile minimum (median 2). Coverage contributed too: 18 missed 64 central valid points (median 60) and 23 missed 12 covered tiles (median 11).
+- **Temporal:** 138/183 missed eight informative pairs (median 6). The other 45 missed the 70% depth-consistency fraction (median 63.3%). No failures on usable count, occlusion fraction or photometric match fraction in this calibration comparison.
+
+| Median, JPEG calibration | ≥90% PASS (14) | <50% PASS (11) |
+|---|---:|---:|
+| Valid depth p05 / p50 / p95 | 0.81 / 2.05 / 3.15 m | 1.71 / 2.60 / 4.31 m |
+| Valid depth span p95−p05 | 2.30 m | 2.53 m |
+| Valid depth coverage | 91.0% | 90.5% |
+| Full-raster luma edge density (≥5 luma levels) | 45.4% | 25.8% |
+| Sampled depth discontinuities / informative temporal pairs¹ | 18 / 26.25 | 6 / 14 |
+| Nonplanar tiles overall / central¹ | 16 / 8 | 15 / 7 |
+| Per-side baseline / rotation | 5.21 mm / 0.62° | 10.08 mm / 1.08° |
+
+¹ Median of the per-capture challenge medians. Luma edge density counts horizontal and vertical neighbor comparisons on the 256×192 analysis raster, regardless of whether there is a valid depth edge.
+
+### Device journal and exact replay
+
+After 10:00 CET, the observed journals contain 17 production captures: 5 certified, 4 inconclusive before CAPTURE because a neighbor exceeded the relative-rotation limit (10:00:09, 10:05:17, 12:10:18, 12:17:41), and 8 inconclusive after validated CAPTURE. Certified CAPTURE→PROOF ledgers were 22494762→22494772, 22494919→22494929, 22496426→22496436, 22496872→22496881 and 22497006→22497081.
+
+For all eight inconclusive transactions, the real Testnet JPEG replay agreed with the device checkpoint and reported precisely the journal's failing predicates. GXRW re-ingest and restored GXEV reproduced the on-ledger photo ID and both roots. Holding the ledger challenge fixed, replacing only the image profile reproduced all the same failures in PNG. Both morning failures above also retained the same exact predicates in PNG.
+
+| CAPTURE ledger | Exact failures (both profiles) | Main exact misses | Paired off-ledger PASS, JPEG / PNG (each out of 64) |
+|---|---|---|---:|
+| 22494672 | Geometry | 0 usable central fits vs ≥1 | 20 / 20 |
+| 22496981 | Geometry, temporal, motion | 28 central valid points vs ≥64; 0 global/central fits; 18 usable pairs vs ≥24; 2 informative vs ≥8; 23.35 mrad gyro residual vs ≤20 | 0 / 0 |
+| 22496993 | Geometry | 0 usable global fits vs ≥1; 0% strong points vs ≥10% | 44 / 43 |
+| 22497098 | RGB–depth | 2 depth discontinuities vs ≥6; both matched in both profiles | 19 / 19 |
+| 22497117 | Temporal | 7 informative pairs vs ≥8 | 34 / 36 |
+| 22497149 | Geometry | 9 covered tiles vs ≥12; 0 usable central fits vs ≥1 | 5 / 5 |
+| 22497164 | Geometry, RGB–depth, temporal, motion | 5 covered tiles vs ≥12; 68 valid points vs ≥128; 0 discontinuities vs ≥6; 14 usable pairs vs ≥24; 21.39 mrad gyro residual vs ≤20 | 0 / 0 |
+| 22497180 | RGB–depth | 0 discontinuities vs ≥6 | 23 / 23 |
+| **Total** | | | **145/512 vs 146/512** |
+
+| Median, JPEG | Eight post-CAPTURE failures | All 44 calibration captures |
+|---|---:|---:|
+| Valid depth coverage | 65.3% (25.5–80.6%) | 91.0% (70.7–96.2%) |
+| Per-side baseline | 42.4 mm | 6.0 mm |
+| Per-side rotation | 3.30° | 0.96° |
+| Informative temporal pairs across off-ledger draws | 13 | 22 |
+| Depth discontinuities across off-ledger draws | 8 | 12 |
+
+The failed shots still had 44.0% median full-raster luma-edge density; visible texture is not enough without valid, co-located depth changes. The two motion rejects exceeded the gyroscope-vs-camera residual limit; neither missed the IMU-window, gravity or acceleration thresholds. This rules out an ingest or replay mismatch in the sampled attempts, but does not establish the cause of the IMU mismatch. The certified records retained only JPEGs and journals, not depth/pose evidence, so their coverage, baseline, rotation and temporal pair counts cannot be compared directly. The already-authorized morning certified JPEG had 37.2% luma-edge density.
+
+**For the next shot:** bring matte, contrasting objects into roughly the 0.6–1 m band and scatter depth changes through the middle and sides. Leave a textured 1–3 m background instead of a far wall or bare tabletop. Reframe if the depth overlay leaves large central holes; aim for the roughly 85–95% coverage typical of the most reliable captures. Hold the scene still and drift sideways gently by millimeters to a few centimeters, without turning the phone.
+
+### Local preview cost
+
+Linux release measurements on a Ryzen 5 7520U, 2,816 JPEG draws: core evaluation p50/p95 **21/26 µs**; challenge derivation + view + evaluation **0.81/0.88 ms**; one-time JPEG ingest **96/100 ms** (44 captures, file I/O excluded). At a worst-case true PASS probability near 50%, **43** independent draws give an approximate 95% interval with ±15 percentage points (normal approximation; 39 by Wilson half-width, 82 for a conservative Hoeffding guarantee). At the Linux median this is about **35 ms after ingest**; on-device cost is unmeasured. Such a preview estimates robustness, not the result of the future real ledger challenge.
