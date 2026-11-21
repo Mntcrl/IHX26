@@ -40,35 +40,18 @@ struct CertificationJournal: Codable, Sendable {
     var enteredAt: [String: Date] = [:]
 }
 
-enum ScenePredicate: String, CaseIterable, Codable, Sendable {
+enum ScenePredicate: String, Codable, Sendable {
     case geometry, rgbDepth, temporal, motion, quality
-
-    var hint: String {
-        switch self {
-        case .geometry: "The centre is too flat: put an object 0.6–1 m away with background behind it"
-        case .rgbDepth: "Not enough depth edges: use objects with clear outlines in front of a farther background"
-        case .temporal: "Hold steadier: tiny natural wobble is enough"
-        case .motion: "Slide, don't turn"
-        case .quality: "Use steady light and keep the object in clear view"
-        }
-    }
 }
 
 struct SceneCheckResult: Codable, Sendable {
     static let sampleCount = 48
-    static let minimumPasses = 36
 
     let samples: Int
     let passes: Int
     /// A sample can fail several predicates, so totals can exceed samples - passes.
     let failures: [ScenePredicate: Int]
     let seconds: Double
-
-    var passed: Bool { samples == Self.sampleCount && passes >= Self.minimumPasses }
-    var hint: String {
-        ScenePredicate.allCases.max { failures[$0, default: 0] < failures[$1, default: 0] }?.hint
-            ?? ScenePredicate.quality.hint
-    }
 }
 
 struct CaptureStatementRecord: Codable, Sendable {

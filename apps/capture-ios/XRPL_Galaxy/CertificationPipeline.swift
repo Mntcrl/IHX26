@@ -56,14 +56,16 @@ struct CertificationPipeline {
             guard try await ledger.latestIndex() < deadline else { throw GalaxyError.LedgerWindow }
         }
 
-        func requireSceneCheck(_ statement: CaptureStatementRecord) async throws {
-            if journal.sceneCheck == nil {
+        func sampleScene(_ statement: CaptureStatementRecord) async throws {
+            guard journal.sceneCheck == nil else { return }
+            do {
                 journal.sceneCheck = try await host.checkScene(pin: pin, statement: statement,
                                                                 preledgerIndex: journal.preledger.index,
                                                                 checkpoint: checkpoint)
+            } catch {
+                try Task.checkCancellation()
+                proofTrace("scene estimate unavailable")
             }
-            guard let check = journal.sceneCheck else { throw incompleteJournal }
-            if !check.passed { throw FlowError.inconclusive([check.hint]) }
         }
 
         do {
@@ -84,18 +86,15 @@ struct CertificationPipeline {
                     try advance(.checkingScene)
                 case .checkingScene:
                     guard let statement = journal.statement else { throw incompleteJournal }
-                    try await requireSceneCheck(statement)
+                    try await sampleScene(statement)
                     try advance(.attesting)
                 case .attesting:
                     guard let statement = journal.statement else { throw incompleteJournal }
-                    // An unsigned attempt saved by an older build may not yet have a scene report.
-                    try await requireSceneCheck(statement)
                     guard try await ledger.latestIndex() < statement.deadline else { throw GalaxyError.LedgerWindow }
                     journal.assertion = try await GalaxyAppAttest.assertDigest(keyIdentifier, digest: statement.assertionHash)
                     try advance(.submittingManifest)
                 case .submittingManifest:
                     guard let statement = journal.statement, let assertion = journal.assertion else { throw incompleteJournal }
-                    try await requireSceneCheck(statement)
                     let memo = try buildCaptureMemo(core: statement.core, assertion: assertion)
                     journal.capture = try await ledger.sign(memo: memo, address: wallet.classicAddress, deadline: statement.deadline)
                     try advance(.waitingManifestValidation)

@@ -237,15 +237,7 @@ struct CaptureScreen: View {
 
     /// Coaching only: these live thresholds do not alter the frozen-frame preflight.
     private var sceneGuidance: String {
-        switch motionGrade {
-        case .rotating: return "Don't turn the phone"
-        case .tooFast: return "Too much movement — hold steady"
-        default:
-            if let coverage = capture.depthCoverage, coverage < 0.75 {
-                return "Get closer: objects 0.6–1 m away, background within 3 m"
-            }
-            return "Hold almost still — natural hand wobble is enough"
-        }
+        motionGrade == .rotating ? "Don't turn the phone" : "Hold almost still"
     }
 
     private var motionGrade: MotionGrade {
