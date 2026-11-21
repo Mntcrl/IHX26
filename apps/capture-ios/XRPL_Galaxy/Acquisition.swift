@@ -12,7 +12,9 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
     private struct Pending {
         let center: FrameSnapshot
         let minus: FrameSnapshot?
+        let limits: CapturePolicyLimits?
         var plus: FrameSnapshot?
+        var plusScore: (Int, Double)?
     }
 
     let preview = ARSCNView(frame: .zero)
@@ -55,6 +57,7 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
     @ObservationIgnored private var pending: Pending?
     @ObservationIgnored private var timer: Task<Void, Never>?
     @ObservationIgnored private var active = false
+    @ObservationIgnored private var warmResume = false
     @ObservationIgnored private var requestingPermission = false
     @ObservationIgnored private var firstFrameTime: Double?
     @ObservationIgnored private var lastTrackingFrame: Double?
@@ -84,9 +87,9 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
 
     var canCertify: Bool { canCapture && certificationTrackingReady && certificationDepthReady }
 
-    func setActive(_ value: Bool) {
+    func setActive(_ value: Bool, preservingTracking: Bool = false) {
         active = value
-        guard value else { suspend(); return }
+        guard value else { suspend(preservingTracking: preservingTracking); return }
         if store == nil {
             do {
                 let opened = try CaptureStore()
@@ -121,6 +124,11 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
     }
 
     private func start() {
+        if warmResume, let config = preview.session.configuration {
+            startSensors(config, options: [])
+            return
+        }
+        warmResume = false
         let formats = ARWorldTrackingConfiguration.supportedVideoFormats
         let describe: (ARConfiguration.VideoFormat) -> String = {
             "\(Int($0.imageResolution.width))×\(Int($0.imageResolution.height)) @ \($0.framesPerSecond) fps (\($0.captureDeviceType.rawValue))"
@@ -143,23 +151,31 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
         config.worldAlignment = .gravity
         videoFormat = describe(format)
         print("GXCAPTURE selected: \(videoFormat)")
+        startSensors(config, options: [.resetTracking, .removeExistingAnchors])
+    }
+
+    private func startSensors(_ config: ARConfiguration, options: ARSession.RunOptions) {
         cameraStatus = "Starting unsmoothed LiDAR"
         running = true
         motion.start()
         bluetooth.start()
-        preview.session.run(config, options: [.resetTracking, .removeExistingAnchors])
+        preview.session.run(config, options: options)
     }
 
-    private func suspend() {
+    private func suspend(preservingTracking: Bool = false) {
+        if !preservingTracking {
+            warmResume = false
+            lastTrackingFrame = nil
+            normalTrackingSince = nil
+        }
         guard running else { return }
+        warmResume = preservingTracking
         running = false
         preview.session.pause()
         motion.stop()
         bluetooth.stop()
         history.removeAll(keepingCapacity: true)
         firstFrameTime = nil
-        lastTrackingFrame = nil
-        normalTrackingSince = nil
         policyDepthSince = nil
         trackingNormal = false
         certificationTrackingReady = false
@@ -213,9 +229,11 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
         if preview.debugOptions != wanted { preview.debugOptions = wanted }
         if wantsCenter {
             centerDeadline = nil
+            let limits = record?.certification == nil ? nil : policyLimits
             pending = Pending(center: snapshot,
-                              minus: widest(in: history, center: snapshot,
-                                            lower: timestamp - 0.5, upper: timestamp - 0.1))
+                              minus: bestNeighbour(in: history, center: snapshot,
+                                                   times: (timestamp - 0.5)...(timestamp - 0.1), limits: limits),
+                              limits: limits)
             // Consider the entire successor window, then allow an additional 50 ms of motion coverage.
             let delay = max(0, timestamp + 0.58 - CACurrentMediaTime())
             timer = Task { [weak self] in
@@ -224,11 +242,13 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
             }
         } else if var window = pending {
             let delta = timestamp - window.center.timestamp
-            // Within the allowed 100–500 ms window favor usable frames and larger displacement.
-            if (0.1...0.5).contains(delta),
-               window.plus.map({ Self.score($0, center: window.center) < Self.score(snapshot, center: window.center) }) ?? true {
-                window.plus = snapshot
-                pending = window
+            if (0.1...0.5).contains(delta) {
+                let score = Self.score(snapshot, center: window.center, limits: window.limits)
+                if window.plusScore.map({ $0 < score }) ?? true {
+                    window.plus = snapshot
+                    window.plusScore = score
+                    pending = window
+                }
             }
         }
         if firstFrameTime == nil { firstFrameTime = timestamp }
@@ -243,6 +263,14 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
     }
 
     private func updateTrackingReadiness(_ state: ARCamera.TrackingState, at timestamp: Double) {
+        if warmResume {
+            warmResume = false
+            // Credit the normal run observed before our pause, not the time the session was stopped.
+            if let previous = lastTrackingFrame, timestamp > previous, let start = normalTrackingSince {
+                normalTrackingSince = timestamp - (previous - start)
+            } else { normalTrackingSince = nil }
+            lastTrackingFrame = nil
+        }
         if let previous = lastTrackingFrame, timestamp <= previous || timestamp - previous > 0.25 {
             normalTrackingSince = nil
             policyDepthSince = nil
@@ -298,14 +326,26 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
         }
     }
 
-    /// Neighbour ranking: frames with normal tracking, pixels and depth first, then larger baseline.
-    private static func score(_ frame: FrameSnapshot, center: FrameSnapshot) -> (Int, Double) {
-        (frame.tracking == 2 && frame.depth != nil && frame.pixels != nil ? 1 : 0, baseline(frame, center))
+    /// Prefer neighbors that pass sensor preflight, retaining the original ranking as a fallback.
+    private static func score(_ frame: FrameSnapshot, center: FrameSnapshot,
+                              limits: CapturePolicyLimits?) -> (Int, Double) {
+        let distance = baseline(frame, center)
+        let valid = frame.tracking == 2 && frame.depth != nil && frame.pixels != nil
+        if valid, let limits, distance.isFinite, distance >= baselineFloor(limits),
+           rotationSkew(frame, center) <= skewLimit(limits) {
+            return (2, distance)
+        }
+        return (valid ? 1 : 0, distance)
     }
 
-    private func widest(in candidates: [FrameSnapshot], center: FrameSnapshot, lower: Double, upper: Double) -> FrameSnapshot? {
-        candidates.lazy.filter { (lower...upper).contains($0.timestamp) }
-            .max(by: { Self.score($0, center: center) < Self.score($1, center: center) })
+    private func bestNeighbour(in candidates: [FrameSnapshot], center: FrameSnapshot,
+                               times: ClosedRange<Double>, limits: CapturePolicyLimits?) -> FrameSnapshot? {
+        var best: (frame: FrameSnapshot, score: (Int, Double))?
+        for frame in candidates where times.contains(frame.timestamp) {
+            let rank = Self.score(frame, center: center, limits: limits)
+            if best.map({ $0.score < rank }) ?? true { best = (frame, rank) }
+        }
+        return best?.frame
     }
 
     private func nearest(in candidates: [FrameSnapshot], target: Double, lower: Double, upper: Double) -> FrameSnapshot? {
@@ -319,6 +359,14 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
 
     /// Standalone calibration may run without a configured circuit; never used for certification.
     private static let diagnosticBaselineMinMeters = 0.0005
+
+    private static func baselineFloor(_ limits: CapturePolicyLimits) -> Double {
+        Double(limits.baselineMinUm) / 1_000_000
+    }
+
+    private static func skewLimit(_ limits: CapturePolicyLimits) -> Double {
+        Double(limits.rotationMaxQ30) / 1_073_741_824 + 0.000_01
+    }
 
     private static func rotationSkew(_ first: FrameSnapshot, _ center: FrameSnapshot) -> Double {
         func rotation(_ frame: FrameSnapshot) -> simd_float3x3 {
@@ -355,15 +403,15 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
         if frames.contains(where: { $0.tracking != 2 }) { issues.append(.tracking) }
         if frames.contains(where: { $0.pixels == nil }) { issues.append(.imageFormat) }
         if frames.contains(where: { $0.depth == nil }) { issues.append(.missingDepth) }
-        let limits = row.certification == nil ? nil : policyLimits
-        let baselineFloor = limits.map { Double($0.baselineMinUm) / 1_000_000 } ?? Self.diagnosticBaselineMinMeters
+        let limits = window.limits
+        let baselineFloor = limits.map(Self.baselineFloor) ?? Self.diagnosticBaselineMinMeters
         let minBaseline = min(Self.baseline(minus, window.center), Self.baseline(plus, window.center))
         if !minBaseline.isFinite || minBaseline < baselineFloor { issues.append(.noMotion) }
         if let limits {
             // A conservative sensor preflight, not a policy verdict: no challenge tiles or
             // provisional witness. Check the full center depth plane and the two relative poses.
             if let depth = window.center.depth, !depth.hasPolicyDepth(limits) { issues.append(.noUsableDepth) }
-            let skewMax = Double(limits.rotationMaxQ30) / 1_073_741_824 + 0.000_01
+            let skewMax = Self.skewLimit(limits)
             if [minus, plus].contains(where: { Self.rotationSkew($0, window.center) > skewMax }) {
                 issues.append(.excessRotation)
             }

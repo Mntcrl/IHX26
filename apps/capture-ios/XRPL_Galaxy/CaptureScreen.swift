@@ -16,10 +16,12 @@ struct CaptureScreen: View {
         capture.isCalibration ? capture.canCapture && model.idle : capture.canCertify && model.readyToCapture
     }
 
-    private var shouldRunCamera: Bool {
-        // Keep the sensors through t+ and the IMU window. Once the frozen samples
-        // are handed to the writer, the rest of certification needs no live sensors.
-        scenePhase == .active && (model.pending == nil || (model.takingPicture && !capture.writing))
+    private enum CameraMode { case live, certificationHold, inactive }
+
+    private var cameraMode: CameraMode {
+        guard scenePhase == .active else { return .inactive }
+        // Keep the sensors through t+ and the IMU window, then pause for certification.
+        return model.pending == nil || (model.takingPicture && !capture.writing) ? .live : .certificationHold
     }
 
     var body: some View {
@@ -64,7 +66,9 @@ struct CaptureScreen: View {
             capture.onStorageFailure = { [weak model] row in model?.cameraStorageFailed(row) }
             if !capture.isStaticDiagnostic { model.setActive(phase == .active) }
         }
-        .onChange(of: shouldRunCamera, initial: true) { _, run in capture.setActive(run) }
+        .onChange(of: cameraMode, initial: true) { _, mode in
+            capture.setActive(mode == .live, preservingTracking: mode == .certificationHold)
+        }
         .onChange(of: model.pin?.limits, initial: true) { _, limits in capture.policyLimits = limits }
         .onChange(of: scenePhase == .active && model.isCertifying, initial: true) { _, keepAwake in
             UIApplication.shared.isIdleTimerDisabled = keepAwake
@@ -147,6 +151,11 @@ struct CaptureScreen: View {
                 if let notice = capture.notice { Chip(systemImage: "xmark.octagon", text: notice, tint: .red) }
             }
             if !capture.isCalibration, capture.running, model.readyToCapture {
+                if turningFast {
+                    Label("Slide sideways, don't turn", systemImage: "arrow.left.and.right")
+                        .font(.caption.weight(.semibold)).foregroundStyle(.yellow)
+                        .padding(5).background(.black.opacity(0.65), in: .rect(cornerRadius: 5))
+                }
                 if !capture.certificationTrackingReady {
                     Label("Waiting for one second of normal ARKit tracking", systemImage: "viewfinder")
                         .font(.caption).padding(5).background(.black.opacity(0.65), in: .rect(cornerRadius: 5))
@@ -227,12 +236,14 @@ struct CaptureScreen: View {
 
     private enum MotionGrade { case unknown, steady, resting, tooFast, rotating }
 
+    private var turningFast: Bool { capture.rotationDegPerSecond.map { $0 > 30 } ?? false }
+
     /// Normal hand wobble is enough (policy floor 0.5 mm per side within 0.1–0.5 s, roughly
     /// ≥ 1 mm/s); only a phone resting on a support is flagged. Very fast motion breaks tracking.
     private var motionGrade: MotionGrade {
-        guard let speed = capture.speedMmPerSecond, let turn = capture.rotationDegPerSecond else { return .unknown }
+        guard let speed = capture.speedMmPerSecond, capture.rotationDegPerSecond != nil else { return .unknown }
         if speed > 150 { return .tooFast }
-        if turn > 30 { return .rotating }
+        if turningFast { return .rotating }
         if speed < 1 { return .resting }
         return .steady
     }
