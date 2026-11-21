@@ -43,6 +43,7 @@ Format: Context / Decision / Consequences. Ranges per agent are listed in spec Â
 | [0090](0090-verifier-states-and-proof-selection.md) | Verifier states, development credentials and PROOF selection |
 | [0091](0091-offline-recordings-and-cli-discovery.md) | Offline XRPL recordings, verifier test vectors and CLI discovery |
 | [0092](0092-own-transaction-history.md) | Walk device-account history through AccountTxnID |
+| [0093](0093-shared-verification-history.md) | Reuse history and network checks within an attempt |
 | [0100](0100-node-disposable-cache.md) | Disposable node cache |
 | [0101](0101-node-ledger-checkpoints.md) | Ledger checkpoints and reconnects |
 | [0102](0102-node-account-coverage.md) | Account-scoped coverage |
