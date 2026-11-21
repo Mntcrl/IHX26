@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self'; worker-src blob:; connect-src 'self' https: wss: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*; base-uri 'none'; form-action 'none'">
+  <title>PHØTON · Photo verifier</title>
+  <meta property="og:title" content="PHØTON · Photo verifier">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="/IHX26/assets/photon-social-CcNmAAsC.png">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="PHØTON — Physical Hardware &amp; Optical Truth On-chain Network">
+  <link rel="icon" type="image/png" sizes="64x64" href="/IHX26/assets/photon-mark-black-CTQ1qAO0.png">
+  <link rel="icon" type="image/png" sizes="64x64" href="/IHX26/assets/photon-mark-white-vcl-MUpD.png" media="(prefers-color-scheme: dark)">
+  <script type="module" crossorigin src="/IHX26/assets/index-D8h69qLs.js"></script>
+  <link rel="stylesheet" crossorigin href="/IHX26/assets/index-D7JLLn-6.css">
+</head>
+<body>
+  <header class="masthead shell">
+    <img class="wordmark" src="/IHX26/assets/photon-wordmark-Brk0RQW2.webp" width="568" height="88" alt="PHØTON">
+    <nav aria-label="Verifier">
+      <a href="#method" data-contrast>How it works</a>
+      <span class="network" data-contrast>XRPL TESTNET</span>
+    </nav>
+  </header>
+  <main>
+    <div class="workbench shell" data-sc-act="flow">
+      <div class="intro">
+        <p class="label" data-contrast>Local photo verification</p>
+        <h1 data-contrast>Verify a<br class="title-break"> photo.</h1>
+        <p class="lede" data-contrast>Check whether a photo matches a physical consistency proof on the XRP Ledger.</p>
+      </div>
+      <div class="instrument">
+        <noscript>JavaScript and WebAssembly are required to verify a photo locally.</noscript>
+        <section class="panel" aria-labelledby="verify-title">
+          <div class="panel-heading">
+            <h2 id="verify-title" data-contrast>Photo input</h2>
+            <span class="label" data-contrast>Local processing</span>
+          </div>
+          <form id="verify-form" method="post">
+            <div id="drop-zone" class="drop-zone">
+              <input id="photo" type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" aria-describedby="file-help">
+              <label for="photo">
+                <span class="drop-icon" aria-hidden="true">
+                  <svg width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M3 10V4h6m14 0h6v6m0 12v6h-6m-14 0H3v-6M16 8v13m-5-5 5 5 5-5"/>
+                  </svg>
+                </span>
+                <span class="drop-instruction" data-contrast>Drop a photo or <strong>choose a file</strong></span>
+                <small id="file-help" data-contrast>JPG or PNG · up to 16 MiB</small>
+              </label>
+            </div>
+            <section id="photo-card" class="photo-card" aria-label="Local photo inspection" hidden>
+              <div id="detection" class="detection"></div>
+              <p id="file-name" class="file-name"></p>
+              <div id="photo-identity" class="identity" hidden>
+                <span class="label">Photo ID</span>
+                <div class="identity-row">
+                  <code id="photo-id"></code>
+                  <button id="copy" type="button" class="secondary compact">Copy ID</button>
+                </div>
+              </div>
+            </section>
+            <div id="lookup-options" class="lookup" hidden>
+              <label class="choice"><input id="discovery" type="checkbox" role="switch" checked> Look up by photo ID</label>
+              <small id="lookup-notice"></small>
+            </div>
+            <div class="controls">
+              <details id="advanced">
+                <summary data-contrast>Advanced</summary>
+                <label class="choice"><input id="manual" type="checkbox"> Use a manual CAPTURE transaction</label>
+                <div id="manual-options" hidden>
+                  <label for="manifest">CAPTURE transaction hash</label>
+                  <input id="manifest" type="text" maxlength="64" spellcheck="false" autocomplete="off" aria-describedby="manual-help">
+                  <small id="manual-help">64 hexadecimal characters. Searches bounded XRPL account history for the proof.</small>
+                </div>
+              </details>
+              <div class="actions">
+                <button id="verify" type="submit" disabled data-contrast>Verify photo <span aria-hidden="true">↗</span></button>
+                <button id="cancel" type="button" class="secondary" hidden>Cancel</button>
+              </div>
+            </div>
+          </form>
+          <p id="status" role="status" aria-live="polite"></p>
+          <div id="progress" class="progress" hidden aria-hidden="true">
+            <small>Checks run as evidence becomes available:</small>
+            <ol>
+              <li>Read photo</li>
+              <li>Fetch CAPTURE from XRPL</li>
+              <li>Check device attestation</li>
+              <li>Recompute challenge</li>
+              <li>Verify zero-knowledge proof</li>
+            </ol>
+          </div>
+          <p class="privacy" data-contrast>
+            <svg aria-hidden="true" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0v2"/></svg>
+            Pixels and filename stay on this device.
+          </p>
+        </section>
+        <section id="results" class="panel" aria-labelledby="result-title" hidden>
+          <h2 id="result-title" tabindex="-1">Verification result</h2>
+          <div id="report"></div>
+        </section>
+      </div>
+      <figure class="optics" aria-hidden="true">
+        <div class="optics-field" data-sc-parallax="-.34"></div>
+        <svg class="optics-rings" data-sc-parallax=".15" viewBox="0 0 570 240" fill="none">
+          <defs>
+            <radialGradient id="glass"><stop offset=".05" stop-color="#f6c974" stop-opacity=".16"/><stop offset="1" stop-color="#1b202a" stop-opacity=".2"/></radialGradient>
+            <linearGradient id="lens-edge" x2="0.9" y2="1"><stop stop-color="#c6a46b"/><stop offset=".45" stop-color="#535963"/><stop offset="1" stop-color="#b28f5e"/></linearGradient>
+          </defs>
+          <g transform="translate(285 120)">
+            <circle r="98" fill="#171a20" stroke="#404553"/>
+            <circle r="90" stroke="#777a81" stroke-dasharray="1 4"/>
+            <circle r="82" fill="url(#glass)" stroke="url(#lens-edge)"/>
+            <circle r="69" stroke="#4d535f"/>
+            <circle r="60" stroke="#4d535f" stroke-dasharray="2 5"/>
+            <circle r="44" stroke="#55515a"/>
+            <path d="M-105 0h210M0-105v210" stroke="#777a81" stroke-dasharray="3 5" opacity=".65"/>
+            <path d="M-67-52v-15h15m104 0h15v15m0 104v15H52m-104 0h-15V52" stroke="#d5ac70"/>
+            <path d="M0-16v32m-16-16h32" stroke="#f0c783"/>
+            <circle r="4" fill="#f0c783"/>
+          </g>
+        </svg>
+        <svg class="optics-marks" data-sc-parallax=".49" viewBox="0 0 570 240" fill="none">
+          <path d="M24 96V30h68m386 0h68v66m0 48v66h-68m-386 0H24v-66" stroke="#505765"/>
+          <path d="M24 120h42m438 0h42M85 115v10m400-10v10" stroke="#777a81"/>
+          <path d="m391 90 33-40h49m-353 119h56l18-24" stroke="#b89359"/>
+          <circle cx="424" cy="50" r="2.5" fill="#f0c783"/>
+          <circle cx="176" cy="169" r="2.5" fill="#f0c783"/>
+        </svg>
+      </figure>
+    </div>
+
+    <section id="method" class="ledger" data-sc-act="flow" aria-labelledby="ledger-title">
+      <div class="shell ledger-inner">
+        <div>
+          <h2 id="ledger-title" data-contrast>A challenge from a future ledger.</h2>
+          <p data-contrast>The capturing device commits the capture first. The hash of the fifth validated ledger after CAPTURE determines which tiles must be tested.</p>
+        </div>
+        <ol class="ledger-track" aria-label="Ledger sequence from CAPTURE to challenge">
+          <li><b data-contrast>L₀</b><span data-contrast>Capture</span></li>
+          <li><b data-contrast>+1</b></li>
+          <li><b data-contrast>+2</b></li>
+          <li><b data-contrast>+3</b></li>
+          <li><b data-contrast>+4</b></li>
+          <li class="challenge"><b data-contrast>+5</b><span data-contrast>Challenge</span></li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="sampling" id="sampling" data-sc-act="flow" data-sc-span="1.55" aria-labelledby="sampling-title">
+      <div class="sample-stage" data-sc-stage>
+        <div class="shell">
+          <div class="sample-heading">
+            <div>
+              <h2 id="sampling-title" data-contrast>Sixteen tiles become the test.</h2>
+              <p data-contrast>Eight central and eight peripheral tiles are selected from the sensor frame. The phone proves checks on samples derived from that challenge, without publishing the sensor data.</p>
+            </div>
+            <span class="label" data-contrast>Illustration · not your photo</span>
+          </div>
+          <figure class="sample-figure" data-sc-verify-state="">
+            <div class="sample-labels">
+              <span class="label" data-contrast>Sensor field / 8 × 6</span>
+              <span class="label" data-contrast>Challenge / 16 tiles</span>
+            </div>
+            <svg class="sample-diagram" viewBox="0 0 592 224" aria-hidden="true">
+              <defs>
+                <pattern id="cells" width="28" height="28" patternUnits="userSpaceOnUse"><rect x="1" y="1" width="26" height="26" rx="1" fill="#201f25" stroke="#494550"/></pattern>
+                <pattern id="samples" x="14" width="28" height="28" patternUnits="userSpaceOnUse"><rect x="1" y="1" width="26" height="26" rx="1" fill="#201f25" stroke="#494550" stroke-dasharray="2 3"/></pattern>
+                <g id="selected-tile">
+                  <rect x="1" y="1" width="26" height="26" rx="1" fill="#30271e" stroke="#f0c783"/>
+                  <path d="M4 21 12 8l6 3 6-5M4 25l9-12 5 2 6-5m-9 15 9-10" fill="none" stroke="#cda66e" stroke-width=".75"/>
+                  <circle cx="12" cy="8" r="1.5" fill="#f0c783"/>
+                </g>
+              </defs>
+              <rect x="28" y="28" width="224" height="168" fill="url(#cells)"/>
+              <rect x="406" y="56" width="112" height="112" fill="url(#samples)"/>
+              <path class="sample-route" d="M273 112h112m-7-5 7 5-7 5" fill="none" stroke="#bba175" stroke-width="1.5" stroke-dasharray="2 4"/>
+              <g id="sample-tiles">
+                <use href="#selected-tile" x="28" y="28"/><use href="#selected-tile" x="140" y="28"/><use href="#selected-tile" x="224" y="28"/><use href="#selected-tile" x="84" y="56"/>
+                <use href="#selected-tile" x="140" y="56"/><use href="#selected-tile" x="56" y="84"/><use href="#selected-tile" x="112" y="84"/><use href="#selected-tile" x="168" y="84"/>
+                <use href="#selected-tile" x="84" y="112"/><use href="#selected-tile" x="140" y="112"/><use href="#selected-tile" x="224" y="112"/><use href="#selected-tile" x="112" y="140"/>
+                <use href="#selected-tile" x="168" y="140"/><use href="#selected-tile" x="28" y="168"/><use href="#selected-tile" x="140" y="168"/><use href="#selected-tile" x="196" y="168"/>
+              </g>
+            </svg>
+            <figcaption data-contrast>Illustrative tile positions. For a real verification, the browser recomputes the selection and checks the Groth16 proof against it.</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <section class="limits shell" data-sc-act="flow" aria-labelledby="limits-title">
+      <div>
+        <h2 id="limits-title" data-contrast>What the verdict means.</h2>
+        <p data-contrast><strong>VERIFIED</strong> means physical consistency under the named policy. It does not establish that the scene is true. Missing evidence does not mean the photo was manipulated.</p>
+        <p data-contrast>Current capture profile: iPhone with LiDAR (<code>galaxy-pc-v1m</code>). Profiles for phones without LiDAR are on the roadmap.</p>
+      </div>
+      <a class="return-to-input" href="#photo" data-contrast>Choose a photo <span aria-hidden="true">↑</span></a>
+    </section>
+  </main>
+  <footer class="site-footer shell">
+    <div>
+      <span data-contrast>PHØTON · Photo verifier</span>
+      <small data-contrast>Physical Hardware &amp; Optical Truth On-chain Network</small>
+    </div>
+    <span class="network" data-contrast>XRPL TESTNET</span>
+    <nav class="project-links" aria-label="Project and team">
+      <a href="https://github.com/Mntcrl/IHX26">Source on GitHub</a>
+      <a href="https://github.com/nicolabalzano">Nicola Balzano</a>
+      <a href="https://github.com/uwu-k">Valerio Bertinetto</a>
+      <a href="https://github.com/utcq">Diego Lasorsa</a>
+      <a href="https://github.com/GiuMox">Giuseppe Moscatelli</a>
+      <a href="https://github.com/Sx4DoW">Ivan Terracciano</a>
+    </nav>
+  </footer>
+</body>
+</html>
