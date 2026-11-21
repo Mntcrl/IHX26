@@ -20,11 +20,14 @@ struct CertificationJournal: Codable, Sendable {
     let imageFormat: CaptureImageFormat
     let keepEvidence: Bool
     let nonce: Data
+    var accountAddress: String?
+    var attestationEnvironment: String?
 
     var statement: CaptureStatementRecord?
     var assertion: Data?
     var capture: JournalTransaction?
     var captureLedger: UInt32?
+    var captureCloseTime: UInt64?
     var selection: LedgerHeader?
     var proofBytes: Data?
     var proofMemo: JournalMemo?

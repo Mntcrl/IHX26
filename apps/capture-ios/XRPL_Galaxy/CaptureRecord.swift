@@ -35,12 +35,19 @@ nonisolated enum CaptureState: String, Codable, Sendable {
     }
 }
 
+nonisolated struct CaptureFrameTracking: Codable, Sendable {
+    let minus: String?
+    let center: String
+    let plus: String?
+}
+
 nonisolated struct CaptureRecord: Codable, Identifiable, Sendable {
     let id: UUID
     let claimedTimeMs: UInt64
     private(set) var state: CaptureState = .ready
     private(set) var reasons: [String] = []
     var certification: CertificationJournal?
+    var frameTracking: CaptureFrameTracking?
 
     mutating func prepareAcquisition(reasons: [String]) throws {
         guard state == .acquiring else { throw CaptureStore.Failure.invalidTransition }

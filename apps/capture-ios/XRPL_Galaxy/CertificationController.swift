@@ -17,7 +17,7 @@ final class CertificationController {
     private(set) var loaded = false
     private(set) var takingPicture = false
     private(set) var progress: CaptureProgressInfo?
-    var imageFormat: CaptureImageFormat = .png
+    var imageFormat: CaptureImageFormat = .jpeg
     var keepEvidence = false
 
     @ObservationIgnored private var ledger: LedgerClient?
@@ -145,8 +145,8 @@ final class CertificationController {
     }
 
     func shutter(_ acquisition: Acquisition) {
-        guard readyToCapture, acquisition.canCapture, let pin, let ledger, let wallet,
-              let deviceTx = registration?.registrationTx else { return }
+        guard readyToCapture, acquisition.canCertify, let pin, let ledger, let wallet, let registration,
+              let deviceTx = registration.registrationTx else { return }
         pausedByUser = false
         let format = imageFormat
         let retain = keepEvidence
@@ -157,11 +157,15 @@ final class CertificationController {
             guard active, let acquisition, acquisition.canCapture else {
                 throw FlowError.paused("The camera was interrupted before the shutter. No capture transaction was signed.")
             }
+            guard acquisition.canCertify else {
+                throw FlowError.paused("Tracking or LiDAR depth changed before the shutter. Wait until both are stable and try again.")
+            }
             let journal = CertificationJournal(descriptorId: pin.id, deviceTx: deviceTx, network: pin.settings.xrpl.networkId,
                                                accountId: wallet.accountId, preledger: LedgerHeader(header),
                                                imageFormat: format, keepEvidence: retain, nonce: nonce,
+                                               accountAddress: wallet.classicAddress,
+                                               attestationEnvironment: registration.build.environmentName,
                                                enteredAt: [CaptureState.acquiring.rawValue: Date()])
-            acquisition.policyLimits = pin.limits
             acquisition.capture(certification: journal)
             guard let row = acquisition.record, row.certification?.nonce == nonce, row.state == .acquiring else {
                 throw FlowError.paused("The shutter could not start. Check protected storage and try again.")
@@ -223,10 +227,19 @@ final class CertificationController {
         provingCancellation?.cancel()
     }
 
-    func certifiedURL(_ row: CaptureRecord) -> URL? {
-        guard row.state == .certified, let store, let url = try? store.certifiedImageURL(row),
-              FileManager.default.fileExists(atPath: url.path) else { return nil }
-        return url
+    func galleryImage(_ row: CaptureRecord) -> GalleryImageSource? {
+        guard let store, let journal = row.certification else { return nil }
+        if row.state == .certified {
+            guard let url = try? store.certifiedImageURL(row), FileManager.default.fileExists(atPath: url.path) else { return nil }
+            return GalleryImageSource(id: row.id, kind: .certified, url: url, format: journal.imageFormat)
+        }
+        guard store.hasRaw(row) else { return nil }
+        return GalleryImageSource(id: row.id, kind: .attempt, url: store.url(row), format: journal.imageFormat)
+    }
+
+    func captureCloseTime(_ index: UInt32) async throws -> UInt64 {
+        guard let ledger else { throw GalaxyError.Network }
+        return try await ledger.header(index: index).closeTime
     }
 
     private func openArtifacts(_ pin: PinnedCircuit) async {

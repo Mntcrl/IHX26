@@ -70,7 +70,8 @@ final class MotionWindow {
         }
         manager.deviceMotionUpdateInterval = 1 / 100
         let generation = storage.withLock { $0.generation }
-        manager.startDeviceMotionUpdates(using: .xArbitraryCorrectedZVertical, to: queue) { [storage] motion, error in
+        // CoreMotion invokes this on the serial operation queue, not MainActor.
+        manager.startDeviceMotionUpdates(using: .xArbitraryCorrectedZVertical, to: queue) { @Sendable [storage] motion, error in
             let sample = motion.map { MotionSample($0) }
             let failed = error != nil
             storage.withLock { buffer in

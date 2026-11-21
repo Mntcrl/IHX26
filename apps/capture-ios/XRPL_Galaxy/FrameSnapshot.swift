@@ -75,7 +75,10 @@ nonisolated struct FrameSnapshot: Sendable {
             return meters.withUnsafeBytes { depth in
                 confidence.withUnsafeBytes { (conf: UnsafeRawBufferPointer) in
                     for i in conf.indices where Int64(conf[i]) >= limits.depthConfMin && conf[i] <= 2 {
-                        let mm = (Double(depth.loadUnaligned(fromByteOffset: i * 4, as: Float32.self)) * 1_000).rounded()
+                        // Match galaxy-evidence's depth_mm quantization before comparing the policy bounds.
+                        let sample = Double(depth.loadUnaligned(fromByteOffset: i * 4, as: Float32.self))
+                        guard sample.isFinite, sample > 0, sample <= 65.535 else { continue }
+                        let mm = (sample * 1_000).rounded(.toNearestOrEven)
                         if mm >= minMm && mm <= maxMm { return true }
                     }
                     return false

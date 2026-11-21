@@ -1,10 +1,10 @@
 import Foundation
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct CertificationScreen: View {
     @Environment(\.dismiss) private var dismiss
     @Bindable var model: CertificationController
+    @State private var galleryLibrary = GalleryLibrary()
 
     var body: some View {
         NavigationStack {
@@ -58,11 +58,11 @@ struct CertificationScreen: View {
                     Section("Capture history") {
                         ForEach(rows) { record in
                             NavigationLink {
-                                CaptureResultScreen(record: record, model: model)
+                                GalleryDetail(model: model, library: galleryLibrary, item: .attempt(record))
                             } label: {
                                 VStack(alignment: .leading) {
                                     Text(record.state.rawValue)
-                                    Text(Date(timeIntervalSince1970: Double(record.claimedTimeMs) / 1_000), format: .dateTime.day().month().hour().minute())
+                                    Text(galleryDate(record.claimedTimeMs), format: .dateTime.day().month().hour().minute())
                                         .font(.caption).foregroundStyle(.secondary)
                                 }
                             }
@@ -124,92 +124,4 @@ struct CertificationScreen: View {
     private func xrp(_ drops: UInt64) -> String {
         (Decimal(drops) / 1_000_000).formatted(.number.precision(.fractionLength(0...6))) + " XRP"
     }
-}
-
-private struct CaptureResultScreen: View {
-    let record: CaptureRecord
-    let model: CertificationController
-    @State private var file: CertifiedFile?
-    @State private var showFiles = false
-    @State private var savingToPhotos = false
-    @State private var message: String?
-
-    private var row: CaptureRecord { model.records.first { $0.id == record.id } ?? record }
-
-    var body: some View {
-        Form {
-            Section("Result") {
-                LabeledContent("State", value: row.state.rawValue)
-                if row.state == .certified {
-                    if let pin = model.pin, pin.id == row.certification?.descriptorId, pin.ceremony == "development-single-party" {
-                        Text("Development setup (Testnet)").font(.footnote)
-                    }
-                    Text("Physical consistency certified under the pinned Testnet policy. Export the original file to preserve verification references.")
-                }
-                ForEach(row.reasons, id: \.self) { reason in Text(reason) }
-                if let journal = row.certification {
-                    LabeledContent("Circuit", value: journal.descriptorId).font(.caption.monospaced()).textSelection(.enabled)
-                    LabeledContent("Image profile", value: journal.imageFormat.rawValue)
-                }
-            }
-            if let journal = row.certification {
-                Section("XRPL references") {
-                    LabeledContent("Pre-capture ledger", value: String(journal.preledger.index))
-                    if let capture = journal.capture { reference("CAPTURE", capture, ledger: journal.captureLedger) }
-                    if let selection = journal.selection { LabeledContent("Selection ledger", value: String(selection.index)) }
-                    if let proof = journal.proof { reference("PROOF", proof, ledger: journal.proofLedger) }
-                }
-                if let witness = journal.witnessSeconds, let prove = journal.proveSeconds {
-                    Section("On-device timings") {
-                        LabeledContent("Witness generation", value: seconds(witness))
-                        LabeledContent("Proof generation", value: seconds(prove))
-                        if let start = journal.enteredAt[CaptureState.acquiring.rawValue],
-                           let end = journal.enteredAt[CaptureState.certified.rawValue] {
-                            LabeledContent("Shutter to certification (wall clock)", value: seconds(end.timeIntervalSince(start)))
-                        }
-                    }
-                }
-            }
-            if let url = model.certifiedURL(row) {
-                Section("Original certified image") {
-                    Button("Export to Files") {
-                        do { file = try CertifiedFile(url: url); showFiles = true }
-                        catch { message = "The protected certified file could not be read." }
-                    }
-                    Button("Save original to Photos") {
-                        savingToPhotos = true
-                        Task { @MainActor in
-                            defer { savingToPhotos = false }
-                            do { try await ExportService.saveToPhotos(url); message = "The original image was added to Photos." }
-                            catch let error as FlowError { message = FlowError.message(error) }
-                            catch { message = "Photos could not save the original image. Try Files instead." }
-                        }
-                    }.disabled(savingToPhotos)
-                }
-            } else if row.state == .certified {
-                Text("The certified image file is unavailable. Unlock the device and reopen the app.")
-            }
-            if let message { Section { Text(message) } }
-        }
-        .navigationTitle("Capture Result")
-        .fileExporter(isPresented: $showFiles, document: file,
-                      contentType: row.certification?.imageFormat == .jpeg ? .jpeg : .png,
-                      defaultFilename: "Galaxy-\(row.id.uuidString)") { result in
-            file = nil
-            switch result {
-            case .success: message = "Exported the original certified image."
-            case .failure: message = "Files did not complete the export."
-            }
-        }
-    }
-
-    @ViewBuilder private func reference(_ name: String, _ signed: JournalTransaction, ledger: UInt32?) -> some View {
-        VStack(alignment: .leading) {
-            Text(name + (ledger.map { " · ledger \($0)" } ?? " · no validated success"))
-            Text(signed.hash).font(.caption.monospaced()).textSelection(.enabled)
-            Text("\(signed.blob.count) bytes · \(signed.feeDrops) drops").font(.caption)
-        }
-    }
-
-    private func seconds(_ value: Double) -> String { value.formatted(.number.precision(.fractionLength(2))) + " s" }
 }

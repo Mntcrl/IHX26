@@ -5,7 +5,11 @@ set -euo pipefail
 subtree=apps/capture-ios
 appdir="$MAC_MIRROR/$subtree"
 bundle=utcq.XRPL-Galaxy
-device="$(_mac_quote "${DEVICE:-E34AE83F-D43C-510A-94EA-8E032BCD853E}")"
+device=E34AE83F-D43C-510A-94EA-8E032BCD853E
+if [[ "${DEVICE:-$device}" != "$device" ]]; then
+    echo 'Refusing to target a device other than the designated Galaxy iPhone.' >&2
+    exit 2
+fi
 core=bindings/swift/GalaxyCore
 artifactdir=circuits/artifacts/v1m
 networkdir=deployments/networks
@@ -124,6 +128,7 @@ case "$cmd" in
     sync-build) sync_build ;;
     push-artifacts) push_artifacts ;;
     install) build; with_device_lock "$install" ;;
+    relaunch) with_device_lock "$launch $bundle" ;;
     run|logs)
         app_args=""
         if [ "$#" -gt 0 ]; then printf -v app_args '%q ' "$@"; app_args="-- $app_args"; fi
@@ -153,5 +158,5 @@ case "$cmd" in
         rsync -rt --chmod=D700,F600 -e "ssh ${_mac_ssh_opts[*]}" \
             "$MAC_HOST:$stage/files/" "$destination/"
         ;;
-    *) echo 'usage: scripts/ios.sh {sync-build|build|install|push-artifacts|run [app args...]|logs [app args...]|pull-fixtures [raw|appattest]}' >&2; exit 2 ;;
+    *) echo 'usage: scripts/ios.sh {sync-build|build|install|push-artifacts|relaunch|run [app args...]|logs [app args...]|pull-fixtures [raw|appattest]}' >&2; exit 2 ;;
 esac

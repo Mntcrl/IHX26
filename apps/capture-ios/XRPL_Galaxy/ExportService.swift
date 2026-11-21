@@ -3,8 +3,12 @@ import Photos
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// A copy of the exact Rust-encoded file, including the XMP packet. Never decode into UIImage.
-struct CertifiedFile: FileDocument {
+extension CaptureImageFormat {
+    var contentType: UTType { self == .jpeg ? .jpeg : .png }
+}
+
+/// Exact exported bytes, including any XMP packet produced by GalaxyCore.
+struct GalleryImageFile: FileDocument {
     static let readableContentTypes: [UTType] = [.png, .jpeg]
     private let bytes: Data
 
@@ -22,7 +26,7 @@ enum ExportService {
     static func saveToPhotos(_ file: URL) async throws {
         let authorization = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
         guard authorization == .authorized || authorization == .limited else {
-            throw FlowError.paused("Photos access was denied. You can still export the original file to Files.")
+            throw FlowError.paused("Photos access was denied. You can still save the photo to Files.")
         }
         let changes: @Sendable () -> Void = {
             let options = PHAssetResourceCreationOptions()

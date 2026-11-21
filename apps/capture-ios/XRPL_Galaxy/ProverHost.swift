@@ -7,6 +7,13 @@ struct PinnedCircuit: Sendable {
     let settings: CaptureNetwork
     let limits: CapturePolicyLimits
     let ceremony: String
+    let policyID: String
+    let policyName: String
+
+    private struct DescriptorPolicy: Decodable {
+        let policyId: String
+        let profile: String
+    }
 
     static func bundled() throws -> Self {
         guard let path = Bundle.main.url(forResource: "descriptor", withExtension: "json") else {
@@ -14,12 +21,15 @@ struct PinnedCircuit: Sendable {
         }
         let descriptor = try Data(contentsOf: path)
         let circuit = try CaptureCircuit.configure(descriptor: descriptor)
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let policy = try decoder.decode(DescriptorPolicy.self, from: descriptor)
         var sha = SHA256()
         sha.update(data: Data("GALAXY/CIRCUIT/v1\0".utf8))
         sha.update(data: descriptor)
         let id = sha.finalize().map { String(format: "%02x", $0) }.joined()
         return Self(id: id, circuit: circuit, settings: circuit.network(), limits: circuit.policyLimits(),
-                    ceremony: circuit.ceremony())
+                    ceremony: circuit.ceremony(), policyID: policy.policyId, policyName: policy.profile)
     }
 }
 

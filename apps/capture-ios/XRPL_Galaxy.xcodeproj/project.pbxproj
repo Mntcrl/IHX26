@@ -272,7 +272,7 @@
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Galaxy optionally scans nearby Bluetooth advertisements in the foreground. Only aggregate counts and signal statistics are saved.";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Galaxy captures a photo and nearby ARKit frames with LiDAR depth. Raw evidence stays on this device unless you explicitly export a private fixture.";
 				INFOPLIST_KEY_NSMotionUsageDescription = "Galaxy uses rotation, gravity and acceleration to evaluate how the phone moved around the shutter.";
-				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Galaxy adds the original certified image and its verification metadata to Photos.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Galaxy adds selected photos to Photos without changing the exported file.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -310,7 +310,7 @@
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Galaxy optionally scans nearby Bluetooth advertisements in the foreground. Only aggregate counts and signal statistics are saved.";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Galaxy captures a photo and nearby ARKit frames with LiDAR depth. Raw evidence stays on this device unless you explicitly export a private fixture.";
 				INFOPLIST_KEY_NSMotionUsageDescription = "Galaxy uses rotation, gravity and acceleration to evaluate how the phone moved around the shutter.";
-				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Galaxy adds the original certified image and its verification metadata to Photos.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Galaxy adds selected photos to Photos without changing the exported file.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

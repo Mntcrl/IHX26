@@ -86,6 +86,9 @@ struct CertificationPipeline {
                 case .waitingSelectionLedger:
                     guard let statement = journal.statement, let inclusion = journal.captureLedger else { throw incompleteJournal }
                     let index = try pin.circuit.selectionLedgerIndex(core: statement.core, captureLedger: inclusion)
+                    if journal.captureCloseTime == nil {
+                        journal.captureCloseTime = try await ledger.header(index: inclusion).closeTime
+                    }
                     journal.selection = LedgerHeader(try await ledger.waitForHeader(index: index))
                     try advance(.generatingWitness)
                 case .generatingWitness:

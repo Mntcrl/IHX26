@@ -27,6 +27,8 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
     private(set) var speedMmPerSecond: Double?
     private(set) var rotationDegPerSecond: Double?
     private(set) var trackingNormal = false
+    private(set) var certificationTrackingReady = false
+    private(set) var certificationDepthReady = false
     private(set) var attempts = 0
     private(set) var exported = 0
     /// Experiment label for the next attempt; persisted so a session of one scene class needs no re-selection.
@@ -55,6 +57,9 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
     @ObservationIgnored private var active = false
     @ObservationIgnored private var requestingPermission = false
     @ObservationIgnored private var firstFrameTime: Double?
+    @ObservationIgnored private var lastTrackingFrame: Double?
+    @ObservationIgnored private var normalTrackingSince: Double?
+    @ObservationIgnored private var policyDepthSince: Double?
     @ObservationIgnored private var probeTriggered = false
     @ObservationIgnored private var attempt: (label: SceneLabel, coverage: Double?, orientation: String)?
     @ObservationIgnored private var attemptMotion = MotionSummary()
@@ -76,6 +81,8 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
     }
 
     var canCapture: Bool { running && !writing && pending == nil && centerDeadline == nil && store != nil }
+
+    var canCertify: Bool { canCapture && certificationTrackingReady && certificationDepthReady }
 
     func setActive(_ value: Bool) {
         active = value
@@ -151,6 +158,12 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
         bluetooth.stop()
         history.removeAll(keepingCapacity: true)
         firstFrameTime = nil
+        lastTrackingFrame = nil
+        normalTrackingSince = nil
+        policyDepthSince = nil
+        trackingNormal = false
+        certificationTrackingReady = false
+        certificationDepthReady = false
         depthCoverage = nil
         speedMmPerSecond = nil
         rotationDegPerSecond = nil
@@ -169,11 +182,17 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
         guard running else { return }
         let timestamp = frame.timestamp
         guard timestamp.isFinite, timestamp > 0 else { return }
+        updateTrackingReadiness(frame.camera.trackingState, at: timestamp)
         // The shutter takes the next delivered frame as t0. Otherwise keep at most ~15 fps
         // (every second 30 fps frame despite timestamp jitter).
         let wantsCenter = centerDeadline != nil
         if !wantsCenter, let previous = history.last, timestamp - previous.timestamp < 0.06 { return }
         let snapshot = FrameSnapshot(frame, arrival: CACurrentMediaTime())
+        if !isCalibration, let policyLimits, let depth = snapshot.depth, depth.hasPolicyDepth(policyLimits) {
+            if policyDepthSince == nil { policyDepthSince = timestamp }
+        } else { policyDepthSince = nil }
+        let depthReady = policyDepthSince.map { timestamp - $0 >= 1 } ?? false
+        if certificationDepthReady != depthReady { certificationDepthReady = depthReady }
         history.removeAll { timestamp - $0.timestamp > 0.6 }
         if history.count == 10 { history.removeFirst() }
         let previous = nearest(in: history, target: timestamp - 0.45, lower: timestamp - 0.55, upper: timestamp - 0.3)
@@ -223,6 +242,20 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
         }
     }
 
+    private func updateTrackingReadiness(_ state: ARCamera.TrackingState, at timestamp: Double) {
+        if let previous = lastTrackingFrame, timestamp <= previous || timestamp - previous > 0.25 {
+            normalTrackingSince = nil
+            policyDepthSince = nil
+            certificationDepthReady = false
+        }
+        lastTrackingFrame = timestamp
+        if case .normal = state {
+            if normalTrackingSince == nil { normalTrackingSince = timestamp }
+        } else { normalTrackingSince = nil }
+        let trackingReady = normalTrackingSince.map { timestamp - $0 >= 1 } ?? false
+        if certificationTrackingReady != trackingReady { certificationTrackingReady = trackingReady }
+    }
+
     func session(_ session: ARSession, didFailWithError error: Error) {
         suspend()
         let failure = error as NSError
@@ -239,7 +272,7 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
     }
 
     func capture(certification: CertificationJournal? = nil) {
-        guard canCapture, let store, certification != nil ? policyLimits != nil : isCalibration else { return }
+        guard let store, certification != nil ? canCertify : canCapture && isCalibration else { return }
         var row = CaptureRecord(id: UUID(), claimedTimeMs: UInt64((Date().timeIntervalSince1970 * 1000).rounded()))
         row.certification = certification
         notice = nil
@@ -304,6 +337,11 @@ final class Acquisition: NSObject, @preconcurrency ARSessionDelegate {
         guard let window = pending, let store, var row = record, row.state == .acquiring else { return }
         pending = nil
         attemptMotion = Self.motionSummary(window)
+        if row.certification != nil {
+            row.frameTracking = .init(minus: window.minus?.trackingReason, center: window.center.trackingReason,
+                                      plus: window.plus?.trackingReason)
+            record = row
+        }
         let bluetooth = bluetooth.freeze(center: window.center.timestamp, until: CACurrentMediaTime())
         guard let minus = window.minus, let plus = window.plus else {
             var reasons = [CaptureIssue.missingFrame.message]

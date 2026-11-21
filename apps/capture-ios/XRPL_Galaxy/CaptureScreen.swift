@@ -7,9 +7,10 @@ struct CaptureScreen: View {
     let model: CertificationController
     @State private var showDeveloper = false
     @State private var showCertification = false
+    @State private var showGallery = false
 
     private var canShutter: Bool {
-        capture.canCapture && (capture.isCalibration ? model.idle : model.readyToCapture)
+        capture.isCalibration ? capture.canCapture && model.idle : capture.canCertify && model.readyToCapture
     }
 
     var body: some View {
@@ -55,8 +56,10 @@ struct CaptureScreen: View {
             if !capture.isStaticDiagnostic { model.setActive(phase == .active) }
             capture.setActive(phase == .active)
         }
+        .onChange(of: model.pin?.limits, initial: true) { _, limits in capture.policyLimits = limits }
         .sheet(isPresented: $showDeveloper) { DeveloperScreen(capture: capture) }
         .sheet(isPresented: $showCertification) { CertificationScreen(model: model) }
+        .sheet(isPresented: $showGallery) { GalleryScreen(model: model) }
     }
 
     private var topBar: some View {
@@ -79,6 +82,11 @@ struct CaptureScreen: View {
             if capture.isCalibration {
                 Chip(systemImage: "number", text: "\(capture.attempts) · \(capture.exported) saved")
             }
+            Button { showGallery = true } label: {
+                Image(systemName: "photo.on.rectangle").font(.body.weight(.semibold)).padding(8)
+            }
+            .background(.black.opacity(0.55), in: Circle())
+            .accessibilityLabel("Gallery")
             Button { showDeveloper = true } label: {
                 Image(systemName: "slider.horizontal.3").font(.body.weight(.semibold)).padding(8)
             }
@@ -116,6 +124,15 @@ struct CaptureScreen: View {
                 Chip(systemImage: "move.3d", text: motionText, tint: motionColor)
                 if !capture.trackingNormal { Chip(systemImage: "exclamationmark.triangle", text: "tracking", tint: .yellow) }
                 if let notice = capture.notice { Chip(systemImage: "xmark.octagon", text: notice, tint: .red) }
+            }
+            if !capture.isCalibration, capture.running, model.readyToCapture {
+                if !capture.certificationTrackingReady {
+                    Label("Waiting for one second of normal ARKit tracking", systemImage: "viewfinder")
+                        .font(.caption).padding(5).background(.black.opacity(0.65), in: .rect(cornerRadius: 5))
+                } else if !capture.certificationDepthReady {
+                    Label("Waiting for one second of usable LiDAR depth", systemImage: "sensor.tag.radiowaves.forward")
+                        .font(.caption).padding(5).background(.black.opacity(0.65), in: .rect(cornerRadius: 5))
+                }
             }
         }
     }

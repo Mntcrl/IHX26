@@ -18,7 +18,8 @@ The capture app acquires synchronized ARKit RGB/LiDAR and motion, obtains a real
 | `CertificationController.swift`, `CertificationScreen.swift` | single wallet operation, setup, recovery, capture history and result |
 | `LedgerClient.swift`, `RegistrationFlow.swift` | capped Testnet JSON-RPC in Swift, wallet setup and serial account preparation / DEVICE publication |
 | `CertificationPipeline.swift`, `ProverHost.swift` | capture checkpointing, selection ledger, witness/proof and local verification on a worker |
-| `ExportService.swift` | original file export to Files and PhotoKit |
+| `GalleryScreen.swift`, `GalleryDetail.swift`, `GalleryLibrary.swift` | capture grid, calibration previews, result detail and export packaging |
+| `ExportService.swift` | byte-preserving Files output and add-only PhotoKit resource import |
 | `GalaxyAppAttest.swift`, `AppAttestProbe.swift` | DeviceCheck with GalaxyCore-supplied prehashed inputs; separate DEBUG diagnostic |
 | `WalletSeedStore.swift` | Keychain storage of the XRPL Ed25519 seed entropy |
 
@@ -31,8 +32,11 @@ Removed from the legacy app: POV committee client/models/views/crypto/depth shar
 - Rolling buffer: at most one frame per 60 ms (≈ 15 fps of the 30 fps stream), 0.6 s history (≤ 10 entries). Each `FrameSnapshot` copies Y and CbCr planes without row padding, Float32 depth and u8 confidence (256×192), intrinsics, transform, timestamp, tracking state/reason and the YCbCr matrix attachment. `ARFrame` objects are never retained.
 - Shutter: take t0 from the next delivered AR frame. Pick t− / t+ within 100–500 ms on either side, preferring usable tracking and planes and then larger baseline. The freeze runs at t0 + 580 ms so that the IMU covers t+ + 50 ms.
 - CoreMotion: `CMDeviceMotion` at 100 Hz, reference frame `xArbitraryCorrectedZVertical` (bias-corrected rotation rate; the yaw reference is irrelevant because only `rotationRate`, `gravity` and `userAcceleration` are recorded), 256-sample ring buffer. The snapshot covers [t− − 50 ms, t+ + 50 ms] and is rejected if any gap exceeds 25 ms or a value is non-finite. `CMLogItem.timestamp` and `ARFrame.timestamp` share the uptime clock (measured offsets: docs/experiments/device-capture-sensors.md).
+  The CoreMotion callback is explicitly `@Sendable`: it runs on the motion queue and touches only the locked buffer, not MainActor. ARKit and CoreBluetooth delegates are configured on the main queue.
 - Bluetooth: `CBCentralManager` foreground scan, no connections, `allowDuplicates`. Peripheral identifiers are HMAC-SHA256'd with a random per-session key; only the HMAC lives in memory (≤ 12,000 observations, 6 s), and the key and observations are discarded after each freeze. Aggregate per spec §5 over [max(scan start, t0 − 5 s), freeze]: flags (bit0 powered on, bit1 authorized, bit2 scanned), `scan_duration_ms`, `n_adv`, `n_unique`, 16-bin RSSI histogram of 5 dB from −100 dBm (RSSI clamped to [−100, 0], 127 = unavailable dropped), `rssi_mean_q8`, `rssi_var_q8`, `persistence_pct` (share of identifiers seen in both halves of the window). Bluetooth off/denied → zero aggregate with the corresponding flags; it never blocks a capture.
 - Noise: 16 i16 statistics of the center frame's luma (per quadrant: mean |residual|, RMS, signed mean, % |residual| > 8, all ×64) over a sparse 8-pixel grid, residual = Y − round(mean of 4 neighbours). No residual image is formed or stored; no PRNU.
+
+The certification shutter remains disabled until ARKit tracking has been normal for at least one second and the recent depth frames have contained a confident in-policy sample for at least one second. The camera shows which condition is not ready. Tracking can still change during the shutter window: the three selected frames are checked again, and their tracking reasons are recorded locally. This readiness gate is not used for calibration.
 
 ### Quality gates (capture issue bits, `quality.flags` in GXRW)
 
@@ -64,7 +68,15 @@ The proving actor ingests the frozen GXRW and publishes one protected atomic che
 
 The app persists the assertion, the signed CAPTURE before first submission, validated CAPTURE inclusion L0, then the exact Lsel = L0 + 5 header. The selection header and CAPTURE are immutable inputs on recovery. Run reference policy evaluation, witness generation, proving and verification locally. A failed verdict ends the attempt with predicate names and no PROOF. For an eligible attempt, journal the proof/memo, sign one PROOF, and require its validated `tesSUCCESS` in the allowed window. Rust writes the corresponding XMP into the committed image format. Only after packaging and saving that file does the app record CERTIFIED.
 
-Pause, network failure, an RPC history gap or a lock/unlock never authorize a new CAPTURE or challenge. A journaled transaction is queried by hash first and only the same blob may be resubmitted while valid. Validated `tec` or conclusively searched expiry is terminal. Proving may be restarted on the same inputs before signing the PROOF. **Certification & setup** exposes status, resume and pause; its history shows full failure reasons, public transaction IDs, fee/size and phase timing. Export the original through Files or save it as a PhotoKit resource, never a decoded/recompressed image.
+Pause, network failure, an RPC history gap or a lock/unlock never authorize a new CAPTURE or challenge. A journaled transaction is queried by hash first and only the same blob may be resubmitted while valid. Validated `tec` or conclusively searched expiry is terminal. Proving may be restarted on the same inputs before signing the PROOF. **Certification & setup** exposes status, resume and pause; its history includes attempts that produced no image.
+
+## Gallery and exports
+
+- Tap the photo icon on the camera screen to open **Gallery**. Certification attempts with a saved image are shown newest first, with state and failure reasons. **Calibration captures** lists matching `<uuid>.gxrw` / `<uuid>.label.json` pairs in `Documents/galaxy-fixtures` separately as **Not certified**. Gallery reads these fixtures without changing or sharing either file.
+- Tap a photo for the full image. Certified detail shows the device-indicated capture time and L0 close time, L0/Lsel/Lproof, photo/circuit/policy IDs, the attestation environment, and CAPTURE/PROOF IDs with copy buttons and explorer links from the pinned network config. The single-party circuit is labelled **Development setup (Testnet)**.
+- New captures default to **JPEG (jpeg-v1)**; PNG remains selectable in **Certification & setup → Capture settings**. For a certified JPEG, Gallery preserves the original JPEG scan data and offers a lossless PNG of the exact reference-decoded raster. Both carry the same certification and informational XMP (spec §4). For a PNG-profile capture, only the certified PNG is available: re-encoding such a raster as JPEG may change its photo ID.
+- For each supported format, choose **Share**, **Save to Photos**, or **Save to Files**. GalaxyCore packages certified exports from the stored file; the gallery never exports a preview or JPEG re-encoded by UIKit. Photos receives the exported file as an original photo resource, but sending it from Photos or using a sharing service may transcode it. Use Files to preserve bytes for independent verification. For any uncertified photo, Gallery offers only **Plain JPEG · not certified**, without Galaxy metadata.
+- Thumbnails and export staging files use protected, backup-excluded directories under `Library/Caches/GalaxyThumbnails-v1/` and `Library/Caches/GalaxyExports/`. The full certified original remains under `Application Support/GalaxyCaptures/`. There is no Gallery delete action.
 
 ## Device data safety (spec §19)
 
@@ -101,12 +113,12 @@ The default `capture-off` build omits the App Attest entitlement and uses the ob
    ```sh
    scripts/ios.sh run
    scripts/ios.sh push-artifacts
-   scripts/ios.sh run
+   scripts/ios.sh relaunch
    ```
 
 4. On the first Swift 6/Xcode build, check the generated C module resolves `galaxy_ffiFFI` and that only `libgalaxy_ffi.a` links. Inspect the expanded Info.plist `GalaxyAppID`/`GalaxyAppAttestEnvironment`, effective signing entitlements and add-only Photos usage description. Pay particular attention to SDK-imported concurrency declarations for `DCAppAttestService`, `URLSessionTaskDelegate`, `URLSession.AsyncBytes`, PhotoKit’s asynchronous change block, SwiftUI’s file exporter and the ARKit delegate. Check `devicectl` creates/copies the pair directory and `READY` at the documented paths. These are device/Xcode validation points, not claims of a Linux Swift build.
 5. Create a Testnet wallet. Confirm registration is disabled before validated funds, request faucet XRP, refresh, then start registration. Observe account preparation, all chunks and DEVICE validate. Check the prep tx is memo-free SetFlag 5, first chunk carries the ledger zero sentinel, and subsequent chunks/DEVICE link their validated heads. Record per-tx size and fee, count (preparation + chunks + manifest), and App Attest environment. Top-ups need no authorization step.
-6. Test a textured three-dimensional scene with edges and multiple depths and ordinary hand motion, not a supported phone. Follow the [physical capture protocol](../experiments/device-capture-protocol.md) for diagnostic scenes only. On a real certifying capture record the two tx hashes, Lpre/L0/Lsel/Lproof, witness/prove durations, app size, peak device memory and end-to-end time. Verify both original PNG and JPEG outputs saved through Files, and use **Export Unmodified Original** for the equivalent Photos check. On Linux, with the photographer’s consent and a private copy of each output:
+6. Test a textured three-dimensional scene with edges and multiple depths and ordinary hand motion, not a supported phone. Follow the [physical capture protocol](../experiments/device-capture-protocol.md) for diagnostic scenes only. On a real certifying capture record the two tx hashes, Lpre/L0/Lsel/Lproof, witness/prove durations, app size, peak device memory and end-to-end time. From Gallery, verify a calibration preview and save a plain JPEG to Files. For a certified JPEG capture, save both JPEG and PNG through Files, and use **Export Unmodified Original** for the equivalent Photos check. On Linux, with the photographer’s consent and private copies under `fixtures/real/`, verify each format independently:
 
    ```sh
    CARGO_TARGET_DIR="$PWD/target/GalaxyCLI" scripts/with-slot.sh cargo run --locked -p galaxy-cli -- \
@@ -121,9 +133,10 @@ Use the existing diagnostic commands only in an approved device window:
 scripts/ios.sh build                      # sync + signed Aqua build
 scripts/ios.sh install                    # build + in-place devicectl install under lock
 scripts/ios.sh run [app args…]            # build + install + launch under lock
+scripts/ios.sh relaunch                   # relaunch the installed app without rebuild or reinstall
 scripts/ios.sh logs [app args…]           # launch with --console (device lock), prints app stdout
 scripts/ios.sh pull-fixtures raw          # Documents/galaxy-fixtures → fixtures/real/capture-ios/
 scripts/ios.sh pull-fixtures appattest    # Documents/appattest → fixtures/real/appattest/
 ```
 
-`APP_ATTEST=development|production` requires the corresponding provisioning capability. DEBUG launch arguments: `--app-attest-probe` (isolated App Attest diagnostic), `--static-capture-probe` (raw-only static acquisition and local auto-export), `--diagnostic-exit` (exit on diagnostic completion). No iPhone capture/proof, Xcode compile/link, or Photos export was measured in the Linux-only session.
+`APP_ATTEST=development|production` requires the corresponding provisioning capability. DEBUG launch arguments: `--app-attest-probe` (isolated App Attest diagnostic), `--static-capture-probe` (raw-only static acquisition and local auto-export), `--diagnostic-exit` (exit on diagnostic completion).
