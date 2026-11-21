@@ -4,7 +4,7 @@ Status values: DONE (demonstrated, evidence linked), PARTIAL (some evidence, gap
 
 Normative spec: [`docs/protocol/galaxy-v1-spec.md`](protocol/galaxy-v1-spec.md). Plan: [`docs/PLAN.md`](PLAN.md). Decisions: [`docs/adr/`](adr/README.md). Incidents: [`docs/incidents/`](incidents/).
 
-Last update: 2026-11-21 05:00 CET (orchestrator).
+Last update: 2026-11-21 10:45 CET (orchestrator).
 
 ## Modules
 
@@ -22,39 +22,39 @@ Last update: 2026-11-21 05:00 CET (orchestrator).
 | `crates/galaxy-node` | Node / Hardening | DONE | commits 311a847, f345192, d90aafe; Testnet sync with checkpoints, §14 API + OpenAPI, signed discovery, 3-node compose, prefix-fair request budgets, backoff-scheduled verification |
 | `crates/galaxy-wasm`, `apps/verifier-web` | WebVerifier | DONE | commit 8148662; CLI/WASM report parity; headless Chromium: three lookup modes, 390 px, CSP |
 | `crates/galaxy-devtools` (`galaxy-dev`), e2e scripts | Integration | DONE | commits 8dabc0d + post-hardening run; real-capture CAPTURE→PROOF flows on Testnet with AccountTxnID registrations, image/node/decentralization/history tests |
-| `crates/galaxy-ffi` (GalaxyCore) | IOSRust | DONE | commit 6768e5a; one iOS staticlib + Swift bindings; 8 tests; build guard on accepted circuit pins |
-| `apps/capture-ios/` | IOS / IOSSwift | IN PROGRESS | acquisition, labels, overlays, GXRW export on device (b4700cc); GalaxyCore integration written 2026-11-21 night without a compiler (Mac offline) — compile and device test pending |
-| `apps/prover-bench-ios/` | MobileProver | PARTIAL | 500k benchmark proved on device; main_v1m on-device proving pending |
-| `docs/security/`, `galaxy-security-tests` | Security / Hardening | IN PROGRESS | review 2026-11-21 (962e3aa): no critical, 1 high (S-01) being fixed; 19 decoder property tests (f345192); threat-model corrections pending re-review |
+| `crates/galaxy-ffi` (GalaxyCore) | IOSRust / GalaxyExport | DONE | commits 6768e5a, e87679e; one iOS staticlib + Swift bindings; certified-file export with informational XMP, lossless PNG, calibration previews |
+| `apps/capture-ios/` | IOS / IOSDevice / DemoUX / IOSProve | DONE | certified flow on the device (bac026e … 618b482): registration, CAPTURE, on-phone proof, PROOF, export; live progress view; gallery; readiness gates; bounded XRPL requests with failover; developer proving self-test |
+| `apps/prover-bench-ios/` | MobileProver | DONE | 500k benchmark on device; superseded by the capture app's own proving self-test for main_v1m |
+| `docs/security/`, `galaxy-security-tests` | Security / Hardening | DONE | review 2026-11-21 with two remediation passes; threat model matches the code; 19 decoder property tests |
 
 ## Acceptance criteria (brief §25)
 
-Desktop evidence below comes from `galaxy-dev` on Linux publishing real iPhone captures (GXRW) to Testnet with a dev-unattested credential, so the top verdict there is `UNSUPPORTED` by design; `VERIFIED` requires the App Attest-registered phone flow.
+Phone evidence (2026-11-21): the iPhone 13 Pro Max app, registered with App Attest (development environment), certified real photos end to end on Testnet; the first one ([CAPTURE 7DEA7F30…](https://testnet.xrpl.org/transactions/7DEA7F30DBCEBE5461CDC1E57B2E3E66A4F5617D6708F6B0250796B3BF4C369D), PROOF in ledger 22,494,467) is `VERIFIED` by the Linux and macOS CLIs and by Chromium/Chrome ([measurements](measurements.md#first-phone-certified-photo)). Desktop evidence from `galaxy-dev` uses a dev-unattested credential and is `UNSUPPORTED` by design.
 
 | # | Criterion | Status | Reason / evidence |
 |---|---|---|---|
-| 1 | Launch XRPL Galaxy on the physical iPhone 13 Pro Max | PARTIAL | capture app installed and launched 2026-11-20; certified flow (GalaxyCore) integrated in Swift overnight, not yet compiled |
-| 2 | Capture a synchronized photograph with actual LiDAR and complementary sensor evidence | DONE | 101 device GXRW captures (t−/t0/t+ RGB, depth, confidence, poses, IMU, Bluetooth/noise aggregates; private, `fixtures/real/capture-ios/`) |
-| 3 | Generate the canonical image and evidence commitments | PARTIAL | computed from real device captures on Linux with the same Rust code linked into GalaxyCore; on-device run pending |
-| 4 | Authenticate the capture using the implemented attestation mechanism | PARTIAL | App Attest attestation + assertions generated on the device and verified (04dd7eb); not yet bound to a published CAPTURE |
-| 5 | Publish a validated CAPTURE transaction to XRPL Testnet | PARTIAL | desktop, hardened protocol: CAPTURE [157D7D4E…](https://testnet.xrpl.org/transactions/157D7D4E04814A16319C2FB4815FB54D38CC3C8B92BCCFF60A589AED251B73B5) (PNG) and [B344A453…](https://testnet.xrpl.org/transactions/B344A45348DC7EC41BB7B0D60ED4923649B690CC8CF59D296C9177D3EC3BD891) (JPEG) from real captures; phone pending |
-| 6 | Derive the sampling challenge from the prescribed future ledger | DONE | live: L0 22,486,144 → Lsel 22,486,149 (L0 + 5), challenge derived by prover and verifier ([measurements](measurements.md)) |
-| 7 | Generate a real Groth16 proof locally on the iPhone | PARTIAL | 500k-constraint benchmark on device 3.7 s; main_v1m (876,639) on device pending |
-| 8 | Verify the proof locally before publication | PARTIAL | desktop flow verifies before PROOF; GalaxyCore exposes local verify; on-device pending |
-| 9 | Publish a validated PROOF transaction | PARTIAL | desktop, hardened protocol: PROOF [A10B1227…](https://testnet.xrpl.org/transactions/A10B1227F33E5CA6EBB01F79CF7C18CE5E544C757981377F7765F32BA7BFED12) (PNG) and [AC7D58AA…](https://testnet.xrpl.org/transactions/AC7D58AAA5262A576B9B3E6AE50FB4CD0BBF4C6A4155B44ACB407CC2ADBD7CF5) (JPEG); phone pending |
-| 10 | Export the certified photograph with embedded XRPL references | PARTIAL | desktop PNG and JPEG exports with XMP; on-device export pending |
-| 11 | Open the photograph in the public verification application on another device | PARTIAL | browser verifier verified both real exports in headless Chromium (reports equal to the CLI); test from a second physical device pending |
+| 1 | Launch XRPL Galaxy on the physical iPhone 13 Pro Max | DONE | signed builds installed in place and run on the device (launch crash fixed: CoreMotion handler isolation) |
+| 2 | Capture a synchronized photograph with actual LiDAR and complementary sensor evidence | DONE | t−/t0/t+ RGB, depth, confidence, poses, IMU, Bluetooth/noise aggregates; readiness gates for tracking and depth |
+| 3 | Generate the canonical image and evidence commitments | DONE | on the device via GalaxyCore (ingest + commitments ~0.9–1.0 s); the CAPTURE commitments match the Linux recomputation |
+| 4 | Authenticate the capture using the implemented attestation mechanism | DONE | App Attest (development environment) registration + per-capture assertion; verifier checks `registration.attestation`, `capture.assertion`, `capture.counter` |
+| 5 | Publish a validated CAPTURE transaction to XRPL Testnet | DONE | from the phone, e.g. CAPTURE 7DEA7F30… (ledger 22,494,316); 597 B-class AccountSet, 10 drops |
+| 6 | Derive the sampling challenge from the prescribed future ledger | DONE | Lsel = L0 + 5 on the phone and in every verifier; all three Testnet endpoints returned the same selection ledger |
+| 7 | Generate a real Groth16 proof locally on the iPhone | DONE | main_v1m (876,639 constraints) on the phone: witness 0.27–0.38 s, Groth16 6.2–9.1 s, peak footprint ~1.0 GiB |
+| 8 | Verify the proof locally before publication | DONE | the app verifies the proof against the challenge before building the PROOF memo |
+| 9 | Publish a validated PROOF transaction | DONE | from the phone, PROOF ledgers 22,494,467 and 22,494,772 |
+| 10 | Export the certified photograph with embedded XRPL references | DONE | certified jpeg-v1 with Galaxy XMP (+ informational `galaxyinfo`), lossless PNG; Gallery → Share / Photos / Files |
+| 11 | Open the photograph in the public verification application on another device | DONE | macOS Chrome (live Testnet) `VERIFIED`; presenter package runs the browser verifier locally on a separate Mac (AirDrop from the iPhone) |
 | 12 | Retrieve the required public cryptographic material | DONE | VK and policy from the XRPL CIRCUIT registration, digest-checked against the pinned accepted circuit |
-| 13 | Independently verify the photograph and proof | PARTIAL | CLI, browser and 3 independent nodes: image binding + Groth16 pass on real Testnet captures; overall `UNSUPPORTED` (dev credential) until the phone flow |
-| 14 | Display the correct verification result | PARTIAL | `UNSUPPORTED` / `INVALID` / `NOT_FOUND` / `UNAVAILABLE` shown correctly; `VERIFIED` pending phone flow |
+| 13 | Independently verify the photograph and proof | DONE | Linux CLI, macOS CLI, Linux Chromium and macOS Chrome all `VERIFIED` (39 checks) |
+| 14 | Display the correct verification result | DONE | `VERIFIED`, `INVALID`, `UNSUPPORTED`, `NOT_FOUND`, `UNAVAILABLE` each demonstrated |
 | 15 | Modify the photograph and demonstrate verification failure | DONE | substituted XMP, one changed RGB channel, JPEG recompression → `INVALID` ([measurements](measurements.md)) |
 | 16 | Remove Galaxy metadata and recover the proof through photo identifier lookup | DONE | stripped XMP recovered via a real node lookup and via manual references |
 | 17 | Stop all Galaxy discovery nodes and verify through embedded XRPL references | DONE | all nodes stopped: direct XMP verification still passes Groth16 (`UNSUPPORTED` for the dev credential) |
 | 18 | Ordinary unregistered photograph classified as NOT_FOUND, not fake | DONE | unregistered image → `NOT_FOUND` with the node's coverage stated |
 | 19 | Reference engine and circuit decline to certify representative screen-recapture cases | PARTIAL | held-out real screens 0/64, flat wall 0/32; synthetic monitors 0/20 (centre monitor 3/20); depth substitution still passes 20/20 (known v1m weakness); physical recaptures at 0.35–1.5 m pending |
-| 20 | Report actual transaction counts, memo sizes, latency, constraints, proving memory and fees | PARTIAL | measured: 2 tx and 20 drops per photo, sizes, latencies, 876,639 constraints, desktop proving memory; on-device main_v1m memory pending |
+| 20 | Report actual transaction counts, memo sizes, latency, constraints, proving memory and fees | DONE | 2 tx / 20 drops per photo; registration 5 tx / 50 drops (3 device chunks); 876,639 constraints; on-phone proof 6.2–9.1 s at ~1.0 GiB; shutter→certified 35–46 s |
 
-The two-transaction target (CAPTURE + PROOF per photo) is confirmed on Testnet (desktop flow); registration is one-time (account preparation + device chunks + DEVICE manifest).
+The two-transaction target (CAPTURE + PROOF per photo) is confirmed on Testnet from the phone; registration is one-time (account preparation + device chunks + DEVICE manifest).
 
 ## Measurements
 
