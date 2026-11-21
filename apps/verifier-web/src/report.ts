@@ -60,21 +60,12 @@ interface Report {
 }
 
 const GROUPS: [string, string[]][] = [
-  ['Image integrity', ['image.']],
-  ['RGB commitment', ['capture.rgb_binding']],
-  ['Device attestation', ['registration.attestation', 'capture.assertion', 'capture.counter', 'registration.revocation']],
-  ['Manifest integrity', ['refs.metadata', 'capture.decode', 'capture.network', 'capture.photo_binding', 'capture.account_binding', 'registration.resolve', 'registration.bundle']],
-  ['Ledger anchoring', ['ledger.network', 'capture.found', 'capture.validated_success', 'capture.unique', 'ledger.preledger_window']],
-  ['Challenge binding', ['ledger.selection', 'ledger.challenge']],
-  ['Circuit recognition', ['circuit.']],
-  ['ZK proof validity', ['proof.']],
-  ['Sensor quality policy', ['policy.sensor_quality']],
-  ['LiDAR geometry policy', ['policy.lidar_geometry']],
-  ['RGB–LiDAR correspondence policy', ['policy.rgb_lidar']],
-  ['Temporal consistency policy', ['policy.temporal']],
-  ['IMU consistency policy', ['policy.motion_imu']],
-  ['Bluetooth aggregates', ['evidence.bluetooth']],
-  ['Noise statistics', ['evidence.noise']],
+  ['Image', ['image.', 'refs.metadata', 'capture.photo_binding', 'capture.rgb_binding']],
+  ['Capture', ['capture.found', 'capture.validated_success', 'capture.decode', 'capture.network', 'capture.account_binding']],
+  ['Device attestation', ['registration.', 'capture.assertion', 'capture.counter']],
+  ['Ledger', ['ledger.', 'history.', 'capture.txn_chain', 'capture.unique']],
+  ['Proof', ['circuit.', 'proof.']],
+  ['Policy', ['policy.', 'evidence.']],
 ];
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, className?: string): HTMLElementTagNameMap[K] {
@@ -101,24 +92,23 @@ function utc(ms: number | undefined): string | undefined {
   return Number.isFinite(date.getTime()) ? date.toISOString() : 'Outside the supported display range';
 }
 
-function checksTable(checks: Check[]): HTMLElement {
-  const table = element('table');
-  table.createCaption().textContent = 'Verification properties';
-  const columns = table.createTHead().insertRow();
-  for (const title of ['Property', 'Checks and evidence']) {
-    const heading = element('th', title);
-    heading.scope = 'col';
-    columns.append(heading);
-  }
-  const body = table.createTBody();
+function checkGroups(checks: Check[]): HTMLElement {
+  const groups = element('section', undefined, 'check-groups');
+  groups.append(element('h3', 'Verification checks'));
+  const remaining = new Set(checks);
   for (const [label, keys] of GROUPS) {
-    const row = body.insertRow();
-    const heading = element('th', label);
-    heading.scope = 'row';
-    row.append(heading);
-    const cell = row.insertCell();
+    const items = [...remaining].filter(item => keys.some(key => key.endsWith('.') ? item.id.startsWith(key) : item.id === key));
+    for (const item of items) remaining.delete(item);
+    if (label === 'Policy') items.push(...remaining); // Surface newly introduced checks until classified.
+    const group = element('details', undefined, 'check-group');
+    const summary = element('summary', label);
+    const passed = items.filter(check => check.status === 'pass').length;
+    const failed = items.filter(check => check.status === 'fail').length;
+    const count = element('span', failed ? `${failed} failed · ${passed} passed` : passed ? `${passed} passed` : 'No checks passed', 'check-count');
+    if (failed) count.dataset.status = 'fail';
+    summary.append(count);
     const list = element('ul', undefined, 'checks');
-    for (const check of checks.filter(item => keys.some(key => key.endsWith('.') ? item.id.startsWith(key) : item.id === key))) {
+    for (const check of items) {
       const item = element('li');
       const result = element('strong', STATUS[check.status] ?? check.status, 'check-status');
       result.dataset.status = check.status;
@@ -127,9 +117,10 @@ function checksTable(checks: Check[]): HTMLElement {
       item.append(result, basis, element('div', check.detail), element('code', check.id));
       list.append(item);
     }
-    cell.append(list);
+    group.append(summary, list);
+    groups.append(group);
   }
-  return table;
+  return groups;
 }
 
 function candidatesList(candidates: Candidate[], template: string): HTMLElement {
@@ -149,12 +140,20 @@ export function renderReport(target: HTMLElement, json: string, { explorerTx, ex
   if (report.version !== 'galaxy-report/v1' || !Object.hasOwn(STATES, report.state)) {
     throw new Error('The verifier returned an unknown report format.');
   }
-  const badge = element('span', report.state, 'state');
-  badge.dataset.state = report.state;
+  const verdict = element('div', undefined, 'verdict');
+  const badge = element('div', report.state, 'state');
+  verdict.dataset.state = report.state;
   const headline = element('p', report.summary, 'headline');
   const description = element('p', STATES[report.state]);
   const metadata = element('dl', undefined, 'metadata');
   const { image, capture, proof, trust } = report;
+  verdict.append(badge, headline, description);
+  if (report.mode === 'lookup' && (report.state === 'NOT_FOUND' || report.state === 'UNAVAILABLE')) {
+    const ranges = trust.ledger_ranges.filter(range => range.purpose === 'lookup index (untrusted)');
+    verdict.append(element('p', ranges.length
+      ? `Node-reported index coverage: ${ranges.map(({ min, max }) => `${min}–${max}`).join(', ')}.`
+      : 'Node index coverage could not be established.', 'coverage'));
+  }
   const fields: [string, Node | string | number | null | undefined][] = [
     ['XRPL network', report.network], ['Lookup mode', report.mode],
     ['Image container / profile', image && `${image.format} / ${image.profile}`],
@@ -172,7 +171,8 @@ export function renderReport(target: HTMLElement, json: string, { explorerTx, ex
     ['Proof deadline ledger', link(explorerLedger, '{index}', proof?.deadline)],
     ['Last validated ledger', link(explorerLedger, '{index}', trust.latest_validated)],
     ['Policy identifier', proof?.policy_id], ['Policy name', proof?.policy_name],
-    ['Circuit identifier', proof?.circuit_id], ['Circuit ceremony', proof?.ceremony],
+    ['Circuit identifier', proof?.circuit_id],
+    ['Circuit ceremony', proof?.ceremony === 'development-single-party' ? 'Development setup (Testnet) · single party' : proof?.ceremony],
     ['Claimed capture time (UTC)', utc(capture?.claimed_time_ms)],
     ['Manifest ledger close time (UTC)', utc(capture ? capture.ledger_close_time * 1000 : undefined)],
   ];
@@ -185,7 +185,7 @@ export function renderReport(target: HTMLElement, json: string, { explorerTx, ex
   const sourceDetails = element('details');
   sourceDetails.append(element('summary', 'Network sources and consulted ledger ranges'));
   sourceDetails.append(element('p', `Configured XRPL endpoints (${trust.rpc_trust} RPC trust): ${trust.rpc_endpoints.join(', ') || 'none'}`));
-  sourceDetails.append(element('p', `Consulted Galaxy nodes: ${trust.lookup_endpoints.join(', ') || 'none'}`));
+  sourceDetails.append(element('p', `Consulted lookup nodes: ${trust.lookup_endpoints.join(', ') || 'none'}`));
   if (trust.ledger_ranges.length) {
     const ranges = element('ul');
     for (const { purpose, min, max } of trust.ledger_ranges) ranges.append(element('li', `${purpose}: ${min}–${max}`));
@@ -196,7 +196,10 @@ export function renderReport(target: HTMLElement, json: string, { explorerTx, ex
   for (const limitation of report.limitations) limitations.append(element('li', limitation));
   const raw = element('details');
   raw.append(element('summary', 'Report JSON'), element('pre', JSON.stringify(report, null, 2)));
-  target.replaceChildren(badge, headline, description, element('h3', 'Capture and ledger details'), metadata, checksTable(report.checks));
+  const record = element('details');
+  record.open = !!capture;
+  record.append(element('summary', 'Capture and ledger details'), metadata);
+  target.replaceChildren(verdict, checkGroups(report.checks), record);
   if (report.candidates.length) {
     const candidates = element('details');
     candidates.append(element('summary', 'Candidate records'), candidatesList(report.candidates, explorerTx));

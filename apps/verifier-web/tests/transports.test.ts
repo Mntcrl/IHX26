@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { BrowserLedger } from '../src/ledger';
 import { BrowserNodes } from '../src/node';
-import { endpoint, explorerTemplate, validateSettings } from '../src/settings';
+import { endpoint, explorerTemplate, selectNode } from '../src/settings';
 
 const GOOD = 'wss://good.example/';
 const BAD = 'wss://bad.example/';
@@ -151,7 +151,15 @@ describe('node transport and settings', () => {
     expect(() => endpoint('http://[::1]:3010', 'node')).toThrow();
     expect(() => explorerTemplate('https://{hash}.example/tx', '{hash}')).toThrow();
     expect(() => explorerTemplate('javascript:{index}', '{index}')).toThrow();
-    expect(validateSettings({ rpcEndpoints: [GOOD, GOOD], nodes: [NODE], discovery: false, explorerTx: '', explorerLedger: '' }))
-      .toEqual({ rpcEndpoints: [GOOD], nodes: [NODE], discovery: false, explorerTx: '', explorerLedger: '' });
+  });
+
+  it('selects a single valid HTTPS node override or uses the disclosed default', () => {
+    expect(selectNode(NODE, '?node=https%3A%2F%2Flookup.example%3A8443%2F')).toBe('https://lookup.example:8443');
+    for (const query of [
+      '', '?node=', '?node=http://localhost', '?node=https://lookup.example/path',
+      '?node=https://user@lookup.example', '?node=https://lookup.example:65536',
+      '?node=https://lookup.example&node=https://other.example', '?node=javascript:alert(1)',
+      '?node=https://lookup.example%3Fsecret=x', '?node=https://lookup.example%20https://other.example',
+    ]) expect(selectNode(NODE, query)).toBe(NODE);
   });
 });

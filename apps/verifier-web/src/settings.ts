@@ -1,14 +1,10 @@
-import { MAX_ENDPOINTS } from './constants';
-
 export interface Settings {
   rpcEndpoints: string[];
-  nodes: string[];
-  discovery: boolean;
+  lookupNode: string;
   explorerTx: string;
   explorerLedger: string;
 }
 
-const SETTINGS_KEY = 'galaxy.verifier.settings.v1';
 const PATH = /^\/[A-Za-z0-9/.~_-]*$/;
 // CSP host sources do not support literal IPv6 addresses in Chromium.
 const HOST = /^[a-zA-Z0-9.\-]+(?::[0-9]+)?$/;
@@ -40,38 +36,27 @@ export function explorerTemplate(raw: string, placeholder: '{hash}' | '{index}')
   return template;
 }
 
-export function validateSettings(input: Settings): Settings {
-  if (!Array.isArray(input.rpcEndpoints) || !input.rpcEndpoints.length || input.rpcEndpoints.length > MAX_ENDPOINTS
-      || !Array.isArray(input.nodes) || input.nodes.length > MAX_ENDPOINTS || typeof input.discovery !== 'boolean') {
-    throw new Error('Configure one to eight XRPL endpoints and at most eight Galaxy nodes.');
+/** Query overrides are HTTPS origins only; paths, credentials and duplicates are ignored. */
+export function selectNode(fallback: string, search: string): string {
+  const overrides = new URLSearchParams(search).getAll('node');
+  const override = overrides[0];
+  if (overrides.length === 1 && /^https:\/\/[a-z0-9.-]+(?::[0-9]+)?\/?$/i.test(override)) {
+    try { return endpoint(override, 'node'); }
+    catch { /* The exact default host is disclosed in the UI. */ }
   }
-  return {
-    rpcEndpoints: [...new Set(input.rpcEndpoints.map(url => endpoint(url, 'rpc')))],
-    nodes: [...new Set(input.nodes.map(url => endpoint(url, 'node')))],
-    discovery: input.discovery,
-    explorerTx: explorerTemplate(input.explorerTx, '{hash}'),
-    explorerLedger: explorerTemplate(input.explorerLedger, '{index}'),
-  };
+  return endpoint(fallback, 'node');
 }
 
 export function loadSettings(): Settings {
-  try {
-    const stored = localStorage.getItem(SETTINGS_KEY);
-    if (stored) return validateSettings(JSON.parse(stored));
-  } catch { /* Invalid or unavailable storage does not weaken defaults. */ }
-  return validateSettings({
-    rpcEndpoints: __DEPLOYMENT__.endpoints,
-    nodes: [], discovery: false,
-    explorerTx: __DEPLOYMENT__.explorerTx,
-    explorerLedger: __DEPLOYMENT__.explorerLedger,
-  });
+  return {
+    rpcEndpoints: [...new Set(__DEPLOYMENT__.endpoints.map(url => endpoint(url, 'rpc')))],
+    lookupNode: selectNode(__DEPLOYMENT__.lookupNode, location.search),
+    explorerTx: explorerTemplate(__DEPLOYMENT__.explorerTx, '{hash}'),
+    explorerLedger: explorerTemplate(__DEPLOYMENT__.explorerLedger, '{index}'),
+  };
 }
 
-export function storeSettings(settings: Settings): void {
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(validateSettings(settings)));
-}
-
-/** Install before any file is read or any worker runs. On changes, reload to replace the policy. */
+/** Install before reading a file or creating a worker; the Blob worker inherits this policy. */
 export function installNetworkPolicy(settings: Settings, wasm: string): void {
   const sources = new Set([wasm]);
   for (const url of settings.rpcEndpoints) {
@@ -79,9 +64,7 @@ export function installNetworkPolicy(settings: Settings, wasm: string): void {
     // consistent for upgrades across engines; non-root paths remain explicit.
     sources.add(url.replace(/^(wss?:\/\/[^/]+)\/$/, '$1'));
   }
-  if (settings.discovery) {
-    for (const node of settings.nodes) sources.add(`${node}/v1/photos/`);
-  }
+  sources.add(`${settings.lookupNode}/v1/photos/`);
   const meta = document.createElement('meta');
   meta.httpEquiv = 'Content-Security-Policy';
   meta.content = `connect-src ${[...sources].join(' ')}`;

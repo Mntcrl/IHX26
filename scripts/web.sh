@@ -46,7 +46,7 @@ case ${1:-} in
     run)
         [[ -s $app/dist/index.html ]] || build
         port=${WEB_PORT:-4173}
-        printf 'Galaxy verifier: http://127.0.0.1:%s/\n' "$port"
+        printf 'PHØTON verifier: http://127.0.0.1:%s/\n' "$port"
         export PYTHONUNBUFFERED=1
         exec python3 -m http.server --bind 127.0.0.1 --directory "$app/dist" "$port"
         ;;

@@ -7,6 +7,7 @@ export interface Deployment {
   name: string;
   networkId: number;
   endpoints: string[];
+  lookupNode: string;
   explorerTx: string;
   explorerLedger: string;
 }

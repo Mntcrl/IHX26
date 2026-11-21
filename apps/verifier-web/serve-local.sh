@@ -29,7 +29,7 @@ class VerifierHandler(SimpleHTTPRequestHandler):
 
 handler = partial(VerifierHandler, directory=sys.argv[1])
 with ThreadingHTTPServer(("127.0.0.1", 8080), handler) as server:
-    print("Galaxy verifier: http://127.0.0.1:8080/ (Ctrl+C to stop)", flush=True)
+    print("PHØTON verifier: http://127.0.0.1:8080/ (Ctrl+C to stop)", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
