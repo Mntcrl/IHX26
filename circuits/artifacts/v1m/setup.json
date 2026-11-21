@@ -2,7 +2,7 @@
   "ceremony": "development-single-party",
   "ptau_name": "powersOfTau28_hez_final_20.ptau",
   "ptau_sha256": "159d3f938d941e06767d99f30b9fe59a245400a4aae138cf8e411732d7a2f6cd",
-  "setup_transcript_sha256": "09ea0773055ad06bc6c8244b6ac72ffb2670180cb3a8dbb94b5da1b89b6cb888",
-  "zkey_sha256": "5cd0ec2cc484e612ad1a93b7584ca70d8e7e30de15eb3286eced9f86404d8cdd",
-  "r1cs_sha256": "86f782bd346b8ec6ed6f6a6ff474f95087d116869b140850d11cfb134c70df7d"
+  "setup_transcript_sha256": "514ab28ee6587b84dfc3b471c27b026b454b5526db33bb44000191d2d05e7416",
+  "zkey_sha256": "9bbefe9f8cd754ace12ddd4238f9022b6cfcf151b1fc092408322e40df25359c",
+  "r1cs_sha256": "c06864f16fbfd3cc5c7339a91d0e97ece518ea40a20d6bfcfb7423a8376ec3de"
 }

@@ -8,8 +8,8 @@ can establish: the circuit sources and policy constants, the compiled constraint
 system, the two witness generators (WASM for desktop/browser tooling, the
 circom-witnesscalc graph for iOS), the proving/verifying key and how the key was
 produced. The verifier only ever sees the descriptor, VK bytes and policy JSON in the
-GXCB bundle registered on XRPL (§10), so the descriptor's digests must be
-reproducible by anyone from the repository.
+GXCB bundle registered on XRPL (§10). The compiled circuit digests must be
+reproducible; the setup digests identify the specific outputs of that ceremony.
 
 ## Decision
 - `scripts/circuit.sh build` compiles `main_v1m.circom` with fixed flags
@@ -31,6 +31,10 @@ reproducible by anyone from the repository.
   `galaxy-prover vk` are required), `circuit_id = SHA256("GALAXY/CIRCUIT/v1\0" ‖
   descriptor)`, and the GXCB bundle (descriptor ‖ VK bytes ‖ canonical policy JSON),
   checking that the bundle and VK decode round-trip.
+- Artifact outputs are staged in `circuits/build` and renamed into place.
+  An export is published only after the independent VK check passes, with the
+  manifest written last. Replacing rather than truncating artifact files
+  preserves previous hard-linked snapshots.
 - `scripts/circuit.sh witness` (and the first half of `e2e`) checks the build on a
   passing synthetic capture: the WASM witness (all circuit assertions) and the graph
   witness must be equal wire by wire, every R1CS constraint is evaluated in Rust
@@ -39,11 +43,14 @@ reproducible by anyone from the repository.
   equal `public_inputs_v1` reconstructed from the photo and the ledger statement.
 - Small public artifacts (descriptor, VK JSON/bytes, bundle, circuit_id, transcripts,
   build/setup digests, `artifacts/v1m.json` manifest) are committed. R1CS, sym, WASM,
-  witness graph and zkey are gitignored; anyone can rebuild them and compare digests.
+  witness graph and zkey are gitignored. The circuit can be rebuilt and compared
+  to its compile digests; rerunning setup with fresh entropy produces a new key.
 
 ## Consequences
 - Any policy change (new policy_id) requires regenerating the include, recompiling,
   a new setup and a new circuit_id; the descriptor binds the policy_id.
+  Changes to production circuit sources also require rebuilding and exporting;
+  `build.json` and `setup.json` bind each stage to the previous stage's outputs.
 - Byte-identical rebuilds require the pinned circom and build-circuit versions and
   the pinned `circuits/package-lock.json` (circomlib 2.0.5).
 - The zkey digest is in the descriptor, so provers can check their downloaded key

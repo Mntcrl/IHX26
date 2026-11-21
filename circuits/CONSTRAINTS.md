@@ -1,12 +1,14 @@
 # Constraint report — `GalaxyPhysicalConsistencyProofV1` (galaxy-pc-v1m)
 
 Compiler: circom 2.2.3, `--O2 --prime bn128`. Policy: `policies/galaxy-pc-v1m.json`,
-policy_id `ef744a7f28dc606b117dbab34899753a218cd1865b4fc69a9739ac9c10a7afac`
+policy_id `4ad25185f11bfb52af5dee5a1ab39d4e2428c1c83188c7483db1777d22367073`
 (generated include `physical-consistency/generated/policy_v1m.circom`).
-Source tree digest (`build.json`): `6ed981ce263f0942d0eeb582de4ba9025353c4da1a2870c5a751be0b994170d6`.
+Source tree digest (`build.json`): `a9818f2efe11275b12f77b7ac5f8ec810e33a77f8c1021d2434dedb6f31ff5c8`.
 
-Refresh with `scripts/circuit.sh constraints` (compiles each production template
-alone as `main`, same flags) and `scripts/circuit.sh build` (full circuit).
+Refresh with `scripts/circuit.sh build` (full circuit), then
+`scripts/circuit.sh constraints` (each production template compiled alone as
+`main` with the same flags). The final policy changed the compiled R1CS digest
+without changing the full or per-template constraint counts.
 
 ## Full circuit (`artifacts/v1m/r1cs-info.json`)
 

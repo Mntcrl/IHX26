@@ -59,14 +59,14 @@
 [0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoLT(18)": Array of subcomponent input/output signals diff.bits contains a total of 18 signals that do not appear in any constraint of the father component[0m
  [0m[34m=[0m For example: diff.bits[0], diff.bits[10].
 
-[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoFloor(83,57)": Array of subcomponent input/output signals low.out contains a total of 57 signals that do not appear in any constraint of the father component[0m
- [0m[34m=[0m For example: low.out[0], low.out[10].
-
 [0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoFloor(83,57)": Array of subcomponent input/output signals qRange.bits contains a total of 84 signals that do not appear in any constraint of the father component[0m
  [0m[34m=[0m For example: qRange.bits[0], qRange.bits[10].
 
 [0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoFloor(83,57)": Array of subcomponent input/output signals high.out contains a total of 57 signals that do not appear in any constraint of the father component[0m
  [0m[34m=[0m For example: high.out[0], high.out[10].
+
+[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoFloor(83,57)": Array of subcomponent input/output signals low.out contains a total of 57 signals that do not appear in any constraint of the father component[0m
+ [0m[34m=[0m For example: low.out[0], low.out[10].
 
 [0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoLT(84)": Array of subcomponent input/output signals diff.bits contains a total of 84 signals that do not appear in any constraint of the father component[0m
  [0m[34m=[0m For example: diff.bits[0], diff.bits[10].
@@ -83,11 +83,11 @@
 [0m[1m[38;5;11mwarning[CA01][0m[1m: In template "GeoPlaneSupport(256)": Array of local signals points contains a total of 256 signals that do not appear in any constraint[0m
  [0m[34m=[0m For example: points[0][2], points[100][2].
 
-[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlane(7)": Subcomponent input/output signal fit[2].r does not appear in any constraint of the father component[0m
+[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlane(7)": Subcomponent input/output signal fit[0].r does not appear in any constraint of the father component[0m
 
 [0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlane(7)": Subcomponent input/output signal fit[1].r does not appear in any constraint of the father component[0m
 
-[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlane(7)": Subcomponent input/output signal fit[0].r does not appear in any constraint of the father component[0m
+[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlane(7)": Subcomponent input/output signal fit[2].r does not appear in any constraint of the father component[0m
 
 [0m[1m[38;5;11mwarning[CA01][0m[1m: In template "GeoPlaneSupport(128)": Array of local signals points contains a total of 128 signals that do not appear in any constraint[0m
  [0m[34m=[0m For example: points[0][2], points[100][2].
@@ -113,57 +113,57 @@
 [0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoLT(4)": Array of subcomponent input/output signals diff.bits contains a total of 4 signals that do not appear in any constraint of the father component[0m
  [0m[34m=[0m For example: diff.bits[0], diff.bits[1].
 
-[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlanarity()": Subcomponent input/output signal support[6].supportAll does not appear in any constraint of the father component[0m
-
-[0m[1m[38;5;11mwarning[CA01][0m[1m: In template "GeoPlanarity()": Array of local signals valid contains a total of 768 signals that do not appear in any constraint[0m
- [0m[34m=[0m For example: valid[0][0], valid[0][11].
-
-[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlanarity()": Array of subcomponent input/output signals support[4].residualBits contains a total of 7552 signals that do not appear in any constraint of the father component[0m
- [0m[34m=[0m For example: support[4].residualBits[0][0], support[4].residualBits[0][10].
-
 [0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlanarity()": Array of subcomponent input/output signals support[7].eligible contains a total of 128 signals that do not appear in any constraint of the father component[0m
  [0m[34m=[0m For example: support[7].eligible[0], support[7].eligible[100].
-
-[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlanarity()": Array of subcomponent input/output signals support[5].inlier contains a total of 128 signals that do not appear in any constraint of the father component[0m
- [0m[34m=[0m For example: support[5].inlier[0], support[5].inlier[100].
-
-[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlanarity()": Subcomponent input/output signal support[5].supportAll does not appear in any constraint of the father component[0m
-
-[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlanarity()": Array of subcomponent input/output signals support[6].residualBits contains a total of 7552 signals that do not appear in any constraint of the father component[0m
- [0m[34m=[0m For example: support[6].residualBits[0][0], support[6].residualBits[0][10].
-
-[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlanarity()": Array of subcomponent input/output signals support[5].residualBits contains a total of 7552 signals that do not appear in any constraint of the father component[0m
- [0m[34m=[0m For example: support[5].residualBits[0][0], support[5].residualBits[0][10].
-
-[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlanarity()": Array of subcomponent input/output signals support[6].inlier contains a total of 128 signals that do not appear in any constraint of the father component[0m
- [0m[34m=[0m For example: support[6].inlier[0], support[6].inlier[100].
 
 [0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlanarity()": Subcomponent input/output signal support[4].supportAll does not appear in any constraint of the father component[0m
 
 [0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlanarity()": Array of subcomponent input/output signals support[7].inlier contains a total of 128 signals that do not appear in any constraint of the father component[0m
  [0m[34m=[0m For example: support[7].inlier[0], support[7].inlier[100].
 
-[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlanarity()": Array of subcomponent input/output signals support[4].inlier contains a total of 128 signals that do not appear in any constraint of the father component[0m
- [0m[34m=[0m For example: support[4].inlier[0], support[4].inlier[100].
-
-[0m[1m[38;5;11mwarning[CA01][0m[1m: In template "GeoPlanarity()": Array of local signals d contains a total of 768 signals that do not appear in any constraint[0m
- [0m[34m=[0m For example: d[0][0], d[0][11].
-
 [0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlanarity()": Array of subcomponent input/output signals support[4].eligible contains a total of 128 signals that do not appear in any constraint of the father component[0m
  [0m[34m=[0m For example: support[4].eligible[0], support[4].eligible[100].
 
-[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlanarity()": Subcomponent input/output signal c.index does not appear in any constraint of the father component[0m
-
-[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlanarity()": Array of subcomponent input/output signals support[5].eligible contains a total of 128 signals that do not appear in any constraint of the father component[0m
- [0m[34m=[0m For example: support[5].eligible[0], support[5].eligible[100].
-
-[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlanarity()": Subcomponent input/output signal support[7].supportAll does not appear in any constraint of the father component[0m
+[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlanarity()": Subcomponent input/output signal support[5].supportAll does not appear in any constraint of the father component[0m
 
 [0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlanarity()": Array of subcomponent input/output signals support[6].eligible contains a total of 128 signals that do not appear in any constraint of the father component[0m
  [0m[34m=[0m For example: support[6].eligible[0], support[6].eligible[100].
 
+[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlanarity()": Array of subcomponent input/output signals support[5].residualBits contains a total of 7552 signals that do not appear in any constraint of the father component[0m
+ [0m[34m=[0m For example: support[5].residualBits[0][0], support[5].residualBits[0][10].
+
+[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlanarity()": Array of subcomponent input/output signals support[5].inlier contains a total of 128 signals that do not appear in any constraint of the father component[0m
+ [0m[34m=[0m For example: support[5].inlier[0], support[5].inlier[100].
+
+[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlanarity()": Subcomponent input/output signal c.index does not appear in any constraint of the father component[0m
+
+[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlanarity()": Array of subcomponent input/output signals support[4].inlier contains a total of 128 signals that do not appear in any constraint of the father component[0m
+ [0m[34m=[0m For example: support[4].inlier[0], support[4].inlier[100].
+
+[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlanarity()": Array of subcomponent input/output signals support[6].inlier contains a total of 128 signals that do not appear in any constraint of the father component[0m
+ [0m[34m=[0m For example: support[6].inlier[0], support[6].inlier[100].
+
+[0m[1m[38;5;11mwarning[CA01][0m[1m: In template "GeoPlanarity()": Array of local signals d contains a total of 768 signals that do not appear in any constraint[0m
+ [0m[34m=[0m For example: d[0][0], d[0][11].
+
+[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlanarity()": Array of subcomponent input/output signals support[6].residualBits contains a total of 7552 signals that do not appear in any constraint of the father component[0m
+ [0m[34m=[0m For example: support[6].residualBits[0][0], support[6].residualBits[0][10].
+
+[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlanarity()": Array of subcomponent input/output signals support[4].residualBits contains a total of 7552 signals that do not appear in any constraint of the father component[0m
+ [0m[34m=[0m For example: support[4].residualBits[0][0], support[4].residualBits[0][10].
+
+[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlanarity()": Array of subcomponent input/output signals support[5].eligible contains a total of 128 signals that do not appear in any constraint of the father component[0m
+ [0m[34m=[0m For example: support[5].eligible[0], support[5].eligible[100].
+
 [0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlanarity()": Array of subcomponent input/output signals support[7].residualBits contains a total of 7552 signals that do not appear in any constraint of the father component[0m
  [0m[34m=[0m For example: support[7].residualBits[0][0], support[7].residualBits[0][10].
+
+[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlanarity()": Subcomponent input/output signal support[6].supportAll does not appear in any constraint of the father component[0m
+
+[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoPlanarity()": Subcomponent input/output signal support[7].supportAll does not appear in any constraint of the father component[0m
+
+[0m[1m[38;5;11mwarning[CA01][0m[1m: In template "GeoPlanarity()": Array of local signals valid contains a total of 768 signals that do not appear in any constraint[0m
+ [0m[34m=[0m For example: valid[0][0], valid[0][11].
 
 [0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoLT(17)": Array of subcomponent input/output signals diff.bits contains a total of 17 signals that do not appear in any constraint of the father component[0m
  [0m[34m=[0m For example: diff.bits[0], diff.bits[10].
@@ -174,11 +174,11 @@
 [0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoLT(10)": Array of subcomponent input/output signals diff.bits contains a total of 10 signals that do not appear in any constraint of the father component[0m
  [0m[34m=[0m For example: diff.bits[0], diff.bits[1].
 
-[0m[1m[38;5;11mwarning[CA01][0m[1m: In template "GeoRgbDepth()": Array of local signals valid contains a total of 256 signals that do not appear in any constraint[0m
- [0m[34m=[0m For example: valid[0][0], valid[0][12].
-
 [0m[1m[38;5;11mwarning[CA01][0m[1m: In template "GeoRgbDepth()": Array of local signals d contains a total of 256 signals that do not appear in any constraint[0m
  [0m[34m=[0m For example: d[0][0], d[0][12].
+
+[0m[1m[38;5;11mwarning[CA01][0m[1m: In template "GeoRgbDepth()": Array of local signals valid contains a total of 256 signals that do not appear in any constraint[0m
+ [0m[34m=[0m For example: valid[0][0], valid[0][12].
 
 [0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoLT(118)": Array of subcomponent input/output signals diff.bits contains a total of 118 signals that do not appear in any constraint of the father component[0m
  [0m[34m=[0m For example: diff.bits[0], diff.bits[100].
@@ -189,11 +189,11 @@
 [0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoLT(147)": Array of subcomponent input/output signals diff.bits contains a total of 147 signals that do not appear in any constraint of the father component[0m
  [0m[34m=[0m For example: diff.bits[0], diff.bits[100].
 
-[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoUnsignedFloor(8,134)": Array of subcomponent input/output signals low.out contains a total of 134 signals that do not appear in any constraint of the father component[0m
- [0m[34m=[0m For example: low.out[0], low.out[100].
-
 [0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoUnsignedFloor(8,134)": Array of subcomponent input/output signals high.out contains a total of 134 signals that do not appear in any constraint of the father component[0m
  [0m[34m=[0m For example: high.out[0], high.out[100].
+
+[0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoUnsignedFloor(8,134)": Array of subcomponent input/output signals low.out contains a total of 134 signals that do not appear in any constraint of the father component[0m
+ [0m[34m=[0m For example: low.out[0], low.out[100].
 
 [0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoLT(129)": Array of subcomponent input/output signals diff.bits contains a total of 129 signals that do not appear in any constraint of the father component[0m
  [0m[34m=[0m For example: diff.bits[0], diff.bits[100].
@@ -212,20 +212,20 @@
 [0m[1m[38;5;11mwarning[CA02][0m[1m: In template "GeoLT(13)": Array of subcomponent input/output signals diff.bits contains a total of 13 signals that do not appear in any constraint of the father component[0m
  [0m[34m=[0m For example: diff.bits[0], diff.bits[10].
 
-[0m[1m[38;5;11mwarning[CA01][0m[1m: In template "GeoTemporal()": Array of local signals blk_d contains a total of 896 signals that do not appear in any constraint[0m
- [0m[34m=[0m For example: blk_d[0][0], blk_d[0][11].
-
-[0m[1m[38;5;11mwarning[CA01][0m[1m: In template "GeoTemporal()": Array of local signals blk_u0 contains a total of 32 signals that do not appear in any constraint[0m
- [0m[34m=[0m For example: blk_u0[10], blk_u0[13].
+[0m[1m[38;5;11mwarning[CA01][0m[1m: In template "GeoTemporal()": Array of local signals blk_y contains a total of 640 signals that do not appear in any constraint[0m
+ [0m[34m=[0m For example: blk_y[0][0], blk_y[0][12].
 
 [0m[1m[38;5;11mwarning[CA01][0m[1m: In template "GeoTemporal()": Array of local signals blk_v0 contains a total of 32 signals that do not appear in any constraint[0m
  [0m[34m=[0m For example: blk_v0[10], blk_v0[13].
 
+[0m[1m[38;5;11mwarning[CA01][0m[1m: In template "GeoTemporal()": Array of local signals blk_u0 contains a total of 32 signals that do not appear in any constraint[0m
+ [0m[34m=[0m For example: blk_u0[10], blk_u0[13].
+
 [0m[1m[38;5;11mwarning[CA01][0m[1m: In template "GeoTemporal()": Array of local signals blk_valid contains a total of 896 signals that do not appear in any constraint[0m
  [0m[34m=[0m For example: blk_valid[0][0], blk_valid[0][11].
 
-[0m[1m[38;5;11mwarning[CA01][0m[1m: In template "GeoTemporal()": Array of local signals blk_y contains a total of 640 signals that do not appear in any constraint[0m
- [0m[34m=[0m For example: blk_y[0][0], blk_y[0][12].
+[0m[1m[38;5;11mwarning[CA01][0m[1m: In template "GeoTemporal()": Array of local signals blk_d contains a total of 896 signals that do not appear in any constraint[0m
+ [0m[34m=[0m For example: blk_d[0][0], blk_d[0][11].
 
 [0m[1m[38;5;11mwarning[CA01][0m[1m: In template "GalaxyPolicyV1m()": Array of local signals blk_c contains a total of 256 signals that do not appear in any constraint[0m
  [0m[34m=[0m For example: blk_c[0][0], blk_c[0][12].
@@ -237,7 +237,7 @@ private inputs: 3481 (3478 belong to witness)
 public outputs: 0
 wires: 868094
 labels: 2841649
-[32mWritten successfully:[0m circuits/build/compile.lh0ZIqer/main_v1m.r1cs
-[32mWritten successfully:[0m circuits/build/compile.lh0ZIqer/main_v1m.sym
-[32mWritten successfully:[0m circuits/build/compile.lh0ZIqer/main_v1m_js/main_v1m.wasm
+[32mWritten successfully:[0m circuits/build/compile.Sk5m4xqk/main_v1m.r1cs
+[32mWritten successfully:[0m circuits/build/compile.Sk5m4xqk/main_v1m.sym
+[32mWritten successfully:[0m circuits/build/compile.Sk5m4xqk/main_v1m_js/main_v1m.wasm
 [32mEverything went okay[0m

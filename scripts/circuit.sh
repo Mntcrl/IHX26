@@ -19,20 +19,25 @@ CEREMONY=development-single-party
 fail() { echo "circuit: $*" >&2; exit 1; }
 sha() { sha256sum -- "$1" | cut -d' ' -f1; }
 require_file() { [[ -s "$1" ]] || fail "missing or empty $1"; }
-# galaxy-witness development tool (examples/circuit_tool.rs); release build for
-# the full R1CS check.
-tool() { scripts/with-slot.sh cargo run --release --locked -q -p galaxy-witness --example circuit_tool -- "$@"; }
+# Build the release example before acquiring a heavy slot. During e2e,
+# invoke it directly rather than trying to acquire a second slot.
+WITNESS_TOOL="$CARGO_TARGET_DIR/release/examples/circuit_tool"
+build_witness_tool() {
+    scripts/with-slot.sh cargo build --locked --release -q -p galaxy-witness --example circuit_tool
+    require_file "$WITNESS_TOOL"
+}
 
-# Run only after obtaining the heavy slot so the measurement is current. The
-# machine is shared: require 2 GiB of free RAM and 8 GiB of RAM plus swap.
+# Measure memory after obtaining the heavy slot. The full graph build needs
+# more RAM than development setup; also retain headroom in RAM plus swap.
 check_memory() {
-    free -g >&2
-    local ram swap
+    local minimum_mib=$1 ram swap
+    free -m >&2
     ram=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
     swap=$(awk '/^SwapFree:/ {print $2}' /proc/meminfo)
     [[ "$ram" =~ ^[0-9]+$ && "$swap" =~ ^[0-9]+$ ]] || fail 'cannot read /proc/meminfo'
-    (( ram >= 2 * 1024 * 1024 && ram + swap >= 8 * 1024 * 1024 )) ||
-        fail 'need at least 2 GiB available RAM and 8 GiB available RAM + swap'
+    printf 'Build memory: %s KiB RAM available, %s KiB swap free\n' "$ram" "$swap" >&2
+    (( ram >= minimum_mib * 1024 && ram + swap >= 8 * 1024 * 1024 )) ||
+        fail "need at least $minimum_mib MiB available RAM and 8 GiB available RAM + swap"
 }
 
 source_digest() {
@@ -44,8 +49,7 @@ source_digest() {
 }
 
 compile() {
-    check_memory
-    node scripts/circuit-gen-policy.mjs --check
+    check_memory 4608
     [[ "$($CIRCOM --version)" == 'circom compiler 2.2.3' ]] || fail 'expected circom 2.2.3'
     [[ -x "$GRAPH" ]] || fail 'run scripts/prover-install-build-circuit.sh to install build-circuit'
     mkdir -p "$BUILD" "$OUT"
@@ -53,12 +57,18 @@ compile() {
     tmp=$(mktemp -d "$BUILD/compile.XXXXXXXX")
     trap 'rm -rf -- "$tmp"' EXIT
     before=$(source_digest)
+    node scripts/circuit-gen-policy.mjs --check
     "$CIRCOM" "$SRC" -l "$LIB" --prime bn128 --O2 --inspect --r1cs --wasm --sym -o "$tmp" 2>&1 | tee "$tmp/inspect.log"
     # The proving key MUST use the graph compiler's R1CS. Equality with the
     # standard compile also establishes the WASM/sym witness wire order.
     "$GRAPH" "$SRC" "$tmp/main_v1m.graph.bin" -l "$LIB" --O2 --r1cs "$tmp/graph.r1cs" \
         --temp-dir "$BUILD" > "$tmp/graph.log" 2>&1 || { tail -25 "$tmp/graph.log" >&2; fail 'graph compilation failed'; }
     cmp -s "$tmp/main_v1m.r1cs" "$tmp/graph.r1cs" || fail 'graph and WASM compiler R1CS differ'
+    node scripts/circuit-metadata.mjs r1cs "$tmp/graph.r1cs" | tee "$tmp/r1cs-info.json"
+    jq -n --arg src "$before" --arg version "$version" \
+      --arg r1cs "$(sha "$tmp/graph.r1cs")" --arg wasm "$(sha "$tmp/main_v1m_js/main_v1m.wasm")" \
+      --arg graph "$(sha "$tmp/main_v1m.graph.bin")" \
+      '{circom_version:$version,source_sha256:$src,r1cs_sha256:$r1cs,wasm_sha256:$wasm,witness_graph_sha256:$graph}' > "$tmp/build.json"
     after=$(source_digest)
     [[ "$before" == "$after" ]] || fail 'circuit sources changed while compiling'
     rm -f -- "$OUT/build.json" "$OUT/setup.json" "$MANIFEST"
@@ -66,11 +76,7 @@ compile() {
     mv -f -- "$tmp/main_v1m.graph.bin" "$tmp/main_v1m.sym" "$tmp/inspect.log" "$tmp/graph.log" "$OUT/"
     mkdir -p "$OUT/main_v1m_js"
     mv -f -- "$tmp/main_v1m_js/"* "$OUT/main_v1m_js/"
-    node scripts/circuit-metadata.mjs r1cs "$OUT/main_v1m.r1cs" | tee "$OUT/r1cs-info.json"
-    jq -n --arg src "$before" --arg version "$version" \
-      --arg r1cs "$(sha "$OUT/main_v1m.r1cs")" --arg wasm "$(sha "$OUT/main_v1m_js/main_v1m.wasm")" \
-      --arg graph "$(sha "$OUT/main_v1m.graph.bin")" \
-      '{circom_version:$version,source_sha256:$src,r1cs_sha256:$r1cs,wasm_sha256:$wasm,witness_graph_sha256:$graph}' > "$OUT/build.json"
+    mv -f -- "$tmp/r1cs-info.json" "$tmp/build.json" "$OUT/"
 }
 
 check_build() {
@@ -121,7 +127,7 @@ verified_ptau() {
 }
 
 setup() {
-    check_memory
+    check_memory 2048
     check_build
     require_file "$PROVER"
     local r1cs_sha zkey_sha log ptau_name ptau_sha
@@ -142,8 +148,8 @@ setup() {
         echo 'phase2: single party; delta sampled from the OS RNG inside the process and dropped; no further contributions'
         echo "r1cs: main_v1m.r1cs sha256 $r1cs_sha"
     } > "$log"
-    "$PROVER" dev-setup --r1cs "$OUT/main_v1m.r1cs" --ptau "$ROOT/.tools/ptau/$ptau_name" --ptau-sha256 "$ptau_sha" \
-        --out "$tmp/main_v1m.zkey" 2>&1 | tee -a "$log"
+    scripts/prover-time.py "$PROVER" dev-setup --r1cs "$OUT/main_v1m.r1cs" \
+        --ptau "$ROOT/.tools/ptau/$ptau_name" --ptau-sha256 "$ptau_sha" --out "$tmp/main_v1m.zkey" 2>&1 | tee -a "$log"
     require_file "$tmp/main_v1m.zkey"
     zkey_sha=$(sha "$tmp/main_v1m.zkey")
     echo "zkey: main_v1m.zkey sha256 $zkey_sha" >> "$log"
@@ -167,15 +173,19 @@ check_setup() {
 }
 
 export_bundle() {
+    build_witness_tool
     check_setup
     require_file "$PROVER"
-    tool bundle "$OUT" "$MANIFEST" policies/galaxy-pc-v1m.json
     # Independent VK encoding: galaxy-prover reads the zkey directly, galaxy-crypto
     # the snarkjs verification_key.json export. The bytes must be identical.
     tmp=$(mktemp -d "$BUILD/export.XXXXXXXX")
     trap 'rm -rf -- "$tmp"' EXIT
+    ln -- "$OUT/build.json" "$OUT/setup.json" "$OUT/r1cs-info.json" "$OUT/verification_key.json" "$tmp/"
+    "$WITNESS_TOOL" bundle "$tmp" "$tmp/v1m.json" policies/galaxy-pc-v1m.json
     "$PROVER" vk --zkey "$OUT/main_v1m.zkey" --out "$tmp/vk.bin"
-    cmp -- "$tmp/vk.bin" "$OUT/verification_key.bin" || fail 'galaxy-prover and galaxy-crypto VK bytes differ'
+    cmp -- "$tmp/vk.bin" "$tmp/verification_key.bin" || fail 'galaxy-prover and galaxy-crypto VK bytes differ'
+    mv -f -- "$tmp/verification_key.bin" "$tmp/descriptor.json" "$tmp/circuit_id.hex" "$tmp/circuit_bundle.bin" "$OUT/"
+    mv -f -- "$tmp/v1m.json" "$MANIFEST"
     echo 'VK bytes: galaxy-prover (zkey) == galaxy-crypto (verification_key.json)'
 }
 
@@ -190,10 +200,10 @@ witness_check() {
     mkdir -p "$dir"
     # shellcheck disable=SC2064 # expand now: $dir is local
     trap "rm -f -- '$dir/input.json' '$dir/salts.json' '$dir/witness.wtns'" EXIT
-    tool e2e-input "$dir"
+    "$WITNESS_TOOL" e2e-input "$dir"
     FORCE_COLOR=0 TERM=dumb "$SNARKJS" wtns calculate "$OUT/main_v1m_js/main_v1m.wasm" "$dir/input.json" "$dir/witness.wtns"
     echo 'WASM witness: all circuit assertions hold'
-    tool check-witness "$dir" "$OUT/main_v1m.r1cs" "$OUT/main_v1m.graph.bin"
+    "$WITNESS_TOOL" check-witness "$dir" "$OUT/main_v1m.r1cs" "$OUT/main_v1m.graph.bin"
 }
 
 # End to end: witness_check, then a galaxy-prover proof from the graph witness
@@ -207,7 +217,7 @@ e2e() {
     "$PROVER" prove --graph "$OUT/main_v1m.graph.bin" --zkey "$OUT/main_v1m.zkey" --input "$dir/input.json" --out "$dir"
     cmp -- "$dir/vk.bin" "$OUT/verification_key.bin" || fail 'prover VK differs from the exported VK bytes'
     FORCE_COLOR=0 TERM=dumb "$SNARKJS" groth16 verify "$OUT/verification_key.json" "$dir/public.json" "$dir/proof.json"
-    tool verify "$dir" "$OUT/verification_key.bin"
+    "$WITNESS_TOOL" verify "$dir" "$OUT/verification_key.bin"
 }
 
 # Constraint report: each production template compiled alone as `main` with the
@@ -265,9 +275,9 @@ case "${1:-}" in
         ;;
     _setup) setup ;;
     export) build_prover; export_bundle ;;
-    e2e) build_prover; scripts/with-slot.sh --heavy "$0" _e2e ;;
+    e2e) build_prover; build_witness_tool; scripts/with-slot.sh --heavy "$0" _e2e ;;
     _e2e) e2e ;;
-    witness) check_build; witness_check "$BUILD/witness" ;;
+    witness) check_build; build_witness_tool; witness_check "$BUILD/witness" ;;
     clean) rm -rf -- "$OUT" "$BUILD"; rm -f -- "$MANIFEST" ;;
     *) echo 'usage: scripts/circuit.sh build|test|constraints|witness|setup-dev|export|e2e|clean' >&2; exit 2 ;;
 esac
