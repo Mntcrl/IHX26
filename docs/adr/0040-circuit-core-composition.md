@@ -20,6 +20,8 @@ values (§17).
   (x = bits 0..2, y = bits 3..5); y < 6 (so label < 48), stratum membership via
   central_x·central_y === (slot < 8), strict ascending order within each stratum
   (`LessThan(6)` on adjacent labels).
+  Verifiers independently derive the seed and the exact tile list from the ledger;
+  the circuit validates tile structure, not the external tile-selection algorithm.
 - **Frame-1 openings share the tile path.** For each sampled tile and each of the RGB and
   DEPTH trees, the four sampled blocks are hashed to the level-3 tile node
   independently and must agree; one tile-to-root path (levels 4..6) is then checked.
@@ -34,7 +36,7 @@ values (§17).
   into bits once; bytes, depth (16 bits) and confidence (2 bits) are linear
   combinations of those bits, which is also the §20 entry range check.
 - **Scalars**: CAMERA and IMU elements are hashed into their components and the same
-  signals feed the policy after range checks (fx..cy < 2^26, R/T/g0 via
+  signals feed the policy after range checks (fx..cy unsigned < 2^26, R/T/g0 via
   Num2Bits(32)(x + 2^31), ts < 2^48, track < 4, a_peak < 2^32, IMU samples < 2^128
   with dt and ω fields extracted from the bits; IMU element 4 === 0). Bluetooth, noise
   and meta are hashed only. Salts are range-checked < 2^248.
@@ -43,7 +45,7 @@ values (§17).
   unsatisfiable). No public outputs.
 
 ## Consequences
-- Measured total: 905,931 constraints at `--O2` (see `circuits/CONSTRAINTS.md`).
+- Current total and component breakdown: see `circuits/CONSTRAINTS.md`.
 - The core contributes no `<--` assignments of its own; all hints are inside circomlib
   templates (Num2Bits, LessThan, AliasCheck), each constrained by its template.
 - Changing tile layout, packing or tag layout requires a new circuit_id.

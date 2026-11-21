@@ -6,7 +6,7 @@ Status: accepted (CircuitCore)
 Groth16 needs a circuit-specific structured reference string. Whoever knows its
 trapdoor (tau, alpha, beta, gamma, delta) can produce proofs that verify for false
 statements, so the soundness of every accepted proof depends on that trapdoor being
-destroyed. `main_v1m` has 905,931 constraints and 22 public inputs (domain 2^20).
+destroyed. See `circuits/CONSTRAINTS.md` for the current circuit size and domain.
 `snarkjs groth16 setup` loads the whole R1CS as JS objects and needs about 10 GB for
 this circuit; the shared 13 GB build machine cannot run it next to other jobs.
 
@@ -30,8 +30,8 @@ this circuit; the shared 13 GB build machine cannot run it next to other jobs.
    and verifies with snarkjs and galaxy-crypto.
 3. **Production** requires a multi-party phase-2 ceremony on a machine with
    ≥ 16 GB RAM, starting from the pinned, checksum-verified Hermez phase-1 file
-   `powersOfTau28_hez_final_20.ptau` (circuits/ptau.lock.json; capacity 2^20 ≥
-   905,931 + 22 + 1 rows):
+   `powersOfTau28_hez_final_20.ptau` (`circuits/ptau.lock.json`; powers must cover
+   the full R1CS count plus 22 public inputs and one constant wire):
    - coordinator: `snarkjs groth16 setup main_v1m.r1cs powersOfTau28_hez_final_20.ptau c0000.zkey`
      (r1cs digest must equal the descriptor's `r1cs_sha256`);
    - each of N ≥ 3 independent participants, in sequence:
@@ -52,8 +52,9 @@ this circuit; the shared 13 GB build machine cannot run it next to other jobs.
   sampled delta did not leak it (knowing delta suffices to produce proofs of false
   statements even with an honest phase 1); verifiers surface the `ceremony` value
   (galaxy-verifier report) and the key must not be an accepted production circuit.
-- The development zkey carries no phase-2 contribution record, so `snarkjs zkey
-  verify` cannot attest it (and needs about as much memory as `groth16 setup`); its
-  correctness is established by real proofs verifying under both verifiers.
+- The development zkey carries no phase-2 contribution record. `snarkjs zkey
+  verify` is not a ceremony attestation for this key. The development checks
+  compare VK exports and verify a real proof under both verifiers; they do not
+  establish production trust.
 - A production ceremony changes zkey, VK, vk_digest and circuit_id but not the
   r1cs, wasm, witness graph or policy.

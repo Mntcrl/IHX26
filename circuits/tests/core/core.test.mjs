@@ -121,10 +121,8 @@ const pack = (width, chunk, data) => [0, 1].map(i => data.slice(i*chunk, (i+1)*c
 const rgbPack = (i, image) => pack(8, 24, rgbBytes(i, image));
 const depthPack = i => pack(18, 8, depthPixels(i).map(([d, c]) => 4n*d + c));
 
-function tileInput(kind, image) {
-    const tile = 19;
+function tileInput(kind, image, tile = 19, block = [[3, 2], [4, 3], [0, 6], [7, 7]]) {
     const tilePos = morton(tile % 8, tile >> 3);
-    const block = [[3, 2], [4, 3], [0, 6], [7, 7]];
     const pos = block.map(([x, y]) => morton(x, y));
     const packed = list(64, i => kind === 1 ? rgbPack(i, image) : depthPack(i));
     const leaves = packed.map((l, i) => hash(tag(kind, 4096 + 64*tilePos + i), ...l));
@@ -269,7 +267,7 @@ function expectedSampling(limbs, sampledTiles, overrideFirst) {
     return out;
 }
 
-test('sampling tile strata, ordering and seed limb range reject invalid recomputed traces', async () => {
+test('sampling rejects invalid tile strata, ordering and seed limb range with recomputed traces', async () => {
     const c = await compile('GalaxySampling');
     const input = { limbs: [1n, 2n, 3n, 4n], sampled_tiles: tiles };
     const honest = await c.calculateWitness(input, true);
@@ -280,16 +278,29 @@ test('sampling tile strata, ordering and seed limb range reject invalid recomput
     await reject(c, honest, { ...input, sampled_tiles: [...tiles.slice(0, 15), 10] }, 1);
     await reject(c, honest, { ...input, sampled_tiles: [11, 10, ...tiles.slice(2)] }, 1);
     await reject(c, honest, { ...input, limbs: [1n, 2n, (1n << 128n) + 3n, 4n] }, 1);
+});
 
-    // A different canonical ledger seed is a different public statement; it
-    // cannot be paired with the original hash/picks. Audit that equality too.
-    const changed = await c.calculateWitness({ ...input, limbs: [1n, 2n, 3n, 5n] }, true);
-    await c.checkConstraints(changed);
-    const modified = honest.slice();
-    for (const [name, { varIdx }] of Object.entries(c.symbols)) {
-        if (name === 'main.limbs[3]' || name.startsWith('main.limb_range[3].')) modified[varIdx] = changed[varIdx];
-    }
-    await checkRejected(c, honest, modified, 1); // Only Poseidon's context input binding.
+test('changing the ledger seed requires different openings to the same RGB root', async () => {
+    const c = await compile('GalaxySampledTileAudit');
+    const limbs = [1n, 2n, 3n, 4n];
+    const changedLimbs = [1n, 2n, 3n, 5n];
+    const inputFor = seedLimbs => {
+        const tile = tiles[0], x = tile % 8, y = tile >> 3;
+        const { blk_u0, blk_v0 } = expectedSampling(seedLimbs, tiles);
+        const blocks = list(4, q => [(blk_u0[q] - 32*x)/4, (blk_v0[q] - 32*y)/4]);
+        const { packed, siblings, upper, root } = tileInput(1, 0, tile, blocks).input;
+        return { limbs: seedLimbs, sampled_tiles: tiles, packed, siblings, upper, root };
+    };
+    const input = inputFor(limbs);
+    const changed = inputFor(changedLimbs);
+    assert.equal(changed.root, input.root);
+    assert.notDeepEqual(changed.packed[0], input.packed[0]);
+    const honest = await c.calculateWitness(input, true);
+    await c.checkConstraints(honest);
+    await c.checkConstraints(await c.calculateWitness(changed, true));
+    // All new seed-dependent values and path hashes are recomputed, but the
+    // supplied openings still target the original sample locations.
+    await reject(c, honest, { ...input, limbs: changedLimbs }, 4); // Three tile nodes and the RGB root.
 });
 
 test('alias h + r satisfies ordinary bit reconstruction but fails production AliasCheck', async () => {

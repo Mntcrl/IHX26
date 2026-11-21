@@ -273,4 +273,13 @@ fn inconsistent_arguments_fail_closed() {
         build_input(&wide_evidence, &salts, &commitments, &challenge, &id, &view).unwrap_err(),
         WitnessError::EvidenceDomain
     );
+
+    // A self-consistent root with a changed padding slot cannot match the circuit.
+    let mut padded = commitments;
+    padded.components[9] += Fr::from(1u8);
+    padded.evidence_root = galaxy_crypto::commit::evidence_root(&padded.components);
+    assert_eq!(
+        build_input(&evidence, &salts, &padded, &challenge, &id, &view).unwrap_err(),
+        WitnessError::Commitment
+    );
 }

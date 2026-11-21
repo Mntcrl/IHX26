@@ -20,7 +20,10 @@ signal is a witness wire):
    Poseidon, bit decompositions and Merkle paths, recomputed), copied over the valid
    witness wire by wire, and checked against the audited circuit's own R1CS:
    `checkConstraints` must fail and the number of unsatisfied rows must equal the
-   expected count (1 for every case: the intended equality only).
+   expected count. The canonical seed change recomputes every hash and pick in
+   a sampling-to-RGB-opening harness; the original openings then fail the three
+   shared tile-node equalities and the final image-root equality. The new canonical
+   seed with its own openings satisfies the same R1CS and the same image root.
 3. Cases where the trace is not reachable by an input (non-canonical bit
    decomposition h + r) are built by hand: the AliasCheck sub-trace is computed by a
    separate `AliasTrace` harness and spliced in, all downstream picks are recomputed,
@@ -29,8 +32,8 @@ signal is a witness wire):
 Covered: incorrect sibling, one depth value changed, RGB of another image, CAMERA
 element changed (evidence_root mismatch), signed range overflow, IMU packing
 overflow, RGB limb overflow (out-of-range bytes), tile ≥ 48, wrong stratum (central
-and peripheral), non-ascending tiles, seed limb ≥ 2^128, a different seed limb with
-the original ctx-derived values, non-canonical decomposition, padding-row and
+and peripheral), non-ascending tiles, seed limb ≥ 2^128, a different canonical seed
+with the original RGB openings, non-canonical decomposition, padding-row and
 wrong-frame FRAME openings.
 
 ## Consequences
@@ -39,4 +42,5 @@ wrong-frame FRAME openings.
   witness in Rust and requires that changing any of the public wires rgb_root,
   evidence_root, seed_lo or sampled_tiles[0] leaves a row unsatisfied; the
   end-to-end proof is `scripts/circuit.sh e2e`.
-- Any new `===` in core components is automatically exercised by the same method.
+- New checks need explicit negative cases. The trace method reuses the production
+  gadgets and is test-only; the modified trace sources do not enter the build.

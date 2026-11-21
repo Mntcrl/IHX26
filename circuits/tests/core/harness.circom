@@ -49,6 +49,28 @@ template GalaxyTileAudit(kind) {
     }
 }
 
+// One frame-1 tile wired to the challenge exactly as in main_v1m.
+template GalaxySampledTileAudit() {
+    signal input limbs[4];
+    signal input sampled_tiles[16];
+    signal input packed[4][2];
+    signal input siblings[4][3][3];
+    signal input upper[3][3];
+    signal input root;
+    component sampling = GalaxySampling();
+    sampling.limbs <== limbs;
+    sampling.sampled_tiles <== sampled_tiles;
+    component opening = GalaxyCenterTile(1);
+    opening.tile_bits <== sampling.tile[0];
+    for (var q = 0; q < 4; q++) {
+        opening.block_bits[q] <== sampling.blk[q];
+    }
+    opening.packed <== packed;
+    opening.block_siblings <== siblings;
+    opening.tile_siblings <== upper;
+    opening.root === root;
+}
+
 template GalaxyFrameAudit(frame) {
     signal input bx;
     signal input by;

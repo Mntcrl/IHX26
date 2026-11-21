@@ -6,7 +6,7 @@
 //! values). Callers must keep it on the device and never log it.
 
 use galaxy_crypto::{
-    commit::{evidence_root, scalar_component, tree_component},
+    commit::{evidence_root, pad_component, scalar_component, tree_component},
     field::{fr_to_be, fr_to_dec},
     layout::{leaf_slot, tile_label, tile_xy, WIDTH},
     public::public_inputs_v1,
@@ -250,7 +250,7 @@ fn check_commitments(
     roots: &[Fr; 3],
     elements: &[Vec<Fr>; 5],
 ) -> Result<(), WitnessError> {
-    let mut components = c.components;
+    let mut components = [Fr::default(); 16];
     components[0] = c.rgb_root;
     for (i, root) in roots.iter().enumerate() {
         components[i + 1] = tree_component(i as u8 + 1, salts[i], *root);
@@ -258,9 +258,12 @@ fn check_commitments(
     for (i, e) in elements.iter().enumerate() {
         components[i + 4] = scalar_component(i as u8 + 4, salts[i + 3], e);
     }
+    for (i, component) in components.iter_mut().enumerate().skip(9) {
+        *component = pad_component(i as u8);
+    }
     if c.rgb_tree.root() != c.rgb_root
         || components != c.components
-        || evidence_root(&c.components) != c.evidence_root
+        || evidence_root(&components) != c.evidence_root
     {
         return Err(WitnessError::Commitment);
     }

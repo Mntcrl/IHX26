@@ -26,10 +26,13 @@ stays on the device that proves; it is never logged, uploaded or committed.
 | `evidence_root` | scalar | §6 evidence root (published in CAPTURE) |
 | `capture_id_hi`, `capture_id_lo` | scalar | `hash_limbs(capture_id)`: high/low 128-bit big-endian halves |
 | `seed_hi`, `seed_lo` | scalar | `hash_limbs(seed)`, seed from the selection ledger (§7) |
-| `sampled_tiles` | [16] | tile labels `8·ty + tx`: 8 central ascending, then 8 peripheral ascending |
+| `sampled_tiles` | [16] | tile labels `8·ty + tx`: 8 central ascending, then 8 peripheral ascending; central means `2 ≤ tx ≤ 5` and `1 ≤ ty ≤ 4` |
 
 The single source of this layout is `galaxy_crypto::public::public_inputs_v1`.
 There are no public outputs.
+The verifier derives `seed` and the exact tile list from the validated ledger statement.
+The circuit takes those as public inputs: it checks the limb bounds and tile structure
+but does not derive the ledger seed or run tile selection.
 
 ## Private inputs
 
@@ -61,14 +64,18 @@ R, G, B; `l0` = big-endian integer of bytes 0..24, `l1` of bytes 24..48. Depth e
 
 ctx, per-slot hashes and their strict 254-bit decompositions, block picks
 (`blk_u0`, `blk_v0`), temporal picks (`tmp_ix`, `tmp_iy`), hypothesis indices
-(`hyp_idx`), Merkle positions of all frame-1 openings, every unpacked byte/depth/
-confidence and every camera/IMU field passed to `GalaxyPolicyV1m`. A prover cannot
-choose them; supplying a value that does not match yields an unsatisfied constraint.
+(`hyp_idx`), Merkle positions of all openings, and every unpacked byte/depth/
+confidence and camera/IMU field passed to `GalaxyPolicyV1m`. The temporal block
+coordinates are inputs, not computed by the witness calculator; the policy constrains
+them to the projection (or `(0,0)` if out of bounds), and the opening uses those same
+coordinates.
 
 ## Producer checks (`galaxy_witness::build_input`, fail closed)
 
 `Evidence::validate` (§20 input ranges; never clamps), challenge consistency (ctx,
-tiles, picks and hypothesis indices recomputed from seed and capture id), view layout
-equal to the challenge picks, `pr_*` only at `(0,0)` when not in bounds, salts < 2^248,
-every component and the evidence root recomputed from the trees, elements and salts,
-and every opening re-hashed to its committed root.
+tiles, picks and hypothesis indices recomputed from the supplied seed and capture id),
+view layout and frame ordering, a real-grid temporal block for every pair (forced
+to `(0,0)` for an out-of-bounds pair), salts < 2^248, recomputed component commitments
+(including the seven fixed padding slots) and evidence root, and every opening
+re-hashed to its committed root.
+`build_input_from_evidence` builds the reference geometry view before these checks.
