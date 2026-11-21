@@ -1,0 +1,23 @@
+[package]
+name = "galaxy-security-tests"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[[test]]
+name = "decoders"
+path = "src/decoders.rs"
+
+[dev-dependencies]
+ciborium.workspace = true
+galaxy-attestation.workspace = true
+galaxy-evidence.workspace = true
+galaxy-image.workspace = true
+galaxy-protocol.workspace = true
+galaxy-verifier.workspace = true
+galaxy-xrpl.workspace = true
+hex.workspace = true
+proptest.workspace = true
+serde_json.workspace = true

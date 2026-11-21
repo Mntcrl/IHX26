@@ -1,13 +1,13 @@
 use std::{
     collections::BTreeMap,
     fs,
-    net::SocketAddr,
+    net::{Ipv4Addr, SocketAddr},
     path::Path,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use axum::{extract::State, routing::post, Json, Router};
@@ -207,6 +207,81 @@ fn api_state(config: Config, db: Arc<Db>) -> (api::State, Arc<Identity>) {
         api::State::new(Arc::new(config), db, identity.clone()),
         identity,
     )
+}
+
+#[test]
+fn request_budgets_group_ipv6_prefixes_and_mapped_ipv4() {
+    let now = Instant::now();
+    let mut rate = api::Rate::default();
+    for (ip, expected) in [
+        ("2001:db8:1:2::1", true),
+        ("2001:db8:1:2:ffff::ffff", false),
+        ("2001:db8:1:3::1", true),
+        ("192.0.2.1", true),
+        ("::ffff:192.0.2.1", false),
+        ("192.0.2.2", true),
+    ] {
+        assert_eq!(rate.allow(ip.parse().unwrap(), now, 1, 10), expected);
+    }
+    let ip = "192.0.2.1".parse().unwrap();
+    assert!(!rate.allow(ip, now + Duration::from_secs(59), 1, 10));
+    assert!(rate.allow(ip, now + Duration::from_secs(60), 1, 10));
+}
+
+#[test]
+fn request_budgets_evict_least_recently_seen_without_resetting_global_cap() {
+    let now = Instant::now();
+    let ip = |n| Ipv4Addr::from(0x0a00_0000 + n).into();
+    let mut rate = api::Rate::default();
+    let global = 4098;
+    for n in 0u32..4096 {
+        assert!(rate.allow(ip(n), now, 1, global));
+    }
+    // Even a denied request updates recency, making client 1 the oldest.
+    assert!(!rate.allow(ip(0), now, 1, global));
+    assert!(rate.allow(ip(4096), now, 1, global));
+    assert!(!rate.allow(ip(0), now, 1, global));
+    assert!(rate.allow(ip(1), now, 1, global));
+    assert!(!rate.allow(ip(4097), now + Duration::from_secs(59), 1, global));
+    assert!(rate.allow(ip(4097), now + Duration::from_secs(60), 1, global));
+}
+
+#[tokio::test]
+async fn request_budgets_use_only_single_addresses_from_trusted_proxies() {
+    for (additional, trusted) in [("", false), ("trusted_proxies = [\"127.0.0.1\"]", true)] {
+        let root = tempfile::tempdir().unwrap();
+        let listener = bind().await;
+        let url = format!("{}/health", origin(&listener));
+        let mut config = config(root.path(), address(&listener), REPLAY_NETWORK, additional);
+        config.node.limits.requests_per_minute = 1;
+        config.node.limits.global_requests_per_minute = 3;
+        let db = Arc::new(Db::open(&config).unwrap());
+        let (state, _) = api_state(config, db);
+        let _api = serve(listener, api::router(state));
+        let client = reqwest::Client::new();
+        let request = || client.get(&url);
+        assert_eq!(request().send().await.unwrap().status(), 200);
+        for invalid in [
+            request().header("x-forwarded-for", "192.0.2.1, 192.0.2.2"),
+            request().header("x-forwarded-for", "192.0.2.1:80"),
+            request()
+                .header("x-forwarded-for", "192.0.2.1")
+                .header("x-forwarded-for", "192.0.2.2"),
+        ] {
+            let denied = invalid.send().await.unwrap();
+            assert_eq!(denied.status(), 429);
+            assert_eq!(denied.headers()["retry-after"], "60");
+        }
+        let forwarded = |ip| request().header("x-forwarded-for", ip);
+        for (ip, expected) in [
+            ("2001:db8:1:1::1", if trusted { 200 } else { 429 }),
+            ("2001:db8:1:1::2", 429),
+            ("192.0.2.1", if trusted { 200 } else { 429 }),
+        ] {
+            assert_eq!(forwarded(ip).send().await.unwrap().status(), expected);
+        }
+        assert_eq!(forwarded("192.0.2.2").send().await.unwrap().status(), 429);
+    }
 }
 
 #[tokio::test]
@@ -474,6 +549,7 @@ fn memo_parser_rejects_malformed_but_excludes_failed_records() {
         fee_drops: 10,
         last_ledger_sequence: 1020,
         network_id: 1,
+        account_txn_id: Some([1; 32]),
         memo: Memo {
             kind: "galaxy/v1/capture",
             data: &[1],

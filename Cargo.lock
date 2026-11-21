@@ -2001,6 +2001,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "galaxy-security-tests"
+version = "0.1.0"
+dependencies = [
+ "ciborium",
+ "galaxy-attestation",
+ "galaxy-evidence",
+ "galaxy-image",
+ "galaxy-protocol",
+ "galaxy-verifier",
+ "galaxy-xrpl",
+ "hex",
+ "proptest",
+ "serde_json",
+]
+
+[[package]]
 name = "galaxy-verifier"
 version = "0.1.0"
 dependencies = [

@@ -1,5 +1,5 @@
 use std::{
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
 };
 
@@ -43,6 +43,8 @@ pub(crate) struct Settings {
     pub network_config: PathBuf,
     pub data_dir: PathBuf,
     pub listen: SocketAddr,
+    #[serde(default)]
+    pub trusted_proxies: Vec<IpAddr>,
     pub public_url: String,
     #[serde(default)]
     pub sync_mode: SyncMode,
@@ -79,6 +81,7 @@ pub(crate) struct Settings {
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct Limits {
     pub requests_per_minute: u32,
+    pub global_requests_per_minute: u32,
     pub sync_requests_per_second: u32,
     pub ledgers_per_pass: u32,
     pub poll_interval_secs: u64,
@@ -89,6 +92,7 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             requests_per_minute: 180,
+            global_requests_per_minute: 36_000,
             sync_requests_per_second: 4,
             ledgers_per_pass: 128,
             poll_interval_secs: 5,
@@ -121,6 +125,7 @@ impl Config {
                 .end_ledger
                 .is_some_and(|end| end < network.inception_ledger)
             || node.accounts.len() > MAX_ACCOUNTS
+            || node.trusted_proxies.len() > MAX_PEERS
             || node.rpc_endpoints.len() > 8
             || node.websocket_endpoints.len() > 8
             || node
@@ -129,6 +134,7 @@ impl Config {
                 .saturating_add(node.manual_peers.len())
                 > MAX_PEERS
             || !(1..=36_000).contains(&lim.requests_per_minute)
+            || lim.global_requests_per_minute == 0
             || !(1..=50).contains(&lim.sync_requests_per_second)
             || !(1..=4096).contains(&lim.ledgers_per_pass)
             || !(1..=3600).contains(&lim.poll_interval_secs)

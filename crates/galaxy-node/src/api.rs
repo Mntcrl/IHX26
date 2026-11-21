@@ -1,6 +1,6 @@
 use std::{
-    collections::HashMap,
-    net::{IpAddr, SocketAddr},
+    collections::{BTreeSet, HashMap},
+    net::{IpAddr, Ipv6Addr, SocketAddr},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -11,7 +11,7 @@ use axum::{
         rejection::{PathRejection, QueryRejection},
         ConnectInfo, Path, Query, Request, State as Extract,
     },
-    http::{header, HeaderValue, StatusCode},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
@@ -33,7 +33,7 @@ const MAX_RANGES: usize = 2048;
 const ACCOUNT_RANGES: usize = 32;
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 100;
-const MAX_PEER_IPS: usize = 4096;
+const MAX_CLIENTS: usize = 4096;
 const MAX_CONCURRENT_REQUESTS: usize = 64;
 const WINDOW: Duration = Duration::from_secs(60);
 
@@ -59,34 +59,83 @@ impl State {
 }
 
 #[derive(Default)]
-struct Rate(HashMap<IpAddr, (Instant, u32)>);
+pub(crate) struct Rate {
+    clients: HashMap<IpAddr, ClientBudget>,
+    recency: BTreeSet<(u64, IpAddr)>,
+    sequence: u64,
+    global: Option<Budget>,
+}
+
+struct ClientBudget {
+    budget: Budget,
+    last_seen: u64,
+}
+
+struct Budget {
+    since: Instant,
+    used: u32,
+}
+
+impl Budget {
+    fn new(now: Instant) -> Self {
+        Self { since: now, used: 0 }
+    }
+
+    fn available(&mut self, now: Instant, limit: u32) -> bool {
+        if now.duration_since(self.since) >= WINDOW {
+            *self = Self::new(now);
+        }
+        self.used < limit
+    }
+}
 
 impl Rate {
-    fn allow(&mut self, ip: IpAddr, now: Instant, limit: u32) -> bool {
-        let ip = match ip {
-            IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(ip, IpAddr::V4),
-            _ => ip,
+    pub(crate) fn allow(&mut self, ip: IpAddr, now: Instant, client: u32, global: u32) -> bool {
+        let global_budget = self.global.get_or_insert_with(|| Budget::new(now));
+        if !global_budget.available(now, global) {
+            return false;
+        }
+        let ip = match ip.to_canonical() {
+            IpAddr::V6(v6) => IpAddr::V6(Ipv6Addr::from(v6.to_bits() & (u128::MAX << 64))),
+            v4 => v4,
         };
-        if let Some(entry) = self.0.get_mut(&ip) {
-            if now.duration_since(entry.0) >= WINDOW {
-                *entry = (now, 0);
-            }
-            if entry.1 >= limit {
-                return false;
-            }
-            entry.1 += 1;
-            return true;
+        self.sequence += 1;
+        let entry = self.clients.entry(ip).or_insert_with(|| ClientBudget {
+            budget: Budget::new(now),
+            last_seen: 0,
+        });
+        let previous = std::mem::replace(&mut entry.last_seen, self.sequence);
+        self.recency.insert((entry.last_seen, ip));
+        if previous != 0 {
+            self.recency.remove(&(previous, ip));
         }
-        if self.0.len() >= MAX_PEER_IPS {
-            self.0
-                .retain(|_, (since, _)| now.duration_since(*since) < WINDOW);
-            if self.0.len() >= MAX_PEER_IPS {
-                return false;
-            }
+        let allowed = entry.budget.available(now, client);
+        if allowed {
+            entry.budget.used += 1;
+            global_budget.used += 1;
         }
-        self.0.insert(ip, (now, 1));
-        true
+        if self.clients.len() > MAX_CLIENTS {
+            let (_, oldest) = self.recency.pop_first().expect("client recency is populated");
+            self.clients.remove(&oldest);
+        }
+        allowed
     }
+}
+
+fn client_ip(peer: IpAddr, headers: &HeaderMap, trusted_proxies: &[IpAddr]) -> IpAddr {
+    let peer = peer.to_canonical();
+    if trusted_proxies.iter().any(|proxy| proxy.to_canonical() == peer) {
+        let forwarded = headers.get_all("x-forwarded-for");
+        let mut values = forwarded.iter();
+        if let Some(value) = values.next() {
+            if values.next().is_none() {
+                if let Some(ip) = value.to_str().ok().and_then(|s| s.trim().parse().ok()) {
+                    return ip;
+                }
+            }
+        }
+    }
+    peer
 }
 
 pub(crate) fn router(state: State) -> Router {
@@ -111,11 +160,14 @@ async fn request_policy(Extract(state): Extract<State>, request: Request, next: 
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .is_some_and(|addr| {
+            let node = &state.config.node;
+            let client = client_ip(addr.0.ip(), request.headers(), &node.trusted_proxies);
             state.rate.lock().is_ok_and(|mut rate| {
                 rate.allow(
-                    addr.0.ip(),
+                    client,
                     Instant::now(),
-                    state.config.node.limits.requests_per_minute,
+                    node.limits.requests_per_minute,
+                    node.limits.global_requests_per_minute,
                 )
             })
         });
@@ -649,17 +701,6 @@ mod tests {
         );
         assert_eq!(parse_cursor(None), Some(Cursor(0, 0, String::new())));
         assert_eq!(parse_cursor(Some("v1.00000000.00000000.invalid")), None);
-    }
-
-    #[test]
-    fn rate_limit_is_per_ip_and_normalizes_mapped_addresses() {
-        let mut rate = Rate::default();
-        let now = Instant::now();
-        let ip = "192.0.2.1".parse().unwrap();
-        assert!(rate.allow(ip, now, 1));
-        assert!(!rate.allow("::ffff:192.0.2.1".parse().unwrap(), now, 1));
-        assert!(rate.allow("192.0.2.2".parse().unwrap(), now, 1));
-        assert!(rate.allow(ip, now + WINDOW, 1));
     }
 
     #[test]
