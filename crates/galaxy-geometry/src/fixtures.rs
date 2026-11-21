@@ -250,32 +250,35 @@ fn plane(policy: &Policy, rig: &Rig) -> Result<(GeometryView, PolicyReport), Fix
 fn plane_fixtures(policy: &Policy, out: &mut Vec<Fixture>) -> Result<(), FixtureError> {
     let usable_per_frame = |v: &GeometryView, frame: u8| v.pairs.iter().filter(|p| p.frame == frame && p.inb).count() as u16;
 
-    // dcons lower side at equality (frame 0 sees the plane exactly 30 mm farther
-    // at d = 1000 mm) and occlusion at equality (frame t+ depth 950 = 0.95·1000).
+    // At the fixture's 1000 mm reference depth, each per-mille of depth
+    // tolerance is exactly 1000 µm of axial translation. At zero axial
+    // translation, each per-mille of occlusion margin is 1 mm of depth.
+    let depth_boundary_um = 1000 * policy.temporal.dcons_pm;
+    let occ_boundary_mm = 1000 - policy.temporal.occ_pm;
     let mut rig = Rig::new();
-    rig.t[0] = [-4000, 0, -30_000];
-    rig.depth[2] = 950;
+    rig.t[0] = [-4000, 0, -depth_boundary_um];
+    rig.depth[2] = u16::try_from(occ_boundary_mm).map_err(|_| FixtureError::Target("plane-depth-boundary-equal"))?;
     let (view, r) = plane(policy, &rig)?;
     let n0 = usable_per_frame(&view, 0);
     ensure(n0 > 0 && r.stats.n_dok == n0 && r.stats.n_occ == 0 && r.stats.n_usable > n0, "plane-depth-boundary-equal")?;
     out.push(fixture("plane-depth-boundary-equal",
         "Fronto-parallel plane, identity rotations. Frame t-: 1000·|dj·M − Q_z| = dcons_pm·dj·M exactly (depth_ok true at equality). Frame t+: 1000·dj·M = (1000 − occ_pm)·Q_z exactly (not occluded, strict inequality; depth_ok false).", view));
 
-    rig.t[0] = [-4000, 0, -30_001];
-    rig.depth[2] = 949;
+    rig.t[0] = [-4000, 0, -depth_boundary_um - 1];
+    rig.depth[2] = rig.depth[2].checked_sub(1).ok_or(FixtureError::Target("plane-depth-boundary-over"))?;
     let (view, r) = plane(policy, &rig)?;
     let n2 = usable_per_frame(&view, 2);
     ensure(n2 > 0 && r.stats.n_dok == 0 && r.stats.n_occ == n2, "plane-depth-boundary-over")?;
     out.push(fixture("plane-depth-boundary-over",
-        "As plane-depth-boundary-equal one unit past each boundary: frame t- depth_ok false (30001 > 30000), frame t+ occluded (dj = 949).", view));
+        "As plane-depth-boundary-equal, 1 µm past the depth tolerance in t− (depth_ok false), 1 mm past the occlusion margin in t+ (occluded).", view));
 
     let mut rig = Rig::new();
-    rig.t[0] = [-4000, 0, 30_000];
+    rig.t[0] = [-4000, 0, depth_boundary_um];
     let (view, r) = plane(policy, &rig)?;
     let n0 = usable_per_frame(&view, 0);
     ensure(n0 > 0 && r.stats.n_dok == r.stats.n_usable && r.stats.n_occ == 0, "plane-depth-boundary-upper")?;
     out.push(fixture("plane-depth-boundary-upper",
-        "Frame t- 30 mm closer: dj·M − Q_z = +dcons_pm·dj·M/1000 exactly (upper side of the depth tolerance, depth_ok true).", view));
+        "Frame t− closer: dj·M − Q_z = +dcons_pm·dj·M/1000 exactly (upper side of the depth tolerance, depth_ok true).", view));
 
     // Q_z = 0 for every frame t- pair, Q_z < 0 for every frame t+ pair.
     let mut rig = Rig::new();

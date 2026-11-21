@@ -6,6 +6,9 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+#[path = "geometry-tool/study.rs"]
+mod study;
+
 use clap::{Parser, Subcommand, ValueEnum};
 use galaxy_crypto::sampling::Challenge;
 use galaxy_evidence::bundle::{self, EvidenceBundle};
@@ -110,6 +113,19 @@ enum Command {
         dir: PathBuf,
         #[arg(long, default_value_t = 8)]
         challenges: u64,
+    },
+    /// Fit threshold values using only training scenes in a private manifest.
+    CalibrationFit {
+        dir: PathBuf,
+        /// Reproduce the original fit without the synthetic non-regression gates.
+        #[arg(long)]
+        unconstrained: bool,
+    },
+    /// Measure a fixed policy on one scene split of a private manifest.
+    CalibrationMeasure {
+        dir: PathBuf,
+        #[arg(long)]
+        test: bool,
     },
     /// Regenerate test-vectors/policy (GeometryView fixtures + README).
     Fixtures {
@@ -227,6 +243,8 @@ fn run(cli: Cli) -> Result<ExitCode, Error> {
             }
             print!("{}", suite::markdown(&outcomes));
         }
+        Command::CalibrationFit { dir, unconstrained } => study::fit(&dir, &policy, unconstrained)?,
+        Command::CalibrationMeasure { dir, test } => study::measure(&dir, test, &policy)?,
         Command::Fixtures { out } => {
             for (name, bytes) in fixtures::render_files(&policy)? {
                 write(&out.join(&name), &bytes)?;
