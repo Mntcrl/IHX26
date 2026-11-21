@@ -7,10 +7,12 @@
 
 <p><sub>Physical Hardware &amp; Optical Truth On-chain Network</sub></p>
 
-PHØTON lets anyone verify that an iPhone photo matches a zero-knowledge proof of physical consistency on the XRP Ledger, without uploading the image or relying on a project server.
+PHØTON lets anyone verify that a photo from a phone matches a zero-knowledge proof of physical consistency on the XRP Ledger, without uploading the image or relying on a project server. The protocol is designed to support different devices through capture profiles.
+
+**MVP: iPhone with LiDAR.**
 
 [![XRPL Testnet: live](https://img.shields.io/badge/XRPL_Testnet-live-237B57)](#see-it-on-the-ledger)
-[![Groth16 on iPhone](https://img.shields.io/badge/Groth16-on_iPhone-8B5E26)](#cryptography)
+[![Groth16 on-device](https://img.shields.io/badge/Groth16-on--device-8B5E26)](#cryptography)
 [![Rust](https://img.shields.io/badge/core-Rust-B44D27)](crates/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-237B57)](LICENSE)
 
@@ -31,11 +33,11 @@ PHØTON lets anyone verify that an iPhone photo matches a zero-knowledge proof o
 
 ## How it works
 
-PHØTON is the product; [Galaxy v1](docs/protocol/galaxy-v1-spec.md) is the protocol.
+PHØTON is the product; [Galaxy v1](docs/protocol/galaxy-v1-spec.md) is the protocol. This flow shows the current iPhone profile, `galaxy-pc-v1m`.
 
 ```mermaid
 sequenceDiagram
-    participant P as PHØTON on iPhone
+    participant P as PHØTON on the phone
     participant A as Apple App Attest
     participant L as XRP Ledger Testnet
     participant V as Independent verifier
@@ -45,17 +47,17 @@ sequenceDiagram
     A-->>P: Return the local App Attest assertion
     P->>L: Publish CAPTURE, validated at ledger L0
     L-->>P: The validated L0 + 5 hash determines the challenge
-    P->>P: Generate and check a Groth16 proof on the iPhone
+    P->>P: Generate and check a Groth16 proof on-device
     P->>L: Publish PROOF
     P-->>V: Share the JPEG or PNG with XMP references
     V->>L: Fetch validated transactions and ledger data
     V->>V: Check the image in browser or CLI, or the proof alone on a node
 ```
 
-1. The iPhone captures synchronized RGB frames, LiDAR depth, camera poses, and IMU readings.
+1. The phone captures synchronized RGB frames, LiDAR depth, camera poses, and IMU readings.
 2. Poseidon Merkle roots bind the image and sensor evidence; App Attest binds the CAPTURE to a registered app instance.
 3. The validated ledger at `L0 + 5` determines which parts of the committed evidence the proof must check.
-4. The iPhone generates and verifies the Groth16 proof locally, then publishes PROOF.
+4. The phone generates and verifies the Groth16 proof locally, then publishes PROOF.
 5. The exported JPEG or PNG carries XMP references. The browser and CLI check the file against XRPL; a lookup node can check the proof but never receives the image.
 
 ## Why XRPL?
@@ -71,6 +73,15 @@ The **876,639-constraint Groth16 circuit over BN254** proves that the ledger-sel
 
 Raw sensor data and pixels stay off-ledger. Bluetooth and camera-noise aggregates are **committed only**: the circuit does not prove properties about them.
 
+## Capture profiles & roadmap
+
+Galaxy v1 versions capture profiles and policies. Each profile defines its sensors, policy, and proof circuit. A `CIRCUIT` registration publishes the policy and verification key on XRPL; verifiers pin the circuits they accept.
+
+- **Implemented:** `galaxy-pc-v1m` uses iPhone LiDAR and Apple App Attest.
+- **Planned, not implemented:** Profiles for phones without LiDAR could use multi-camera stereo, dedicated time-of-flight depth sensors, or depth from camera motion (for example, ARCore Depth). On Android, we plan to evaluate hardware-backed Android Key Attestation and Play Integrity for the role App Attest fills today.
+
+The verification flow stays the same: **CAPTURE → ledger challenge → PROOF → anyone can verify**.
+
 ## Measurements
 
 | Metric | Observed | Source |
@@ -79,7 +90,7 @@ Raw sensor data and pixels stay off-ledger. Bluetooth and camera-noise aggregate
 | Per certified photo | 2 transactions, 20 drops total; registration is separate | [Validated phone transactions](docs/measurements.md#first-phone-certified-photo) |
 | Submit → observed validated | 4.5–7.8 s per transaction | [Hardened Testnet desktop runs](docs/measurements.md#real-device-captures-after-accounttxnid-hardening) |
 | Groth16 on iPhone 13 Pro Max | 6.2–9.1 s, ~1.0 GiB peak physical memory | [Device timings](docs/measurements.md#on-device-proving-and-capture-timings) |
-| Shutter → certified on iPhone | 35–46 s in measured device runs, not the first historical pair | [Device timings](docs/measurements.md#on-device-proving-and-capture-timings) |
+| Shutter → certified on iPhone 13 Pro Max | 35–46 s in measured device runs, not the first historical pair | [Device timings](docs/measurements.md#on-device-proving-and-capture-timings) |
 | Browser verification of the phone JPEG | ~6 s live Testnet; ~1 s replaying XRPL replies | [Browser results](docs/measurements.md#first-phone-certified-photo) |
 
 ## Try it
