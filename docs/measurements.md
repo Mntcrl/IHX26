@@ -156,3 +156,31 @@ A second funded development wallet sent **201 Payments** (10 drops each, ledgers
 | B: PROOF | 1 / 200 | 199 | 2 |
 
 The verdict was unchanged (`UNSUPPORTED`, dev-unattested credential) with `history.complete`, `registration.txn_chain`, `capture.txn_chain`, `capture.unique` and `proof.groth16` passing: the third-party rows exhausted the one-page budget, the partial scans were discarded, and the verifier walked the account's own `AccountTxnID` chain instead. The second hardening pass (ADR 0093) merges B and C into one scan; on the offline padded recording it reduced the RPC calls from 218 to 144.
+
+## First phone-certified photo
+
+The iPhone capture app's third attempt produced a certified `jpeg-v1` directly on the phone. On XRPL Testnet, [CAPTURE `7DEA7F30…`](https://testnet.xrpl.org/transactions/7DEA7F30DBCEBE5461CDC1E57B2E3E66A4F5617D6708F6B0250796B3BF4C369D) validated at 22,494,316, the selection ledger was 22,494,321, and [PROOF `F50D1D20…`](https://testnet.xrpl.org/transactions/F50D1D20B1B784657B941CD291B6EB44B9B332AF63D8A1356C144C94C69C7800) validated at 22,494,467. The verifier accepted Apple App Attest in the development environment and circuit `a0bed7f1cdad94c33f9ff22e8b6cdd1bdb7e7f873ce73c8038e8a403213fa68b`.
+
+The native report summary was “Physical consistency verified under Galaxy policy galaxy-pc-v1m (4ad25185f11bfb52af5dee5a1ab39d4e2428c1c83188c7483db1777d22367073).” Direct verification passed 39 checks:
+
+- `image.{decode,profile,photo_id,rgb_root}` and `refs.metadata`.
+- `ledger.{network,preledger_window,selection,challenge}`.
+- `capture.{found,validated_success,decode,network,txn_chain,photo_binding,rgb_binding,account_binding,assertion,counter,unique}`.
+- `circuit.{accepted,registration}`, `registration.{resolve,txn_chain,bundle,attestation,revocation}`, and `history.complete`.
+- `proof.{found,validated_success,account,binding,window,groth16}` and `policy.{sensor_quality,lidar_geometry,rgb_lidar,temporal,motion_imu}`.
+
+`evidence.bluetooth` and `evidence.noise` were marked not applicable as proof checks; these signals were committed, not proven.
+
+| Verification path | Result | Wall time |
+|---|---|---:|
+| Linux CLI, original JPEG, live XRPL | `VERIFIED` (exit 0) | 6.271 s |
+| Linux CLI, XMP removed, explicit CAPTURE and PROOF references | `VERIFIED` (exit 0) | 6.195 s |
+| Linux CLI, XMP removed, loopback node lookup and live XRPL | `VERIFIED` (exit 0) | 6.284 s |
+| Linux CLI, unmodified canonical raster repacked losslessly as PNG with original XMP | `VERIFIED` (exit 0) | 6.980 s |
+| Linux CLI, same PNG with one pixel's red channel changed by one bit | `INVALID` (exit 20), `capture.photo_binding` failed | 2.298 s |
+| Linux Chromium, original JPEG, default live XRPL | `VERIFIED` | 6.337 s |
+| Linux Chromium, original JPEG, replay of the CLI's XRPL responses | `VERIFIED` | 0.997 s |
+| macOS arm64 CLI, original JPEG, live XRPL | `VERIFIED` (exit 0) | 8.086 s |
+| macOS Chrome, original JPEG, default live XRPL | `VERIFIED` | 6.153 s |
+
+The local node took 149.287 s to index the contiguous range 22,494,316–22,494,467. This was a deliberately bounded index, not complete Testnet history. Stripping XMP left the canonical raster unchanged. Linux Chromium's full report on the 13 replayed RPC calls matched the native report except for the RPC endpoint label. Both live browsers and the macOS CLI agreed with the Linux CLI on the verdict, the image binding, transaction references, and every check status; the live runs consulted different validated tips.

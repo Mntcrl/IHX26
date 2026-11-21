@@ -18,6 +18,23 @@ Set `WEB_PORT` for another local port. `make verifier-run` uses the existing bui
 
 Copy the contents of `apps/verifier-web/dist/` to any HTTPS static host; a subdirectory with a trailing-slash URL works. Serve `.wasm` as `application/wasm`, JavaScript files with a JavaScript MIME type, and `index.html` as HTML. Do not open `index.html` with `file://`. Use a current browser with WebAssembly, module and Blob workers, and `Promise.withResolvers`. No rewrite rules or server-side verifier processes are required. Asset sizes (including gzip) are printed by `make verifier-build`.
 
+### Run the verifier on a laptop
+
+Unzip the presenter package (or put the built `dist/` and `serve-local.sh`
+together in a folder). On the laptop, open Terminal in that folder and run
+`./serve-local.sh` with Python 3 installed. Open **http://127.0.0.1:8080/** in a
+current browser. The server accepts only local connections; leave Terminal
+open while verifying, then press Ctrl+C to stop it.
+
+On the iPhone, open **Gallery**, select the certified capture, and choose
+**Certified JPEG · original → Share JPEG → AirDrop**. Don't resave the file
+in Photos or a photo editor. On the laptop, choose the JPEG, keep **Embedded
+Galaxy references** selected, and click **Verify locally**. The photo stays
+on the laptop; an internet connection is needed to read XRPL Testnet.
+
+If the package includes `galaxy`, run `./galaxy verify "/path/to/photo.jpg"
+--no-discovery` on an Apple Silicon Mac to verify the same file from Terminal.
+
 ## Use and interpret the result
 
 1. Choose or drop one JPG or PNG (maximum 16 MiB). The verifier accepts the versioned Galaxy PNG/JPEG profiles, not every image that a browser can preview.
