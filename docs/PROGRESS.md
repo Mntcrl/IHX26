@@ -65,9 +65,13 @@ The two-transaction target (CAPTURE + PROOF per photo) must be confirmed by meas
 | Desktop snarkjs `groth16 setup` feasibility at ~1M constraints (13 GB Linux box) | not feasible (`r1cs info` alone ~5 GB RSS; setup estimated ~10 GB) → Rust low-memory development setup | MobileProver 2026-11-20 20:44 |
 | App Attest artefact sizes (development environment) | attestation object 5,830 B; assertions 141 / 142 B | IOS2 device run 2026-11-20 20:44 |
 | Transactions per certified photo | — | pending |
-| CAPTURE / PROOF memo size (serialized blob) | — | pending |
-| Fees per photo (drops) | — | pending |
-| Latencies (submit → validated, L0 → Lsel, Lsel → PROOF) | — | pending |
+| CAPTURE AccountSet, signed blob / Memos field | 949 / 803 B with a 450 B assertion; 1,099 / 953 B with a 600 B assertion (Memos ≤ 1,024 B) | XRPL5, serialized with galaxy-xrpl, [xrpl.md](protocol/xrpl.md) |
+| PROOF AccountSet, signed blob / Memos field | 557 / 411 B (361 B payload) | XRPL5, [xrpl.md](protocol/xrpl.md) |
+| Fee per transaction (Testnet) | 10 drops (10 consecutive galaxy/test transactions) | XRPL5 Testnet run 2026-11-21 |
+| Submit → validated latency (Testnet) | median 6.29 s over 10 transactions | XRPL5 Testnet run 2026-11-21 |
+| Development setup of main_v1m (`galaxy-prover dev-setup`, Linux) | 1,275 s, 1.0 GiB peak, 5 threads | MobileProver3 / CircuitCore4 |
+| Desktop proving of main_v1m (Linux, 4 rayon threads) | witness 0.34 s + prove 8.62 s, 1.48 GB peak; snarkjs and galaxy-prover verify OK | MobileProver3 |
+| Policy template `GalaxyPolicyV1m` alone | 390,865 constraints (`--O2`) | CircuitGeo4 |
 | Browser verification time | — | pending |
 
 ## Known limitations
