@@ -7,6 +7,7 @@ struct DeveloperScreen: View {
 
     #if DEBUG
     @Environment(\.scenePhase) private var scenePhase
+    @State private var provingHost = ProverHost()
     @State private var provingTask: Task<Void, Never>?
     @State private var cancellation: ProvingCancellation?
     @State private var provingStatus = "Not run"
@@ -88,7 +89,7 @@ struct DeveloperScreen: View {
                 if scenePhase == .active { capture.setActive(true) }
             }
             do {
-                let result = try await ProverHost().selfTest(cancellation: token) { tick in
+                let result = try await provingHost.selfTest(cancellation: token) { tick in
                     guard tick.seconds == nil else { return }
                     Task { @MainActor in
                         guard cancellation === token, provingTask?.isCancelled == false else { return }

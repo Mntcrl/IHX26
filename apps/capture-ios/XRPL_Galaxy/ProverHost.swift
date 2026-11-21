@@ -198,34 +198,48 @@ actor ProverHost {
         let pin = try phase("load_descriptor", PinnedCircuit.bundled)
         try phase("open_pinned_artifacts") { try open(pin) }
 
-        let evidence = try phase("ingest_fixture") {
-            // Genuine LiDAR calibration controls (64/64 passing development draws).
-            let controls = ["199E02DB-9B15-4821-92B5-FEECB15874EE", "B1E6CBE5-E8E6-4CC8-BBEB-185F47C5E660"]
-            let fixtures = documents.appending(path: "galaxy-fixtures", directoryHint: .isDirectory)
-            guard let fixture = controls.lazy.map({ fixtures.appending(path: "\($0).gxrw") })
-                .first(where: { FileManager.default.fileExists(atPath: $0.path) }) else {
-                throw FlowError.failed("This phone does not have either of the private calibration fixtures for this self-test.")
+        // Genuine LiDAR calibration controls (64/64 passing development draws).
+        let controls = ["199E02DB-9B15-4821-92B5-FEECB15874EE", "B1E6CBE5-E8E6-4CC8-BBEB-185F47C5E660"]
+        let fixtures = documents.appending(path: "galaxy-fixtures", directoryHint: .isDirectory)
+        let candidates = controls.map { fixtures.appending(path: "\($0).gxrw") }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+        guard !candidates.isEmpty else {
+            throw FlowError.failed("This phone does not have either of the private calibration fixtures for this self-test.")
+        }
+
+        // Fixed local ledger values, but fresh private salts still change the challenge on
+        // each ingest. A policy rejection is not a prover failure; try the second control.
+        let input = CaptureParameters(
+            network: pin.settings.xrpl.networkId, registrationTx: String(repeating: "A1", count: 32),
+            preledger: ValidatedLedger(index: 1_000, hash: Data(repeating: 0xA2, count: 32), closeTime: 1),
+            nonce: Data(repeating: 0xA3, count: 32), claimedTimeMs: 1_700_000_000_000,
+            flags: CaptureImageFormat.jpeg.flags, accountId: Data(repeating: 0xA4, count: 20))
+        var eligible: (CaptureChallenge, CaptureEvaluation)?
+        for fixture in candidates {
+            let evidence = try phase("ingest_fixture") {
+                let bytes = try Data(contentsOf: fixture, options: .mappedIfSafe)
+                return try ingestGxrw(raw: bytes, profile: CaptureImageFormat.jpeg.profile, captureState: Data())
             }
-            let bytes = try Data(contentsOf: fixture, options: .mappedIfSafe)
-            return try ingestGxrw(raw: bytes, profile: CaptureImageFormat.jpeg.profile, captureState: Data())
+            let statement = try phase("build_dev_statement") {
+                try pin.circuit.buildCaptureStatement(evidence: evidence, input: input)
+            }
+            let challenge = try phase("derive_dev_challenge") {
+                let inclusion: UInt32 = 1_001
+                let selection = try pin.circuit.selectionLedgerIndex(core: statement.core, captureLedger: inclusion)
+                return try pin.circuit.deriveChallenge(
+                    core: statement.core, captureTx: String(repeating: "A5", count: 32), captureLedger: inclusion,
+                    selectionLedger: ValidatedLedger(index: selection, hash: Data(repeating: 0xA6, count: 32), closeTime: 2))
+            }
+            let evaluation = try phase("evaluate") { try challenge.evaluate(evidence: evidence) }
+            if evaluation.verdict().pass {
+                eligible = (challenge, evaluation)
+                break
+            }
+            log.record("evaluate", "policy_rejected")
         }
-        let statement = try phase("build_dev_statement") {
-            // These fixed values stand in for ledger data only in this offline diagnostic.
-            let input = CaptureParameters(
-                network: pin.settings.xrpl.networkId, registrationTx: String(repeating: "A1", count: 32),
-                preledger: ValidatedLedger(index: 1_000, hash: Data(repeating: 0xA2, count: 32), closeTime: 1),
-                nonce: Data(repeating: 0xA3, count: 32), claimedTimeMs: 1_700_000_000_000,
-                flags: CaptureImageFormat.jpeg.flags, accountId: Data(repeating: 0xA4, count: 20))
-            return try pin.circuit.buildCaptureStatement(evidence: evidence, input: input)
+        guard let (challenge, evaluation) = eligible else {
+            throw FlowError.inconclusive(["Calibration fixtures did not pass their local challenges. No proof was attempted."])
         }
-        let challenge = try phase("derive_dev_challenge") {
-            let inclusion: UInt32 = 1_001
-            let selection = try pin.circuit.selectionLedgerIndex(core: statement.core, captureLedger: inclusion)
-            return try pin.circuit.deriveChallenge(
-                core: statement.core, captureTx: String(repeating: "A5", count: 32), captureLedger: inclusion,
-                selectionLedger: ValidatedLedger(index: selection, hash: Data(repeating: 0xA6, count: 32), closeTime: 2))
-        }
-        let evaluation = try phase("evaluate") { try challenge.evaluate(evidence: evidence) }
         let witness = try phase("build_witness_input") { try self.witness(evaluation: evaluation) }
         let proof = try phase("prove") {
             try prove(witness: witness, cancellation: cancellation) { tick in

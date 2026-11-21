@@ -277,48 +277,49 @@ actor LedgerClient {
         let retryID = UUID()
         let report = LedgerRetry.report
         do {
-        while true {
-            try Task.checkCancellation()
-            let latest = try await latestIndex()
-            guard signed.firstPossibleLedger > 0, latest >= signed.firstPossibleLedger - 1 else {
-                throw FlowError.paused("Testnet is behind the ledger used to sign this transaction. Resume when it catches up.")
-            }
-            let body = try await rpc(xrplTxRequest(network: network, record: signed, validatedLedger: latest))
-            switch try xrplParseTx(network: network, record: signed, validatedLedger: latest, body: body) {
-            case .validated(let index, _, let code, let success):
-                guard success, code == "tesSUCCESS" else {
-                    throw FlowError.failed("The transaction validated without tesSUCCESS. XRPL may have charged its fee.")
+            while true {
+                try Task.checkCancellation()
+                let latest = try await latestIndex()
+                guard signed.firstPossibleLedger > 0, latest >= signed.firstPossibleLedger - 1 else {
+                    throw FlowError.paused("Testnet is behind the ledger used to sign this transaction. Resume when it catches up.")
                 }
-                // Validated tec transactions do not advance AccountTxnID.
-                if submitRetries > 0 { await report?(retryID, nil) }
-                try storeHead(signed, address: address)
-                return index
-            case .expired:
-                throw FlowError.failed("The signed transaction expired without validated inclusion.")
-            case .pending:
-                if latest < signed.lastLedger && !submitted {
-                    do {
-                        let response = try await rpc(xrplSubmitRequest(network: network, record: signed, validatedLedger: latest),
-                                                     allowReplay: false)
-                        _ = try xrplParseSubmit(network: network, record: signed, body: response)
-                        if submitRetries > 0 { await report?(retryID, nil) }
-                    } catch {
-                        try Task.checkCancellation()
-                        guard Self.isTransient(error), submitRetries < endpoints.count - 1 else { throw error }
-                        submitRetries += 1
-                        await report?(retryID, submitRetries)
-                        // The server may have received the blob. Fail over and query the
-                        // persisted hash before even considering another submit.
-                        try await Task.sleep(for: Self.retryDelay)
-                        continue
+                let body = try await rpc(xrplTxRequest(network: network, record: signed, validatedLedger: latest))
+                switch try xrplParseTx(network: network, record: signed, validatedLedger: latest, body: body) {
+                case .validated(let index, _, let code, let success):
+                    guard success, code == "tesSUCCESS" else {
+                        throw FlowError.failed("The transaction validated without tesSUCCESS. XRPL may have charged its fee.")
                     }
-                    submitted = true
+                    // Validated tec transactions do not advance AccountTxnID.
+                    if submitRetries > 0 { await report?(retryID, nil) }
+                    try storeHead(signed, address: address)
+                    return index
+                case .expired:
+                    throw FlowError.failed("The signed transaction expired without validated inclusion.")
+                case .pending:
+                    if latest < signed.lastLedger && !submitted {
+                        do {
+                            let response = try await rpc(xrplSubmitRequest(network: network, record: signed, validatedLedger: latest),
+                                                         allowReplay: false)
+                            _ = try xrplParseSubmit(network: network, record: signed, body: response)
+                            if submitRetries > 0 { await report?(retryID, nil) }
+                        } catch {
+                            try Task.checkCancellation()
+                            guard Self.isTransient(error), submitRetries < endpoints.count - 1 else { throw error }
+                            submitRetries += 1
+                            await report?(retryID, submitRetries)
+                            // The server may have received the blob. Fail over and query the
+                            // persisted hash before even considering another submit.
+                            try await Task.sleep(for: Self.retryDelay)
+                            continue
+                        }
+                        submitted = true
+                    }
                 }
+                try await waitForLedger()
             }
-            try await waitForLedger()
-        }
         } catch {
             if submitRetries > 0 { await report?(retryID, nil) }
+            if error is TransportFailure { throw GalaxyError.Rpc }
             throw error
         }
     }

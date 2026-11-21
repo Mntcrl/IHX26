@@ -71,6 +71,8 @@ The app persists the assertion, the signed CAPTURE before first submission, vali
 
 Pause, network failure, an RPC history gap or a lock/unlock never authorize a new CAPTURE or challenge. A journaled transaction is queried by hash first and only the same blob may be resubmitted while valid. Validated `tec` or conclusively searched expiry is terminal. Proving may be restarted on the same inputs before signing the PROOF. **Certification & setup** exposes status, resume and pause; its history includes attempts that produced no image.
 
+Testnet HTTP requests use an eight-second per-request budget. Transient transport failures can retry across the three pinned public Testnet servers; the app checks `server_info` network ID before using a fallback and the progress card shows **Waiting for XRPL (retry n)**. If a submit times out, the app looks up the already-journaled transaction hash again before it may resend the same blob. Exhausted transport attempts pause certification without replacing any signed transaction.
+
 ## Live certification view
 
 Press the certification shutter to open the progress view. The phase timeline follows the saved attempt; phase times are elapsed between journal checkpoints and can include network waits or pauses. The proof substeps report their actual callback timings, and the constraint count comes from the bundled circuit descriptor.
