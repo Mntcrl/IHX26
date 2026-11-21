@@ -118,6 +118,13 @@ try {
   const choose = async path => wd(`/element/${await element('#photo')}/value`, { text: path });
   const script = (code, ...args) => wd('/execute/sync', { script: code, args });
   const cdp = (cmd, params) => wd('/goog/cdp/execute', { cmd, params });
+  await cdp('Page.addScriptToEvaluateOnNewDocument', { source: `
+    Element.prototype.requestPointerLock = () => Promise.reject(new Error('Pointer lock disabled in smoke tests'));
+    Element.prototype.setPointerCapture = Element.prototype.releasePointerCapture = () => {};
+  ` });
+  const pauseForPaint = () => script('return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+  const dropZoneAboveFold = () => script(`const r = document.querySelector('#drop-zone').getBoundingClientRect();
+    return r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth && r.height > 0`);
   const readReport = async () => {
     for (let attempt = 0; attempt < (live ? 1200 : 200); attempt++) {
       const value = await script('return document.querySelector("#report pre")?.textContent ?? null');
@@ -156,6 +163,13 @@ try {
 
   await wd('/url', { url: `${origin}/verifier/` });
   assert.equal(await enabled('#verify'), false);
+  assert.ok(await dropZoneAboveFold(), 'desktop drop target is on the opening screen');
+  assert.equal(await script('return document.querySelector("#sampling").dataset.scAct'), 'pin');
+  for (const expected of ['a[href="#method"]', '#photo', '#advanced summary']) {
+    await cdp('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+    await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+    assert.ok(await script('return document.activeElement.matches(arguments[0])', expected), `tab order should reach ${expected}`);
+  }
   const { x, y } = await script('const r = document.querySelector("#drop-zone").getBoundingClientRect(); return {x: r.x + r.width / 2, y: r.y + r.height / 2}');
   const drag = { x, y, data: { items: [], files: [imagePath], dragOperationsMask: 1 } };
   const start = performance.now();
@@ -195,7 +209,7 @@ try {
     const mismatches = [];
     for (const [label, path, kind, state] of [
       ['stripped', args[1], 'regular', /^VERIFIED$/],
-      ['ordinary', args[2], 'regular', /^(NOT_FOUND|UNAVAILABLE)$/],
+      ['ordinary', args[2], 'regular', /^NOT_FOUND$/],
       ['changed', args[3], 'warning', /^INVALID$/],
     ]) {
       const before = performance.now();
@@ -255,6 +269,7 @@ try {
   const logs = await wd('/log', { type: 'browser' });
   assert.ok(logs.every(({ message }) => !/Content.Security.Policy|Uncaught/i.test(message)), 'no CSP or uncaught browser errors');
   await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 850, deviceScaleFactor: 1, mobile: false });
+  await pauseForPaint();
   const layout = await script(`return {
     width: document.documentElement.clientWidth, document: document.documentElement.scrollWidth,
     overflowing: [...document.querySelectorAll('body *')].filter(e => e.getBoundingClientRect().right > innerWidth
@@ -265,7 +280,17 @@ try {
   const blocked = await script('return fetch(arguments[0]).then(() => false, () => true)', `${origin}/not-allowlisted`);
   assert.ok(blocked && !unexpected.includes('/not-allowlisted'), 'CSP should block unconfigured same-origin connections');
   if (live) await screenshot('mobile');
-  console.log('Chromium: 390 px layout; CSP blocks unconfigured connections');
+  await cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
+  await wd('/url', { url: `${origin}/verifier/` });
+  await pauseForPaint();
+  assert.ok(await dropZoneAboveFold(), '390 px drop target is on the opening screen');
+  const reduced = await script(`const stage = document.querySelector('#sampling');
+    const tile = document.querySelector('#sample-tiles use');
+    return { act: stage.dataset.scAct, final: getComputedStyle(tile).getPropertyValue('--sample-lift').trim() }`);
+  assert.deepEqual(reduced, { act: 'flow', final: '1' }, 'reduced motion opens the complete diagram without pinning');
+  await click('.return-to-input');
+  assert.ok(await script('return document.activeElement.id === "photo"'), 'the method closes by returning focus to the photo input');
+  console.log('Chromium: desktop and 390 px first-screen input, keyboard order, reduced motion, and CSP');
 } finally {
   if (control && session) await fetch(`${control}${session}`, { method: 'DELETE', signal: AbortSignal.timeout(5_000) }).catch(() => {});
   driver.kill();

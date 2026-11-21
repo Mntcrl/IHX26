@@ -2,6 +2,8 @@
 
 The PHØTON photo verifier is a static site. It runs the same Rust verification pipeline as the `galaxy` CLI, compiled to WebAssembly and executed in a Web Worker. It does not require an account, wallet, or upload.
 
+The file drop target is on the first screen, including on phones. **How it works** opens an optional explanation of the ledger challenge and 16-tile sample; the sample drawing is illustrative and never uses your photo. **Choose a photo** returns to the file input. Reduced motion shows the complete drawing without pinning the page.
+
 ## Build, run and test
 
 Use the repository's pinned Rust toolchain with `wasm32-unknown-unknown`, Node.js 22.12+ (22, 24, or 26+) and npm. The Rust `wasm-bindgen-cli` must be exactly **0.2.130**; its install includes the WASM test runner. The script prefers `.tools/bin` and falls back to `PATH`.
@@ -17,6 +19,8 @@ make verifier-test
 Set `WEB_PORT` for another local port. `make verifier-run` uses the existing build if present; run `make verifier-build` to update it. `GALAXY_WEB_NETWORK_CONFIG` overrides the built-in `deployments/networks/xrpl-testnet.toml` at build time. The browser build requires XRPL Testnet (network ID 1); it embeds RPC URLs, explorer templates, accepted circuits, app IDs and attestation environments. `PHOTON_WEB_LOOKUP_NODE` can replace the built-in demo node at build time. After registering a new accepted circuit, update the operator's network config and rebuild. An empty circuit allowlist cannot produce `VERIFIED` for any circuit.
 
 Copy the contents of `apps/verifier-web/dist/` to any HTTPS static host; a subdirectory with a trailing-slash URL works. Serve `.wasm` as `application/wasm`, JavaScript files with a JavaScript MIME type, and `index.html` as HTML. Do not open `index.html` with `file://`. Use a current browser with WebAssembly, module and Blob workers, and `Promise.withResolvers`. No rewrite rules or server-side verifier processes are required. Asset sizes (including gzip) are printed by `make verifier-build`.
+
+The scroll presentation bundles the MIT-licensed [ScrollCraft engine](https://github.com/nateherkai/scroll-craft/tree/75d81f74e83692add18cd7a8a8e078b8a887a579/plugins/nateherk-design/skills/scroll-craft/engine) locally. No design skill, browser harness, or art-generation tooling is required to build or run the verifier.
 
 ### Run the verifier on a laptop
 
@@ -65,6 +69,12 @@ CARGO_TARGET_DIR=target/VerifierWeb scripts/with-slot.sh cargo run --locked -p g
 node apps/verifier-web/tests/browser-smoke.mjs target/VerifierWeb/dev-photo.png
 ```
 
-The smoke test builds into a temporary directory with the recording's configuration, serves the bundle from a subdirectory, tests drag/drop, local inspection and copying, then checks direct, manual, lookup opt-out and default lookup paths, grouped checks, CSP and a 390 px viewport. The `CHROMIUM` and `CHROMEDRIVER` environment variables override the executable paths.
+The smoke test builds into a temporary directory with the recording's configuration, serves the bundle from a subdirectory, tests drag/drop, local inspection and copying, then checks direct, manual, lookup opt-out and default lookup paths, grouped checks, and CSP. It also checks keyboard order, the first-screen drop zone on desktop and at 390 px, and the unpinned reduced-motion diagram. The `CHROMIUM` and `CHROMEDRIVER` environment variables override the executable paths.
 
 For live acceptance after a production `make verifier-build`, pass `--live <certified.jpg> <stripped.jpg> <ordinary.jpg> <one-pixel.png> <screenshot-dir>` instead. Use an existing private directory for screenshots: they can show photo identifiers. Never add private fixtures, reports or screenshots to the presenter package.
+
+### Scroll presentation checks
+
+For a visual review, use the pinned skill's `shoot.mjs` from a separate build folder with `playwright-core` installed there. In a **test-only copy** of the harness, set `bypassCSP: true` in the new Playwright page options (the contrast pass masks text and samples a data URL) and include `[data-contrast]` in its contrast measurement and masking selectors. These markers let the harness measure static text without applying ScrollCraft's worldflight styling. Keep the verifier CSP unchanged and run `browser-smoke.mjs` separately with CSP enabled.
+
+Run the visual harness against the production build on desktop, `--width 390 --height 844`, and `--reduced-motion`. Inspect the contact sheets as well as `report.json`: the optional diagram should lift the sample tiles and hold the completed contact sheet. The keyboard and motion checks in `browser-smoke.mjs` do not depend on ScrollCraft's harness.

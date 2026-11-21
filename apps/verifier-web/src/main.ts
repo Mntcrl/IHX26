@@ -76,8 +76,8 @@ function showInspection(data: ImageInspection): void {
   detection.dataset.kind = unreadable ? 'warning' : xmp ? 'embedded' : 'regular';
   detection.textContent = unreadable
     ? 'PHØTON metadata present but unreadable/inconsistent'
-    : xmp ? 'PHØTON photo — XRPL references embedded'
-      : data.container ? 'Regular photo — no PHØTON metadata' : 'Photo could not be inspected';
+    : xmp ? 'PHØTON photo · XRPL references embedded'
+      : data.container ? 'Regular photo · no PHØTON metadata' : 'Photo could not be inspected';
   id('photo-identity').hidden = !data.photo_id;
   photoId.textContent = data.photo_id ?? '';
   id('file-name').textContent = photo?.name ?? '';
@@ -108,7 +108,7 @@ function startWorker(): Worker {
       results.hidden = false;
       status.textContent = '';
       id('result-title').focus({ preventScroll: true });
-      results.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+      results.scrollIntoView({ block: 'start', behavior: 'auto' });
     } catch (error) {
       status.textContent = `Could not render the report. ${error instanceof Error ? error.message : ''}`;
     }
