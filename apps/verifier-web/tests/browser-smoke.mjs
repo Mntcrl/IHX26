@@ -56,7 +56,7 @@ const server = createServer(async (request, response) => {
       }));
     } else if (request.method === 'GET' && (url.pathname === '/verifier/' || /^\/verifier\/assets\/[\w.-]+$/.test(url.pathname))) {
       const path = url.pathname.slice('/verifier/'.length) || 'index.html';
-      const types = { html: 'text/html', js: 'text/javascript', css: 'text/css', svg: 'image/svg+xml', wasm: 'application/wasm' };
+      const types = { html: 'text/html', js: 'text/javascript', css: 'text/css', png: 'image/png', webp: 'image/webp', wasm: 'application/wasm' };
       response.writeHead(200, { 'content-type': types[path.split('.').pop()] }).end(await readFile(new URL(path, dist)));
     } else {
       unexpected.push(url.pathname);
@@ -162,6 +162,7 @@ try {
   });
 
   await wd('/url', { url: `${origin}/verifier/` });
+  assert.ok(await script('return document.querySelector(".wordmark").decode().then(() => true)'), 'official wordmark loads');
   assert.equal(await enabled('#verify'), false);
   assert.ok(await dropZoneAboveFold(), 'desktop drop target is on the opening screen');
   assert.equal(await script('return document.querySelector("#sampling").dataset.scAct'), 'pin');

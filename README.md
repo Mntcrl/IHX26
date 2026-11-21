@@ -1,6 +1,11 @@
 # PHØTON
 
-![PHØTON wordmark and camera reticle: On-device proof · XRP Ledger](docs/assets/photon-banner.svg)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/photon-logo-dark.webp">
+  <img alt="PHØTON" src="docs/assets/photon-logo-light.webp" width="640">
+</picture>
+
+<p><sub>Physical Hardware &amp; Optical Truth On-chain Network</sub></p>
 
 PHØTON lets anyone verify that an iPhone photo matches a zero-knowledge proof of physical consistency on the XRP Ledger, without uploading the image or relying on a project server.
 

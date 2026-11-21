@@ -39,7 +39,7 @@ code, pre { font-family: var(--mono); overflow-wrap: anywhere; }
   min-height: 4.65rem;
   border-bottom: 1px solid var(--line);
 }
-.wordmark { display: inline-flex; align-items: center; gap: var(--sc-2); font-weight: 800; letter-spacing: .19em; }
+.wordmark { display: block; inline-size: clamp(7.5rem, 19vw, 10.75rem); min-inline-size: 0; block-size: auto; }
 .masthead nav { display: flex; align-items: center; gap: clamp(.75rem, 3vw, 2.5rem); }
 .masthead a { display: inline-flex; align-items: center; min-height: 2.75rem; color: var(--sc-ink-soft); font-size: .86rem; }
 .masthead a:hover { color: var(--sc-ink); }
@@ -310,11 +310,11 @@ pre { white-space: pre-wrap; max-height: 30rem; overflow: auto; background: var(
 .limits { display: flex; align-items: end; justify-content: space-between; gap: var(--sc-5); padding-block: clamp(2.75rem, 5.5vw, 5.5rem); }
 .limits p strong { color: var(--sc-ink); font-family: var(--mono); }
 .site-footer { border-top: 1px solid var(--line); border-bottom: 0; color: var(--sc-ink-soft); font-size: .78rem; }
+.site-footer small { font-size: .72rem; }
 
 @keyframes settle { from { opacity: 0; transform: translateY(.22rem); } to { opacity: 1; transform: none; } }
 @media (max-width: 47.99rem) {
   .masthead { min-height: 4rem; }
-  .wordmark { letter-spacing: .13em; }
   .workbench {
     grid-template: 'intro' auto 'instrument' auto 'optics' auto / minmax(0, 1fr);
     gap: var(--sc-5);
