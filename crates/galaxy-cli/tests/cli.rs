@@ -131,8 +131,8 @@ fn circuit_policy_and_photo_commands() {
     assert_eq!(code, 0, "{out}");
     assert_eq!(json(&out)["policy"]["name"], "galaxy-pc-v1m");
 
-    let policy = concat!(env!("CARGO_MANIFEST_DIR"), "/../../policies/galaxy-pc-v1m.json");
-    let (code, out) = galaxy(&["--json", "policy", "inspect", policy]);
+    let policy = vectors().join("policy.json");
+    let (code, out) = galaxy(&["--json", "policy", "inspect", policy.to_str().unwrap()]);
     assert_eq!(code, 0, "{out}");
     assert_eq!(json(&out)["policy_id"], refs["policy_id"]);
 

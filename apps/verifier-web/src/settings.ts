@@ -9,17 +9,18 @@ export interface Settings {
 }
 
 const SETTINGS_KEY = 'galaxy.verifier.settings.v1';
-const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
 const PATH = /^\/[A-Za-z0-9/.~_-]*$/;
-const HOST = /^(?:[a-zA-Z0-9.\-]+|\[[a-fA-F0-9:]+\])(?::[0-9]+)?$/;
+// CSP host sources do not support literal IPv6 addresses in Chromium.
+const HOST = /^[a-zA-Z0-9.\-]+(?::[0-9]+)?$/;
 
 export function endpoint(raw: string, kind: 'rpc' | 'node'): string {
   const url = new URL(raw);
   const secure = kind === 'rpc' ? ['wss:', 'https:'] : ['https:'];
   const local = kind === 'rpc' ? ['ws:', 'http:'] : ['http:'];
-  if ((!secure.includes(url.protocol) && !(LOOPBACK.has(url.hostname) && local.includes(url.protocol)))
+  const loopback = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+  if ((!secure.includes(url.protocol) && !(loopback && local.includes(url.protocol)))
       || url.username || url.password || url.search || url.hash || !HOST.test(url.host) || !PATH.test(url.pathname)) {
-    throw new Error(`${kind === 'rpc' ? 'XRPL endpoint' : 'Galaxy node'} must use ${secure.join(' or ')} without credentials, query or fragment (plain HTTP/WS only on loopback).`);
+    throw new Error(`${kind === 'rpc' ? 'XRPL endpoint' : 'Galaxy node'} must use ${secure.join(' or ')} with a hostname or IPv4 address and without credentials, query or fragment (plain HTTP/WS only on localhost or 127.0.0.1).`);
   }
   if (kind === 'node') return `${url.origin}${url.pathname.replace(/\/+$/, '')}`;
   return url.href;

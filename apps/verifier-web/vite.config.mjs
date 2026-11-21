@@ -15,7 +15,7 @@ export default defineConfig(({ mode }) => {
   const deployment = config && {
     name: config.name,
     networkId: config.network_id,
-    endpoints: config.websocket?.length ? config.websocket : config.json_rpc,
+    endpoints: [config.websocket, config.json_rpc].filter(Boolean),
     explorerTx: config.explorer_tx,
     explorerLedger: config.explorer_ledger,
   };

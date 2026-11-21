@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; worker-src blob:; connect-src 'self' https: wss: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*; base-uri 'none'; form-action 'none'">
+  <title>Galaxy photo verifier</title>
+</head>
+<body>
+  <header>
+    <p class="eyebrow">XRPL GALAXY <span>·</span> <span id="network">TESTNET</span></p>
+    <h1>Photo verifier</h1>
+    <p>Check whether a JPG or PNG is bound to a proof under an accepted Galaxy policy.</p>
+    <p class="privacy">The photo is processed on this device and never uploaded. No account or wallet needed.</p>
+  </header>
+  <main>
+    <noscript>JavaScript and WebAssembly are required to verify a photo locally.</noscript>
+    <section class="panel" aria-labelledby="verify-title">
+      <h2 id="verify-title">Verify a photo</h2>
+      <form id="verify-form">
+        <div id="drop-zone" class="drop-zone">
+          <label for="photo">Choose or drop a JPG or PNG</label>
+          <input id="photo" type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" aria-describedby="file-help">
+          <small id="file-help">Maximum 16 MiB. The filename and pixels stay on this device.</small>
+        </div>
+        <fieldset id="mode-group">
+          <legend>Lookup method</legend>
+          <label class="choice"><input type="radio" name="mode" value="direct" checked> Embedded Galaxy references <small>(recommended)</small></label>
+          <label class="choice"><input type="radio" name="mode" value="lookup"> Photo ID via Galaxy nodes</label>
+          <label class="choice"><input type="radio" name="mode" value="manual"> Manual manifest transaction</label>
+        </fieldset>
+        <div id="manual-options" hidden>
+          <label for="manifest">Manifest transaction hash</label>
+          <input id="manifest" type="text" maxlength="64" pattern="[a-fA-F0-9]{64}" spellcheck="false" autocomplete="off" aria-describedby="manual-help">
+          <small id="manual-help">64 hexadecimal characters. The verifier searches a bounded range of ledger transactions for the proof.</small>
+        </div>
+        <div id="lookup-options" class="notice" hidden>
+          <p id="lookup-notice"></p>
+          <ul id="lookup-nodes" class="endpoint-list"></ul>
+          <label id="consent-label" class="choice" hidden><input id="consent" type="checkbox"> Send this photo’s identifier to the listed nodes for this verification.</label>
+        </div>
+        <div class="actions">
+          <button id="verify" type="submit" disabled>Verify locally</button>
+          <button id="cancel" type="button" class="secondary" hidden>Cancel</button>
+        </div>
+      </form>
+      <p id="status" role="status" aria-live="polite"></p>
+    </section>
+    <section id="results" class="panel" aria-labelledby="result-title" hidden><h2 id="result-title" tabindex="-1">Verification result</h2><div id="report"></div></section>
+    <details id="settings-panel" class="panel">
+      <summary>Network and privacy settings</summary>
+      <form id="settings-form">
+        <label for="rpc-endpoints">XRPL endpoints, one URL per line</label>
+        <textarea id="rpc-endpoints" rows="3" spellcheck="false" autocomplete="off"></textarea>
+        <small>HTTPS RPC requires CORS; WebSocket (WSS) is preferred. Plain HTTP/WS is allowed only on localhost or 127.0.0.1.</small>
+        <label for="node-endpoints">Galaxy nodes, one base URL per line</label>
+        <textarea id="node-endpoints" rows="3" spellcheck="false" autocomplete="off"></textarea>
+        <label class="choice"><input id="discovery" type="checkbox"> Enable photo ID lookup as an option</label>
+        <small>Off by default. Even when enabled, the verifier never contacts a node without your consent for the selected photo.</small>
+        <label for="explorer-tx">Transaction explorer URL template</label>
+        <input id="explorer-tx" type="text" autocomplete="off" spellcheck="false" aria-describedby="explorer-help">
+        <label for="explorer-ledger">Ledger explorer URL template</label>
+        <input id="explorer-ledger" type="text" autocomplete="off" spellcheck="false" aria-describedby="explorer-help">
+        <small id="explorer-help">HTTPS templates must include {hash} or {index}, respectively. Leave empty to hide links.</small>
+        <div class="actions"><button type="submit" class="secondary">Save settings and reload</button></div>
+        <p id="settings-status" role="alert"></p>
+      </form>
+    </details>
+  </main>
+  <footer>Galaxy checks a cryptographic policy. It does not establish that the depicted scene is true.</footer>
+  <script type="module" src="./src/main.ts"></script>
+</body>
+</html>

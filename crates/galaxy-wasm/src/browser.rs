@@ -4,8 +4,9 @@
 use super::inspect;
 use galaxy_protocol::{network::NetworkConfig, Hash32};
 use galaxy_verifier::{
-    verify_by_photo_id, verify_manifest, verify_photo, LedgerRange, LookupError, LookupResult,
-    LookupSource, Refs, VerifyContext,
+    parse_lookup_response, verify_by_photo_id, verify_manifest, verify_photo, LookupError,
+    LookupResult, LookupSource, VerifyContext, MAX_LOOKUP_CANDIDATES, MAX_LOOKUP_PAGES,
+    MAX_LOOKUP_RESPONSE_BYTES,
 };
 use galaxy_xrpl::{
     ledger::{RpcLedger, RpcTransport},
@@ -18,7 +19,6 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
 const MAX_RPC_BYTES: usize = 8 * 1024 * 1024;
-const MAX_NODE_BYTES: usize = 1024 * 1024;
 const MAX_ENDPOINTS: usize = 8;
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -50,9 +50,9 @@ export interface JsLedgerSource {
     account_tx(params: string): Promise<string>;
     server_info(params: string): Promise<string>;
 }
-/** Result JSON: {candidates: [{manifest_tx, proof_tx|null}], ranges: [{min, max}], incomplete}. */
+/** Fetch one capped raw §14 response. WASM validates its fields and follows pagination. */
 export interface JsNodeClient {
-    lookup(endpoint: string, photoId: string, networkId: number): Promise<string>;
+    lookup(endpoint: string, photoId: string, networkId: number, limit: number, cursor?: string): Promise<string>;
 }
 "#;
 
@@ -81,6 +81,8 @@ extern "C" {
         endpoint: &str,
         photo_id: &str,
         network_id: u32,
+        limit: u32,
+        cursor: Option<String>,
     ) -> Result<Promise, JsValue>;
 }
 
@@ -171,55 +173,51 @@ struct JsLookup<'a> {
     client: &'a JsNode,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct NodeResponse {
-    candidates: Vec<NodeRef>,
-    ranges: Vec<NodeRange>,
-    incomplete: bool,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct NodeRef {
-    manifest_tx: String,
-    proof_tx: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct NodeRange {
-    min: u32,
-    max: u32,
-}
-
 impl LookupSource for JsLookup<'_> {
     fn endpoint(&self) -> &str {
         self.endpoint
     }
 
     async fn lookup(&self, photo_id: &Hash32, network_id: u32) -> Result<LookupResult, LookupError> {
-        let pending = self.client.lookup_js(self.endpoint, &hex::encode(photo_id), network_id);
-        let text = receive(pending, MAX_NODE_BYTES).await.map_err(LookupError)?;
-        let response: NodeResponse =
-            serde_json::from_str(&text).map_err(|_| lookup_error("malformed node response"))?;
-        let candidates = response
-            .candidates
-            .into_iter()
-            .map(|candidate| {
-                Ok(Refs {
-                    manifest_tx: hash32(&candidate.manifest_tx).map_err(lookup_error)?,
-                    proof_tx: candidate.proof_tx.as_deref().map(hash32).transpose().map_err(lookup_error)?,
-                })
-            })
-            .collect::<Result<Vec<_>, LookupError>>()?;
-        let ranges = response.ranges.into_iter().map(|range| LedgerRange { min: range.min, max: range.max }).collect();
-        Ok(LookupResult { candidates, ranges, incomplete: response.incomplete })
+        let photo_hex = hex::encode(photo_id);
+        let mut result = LookupResult::default();
+        let mut cursors = Vec::<String>::new();
+        for page_number in 0..MAX_LOOKUP_PAGES {
+            let limit = MAX_LOOKUP_CANDIDATES - result.candidates.len();
+            let pending = self.client.lookup_js(
+                self.endpoint, &photo_hex, network_id, limit as u32, cursors.last().cloned(),
+            );
+            let page = match receive(pending, MAX_LOOKUP_RESPONSE_BYTES).await
+                .map_err(LookupError)
+                .and_then(|text| parse_lookup_response(text.as_bytes(), photo_id, network_id, limit))
+            {
+                Ok(page) => page,
+                Err(error) if page_number == 0 => return Err(error),
+                Err(_) => {
+                    result.incomplete = true;
+                    return Ok(result);
+                }
+            };
+            result.incomplete |= page.result.incomplete;
+            result.candidates.extend(page.result.candidates);
+            if page_number == 0 {
+                result.ranges = page.result.ranges;
+            } else if result.ranges != page.result.ranges {
+                // The node's index changed during pagination.
+                result.incomplete = true;
+            }
+            let Some(next) = page.next_cursor else { return Ok(result) };
+            if cursors.contains(&next) {
+                return Err(LookupError("Galaxy node repeated a pagination cursor".into()));
+            }
+            if result.candidates.len() == MAX_LOOKUP_CANDIDATES {
+                break;
+            }
+            cursors.push(next);
+        }
+        result.incomplete = true;
+        Ok(result)
     }
-}
-
-fn lookup_error(detail: &str) -> LookupError {
-    LookupError(detail.into())
 }
 
 /// Await a JavaScript promise of a string, bounded in size before and after the copy

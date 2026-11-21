@@ -11,9 +11,9 @@ export function u32(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 0xffff_ffff;
 }
 
-export async function fetchJson(
+export async function fetchText(
   fetcher: Fetch, url: string, init: RequestInit, cap: number, timeout: number,
-): Promise<Record<string, unknown>> {
+): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   try {
@@ -36,7 +36,7 @@ export async function fetchJson(
         text.push(decoder.decode(value, { stream: true }));
       }
       text.push(decoder.decode());
-      return object(JSON.parse(text.join('')));
+      return text.join('');
     } finally {
       // Abort without awaiting a potentially unresponsive source's cancel().
       if (reader) void reader.cancel().catch(() => {});
@@ -45,4 +45,10 @@ export async function fetchJson(
     clearTimeout(timer);
     controller.abort();
   }
+}
+
+export async function fetchJson(
+  fetcher: Fetch, url: string, init: RequestInit, cap: number, timeout: number,
+): Promise<Record<string, unknown>> {
+  return object(JSON.parse(await fetchText(fetcher, url, init, cap, timeout)));
 }

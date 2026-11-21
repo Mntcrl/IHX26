@@ -14,7 +14,6 @@ use galaxy_image::ImageProfile;
 use galaxy_protocol::{
     canonical_json, ids,
     network::{AcceptedCircuit, NetworkConfig},
-    policy::Policy,
     wire::{
         AttestationEnv, CaptureCore, CaptureMemo, ChunkMemo, CircuitBundle, CircuitManifest, DeviceBundle, DeviceKind,
         DeviceManifest, MemoKind, ProofMemo, RevokeMemo,
@@ -233,15 +232,11 @@ pub fn vk_bytes() -> Vec<u8> {
     groth16::VerifyingKey::from_ark(PROVING_KEY.vk.clone()).expect("vk").to_bytes()
 }
 
-pub fn test_policy() -> (Vec<u8>, Hash32, Policy) {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../policies/galaxy-pc-v1m.json");
-    let policy = Policy::load(path).expect("policy");
-    let json = policy.canonical_json().expect("canonical policy");
-    (json.clone(), ids::policy_id(&json).expect("policy id"), policy)
-}
-
 pub fn circuit_bundle() -> (CircuitBundle, AcceptedCircuitIds) {
-    let (policy_json, policy_id, _) = test_policy();
+    // Snapshot policy; calibration of the active deployment must not change
+    // the committed recording, transaction hashes, or replay expectations.
+    let policy_json = include_bytes!("../../../../test-vectors/verifier/dev-unattested/policy.json").to_vec();
+    let policy_id = ids::policy_id(&policy_json).expect("canonical fixture policy");
     let vk = vk_bytes();
     let vk_digest = ids::vk_digest(&vk);
     let descriptor = canonical_json::to_vec(&json!({
