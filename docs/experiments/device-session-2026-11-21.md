@@ -94,5 +94,11 @@ The two authorized source captures, raw evidence checkpoints and per-capture ran
 
 These private calibration-mode captures do not submit transactions. Each replay uses `jpeg-v1`, the final policy and 64 independent off-ledger challenges. A high PASS count supports the scene choice but does not guarantee the live outcome.
 
+Production rehearsal did not produce any calibration exports for this table. To run a calibration rehearsal on the demo workstation:
+
+1. On the phone, enable **Developer → Enable private calibration captures and overlays**, then **Automatically export each fixture and label**. Take a calibration shot and wait for its export to complete.
+2. **Only after the user consents to copying the rehearsal files**, run `bash fixtures/real/DemoDiag/rehearse.sh --consented` from the repository root. It takes the device lock, reads only new calibration raw-and-label pairs from the designated phone after 10:20 CET, and saves them privately under `fixtures/real/DemoDiag/rehearsal/`. It emits one `REHEARSAL` summary per new pair; a successful run with no summaries found no new complete pairs. It does not launch, install, delete or write anything on the device.
+3. For an already-authorized local GXRW, use `bash fixtures/real/DemoDiag/rehearse.sh --local <local.gxrw>`; this never contacts the phone. The command uses the demo workstation's private replay driver and cached release libraries.
+
 | Rehearsal | PASS | Failing predicates and most frequent threshold misses | Suggested adjustment |
 |---|---:|---|---|
