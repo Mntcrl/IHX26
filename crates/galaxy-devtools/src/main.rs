@@ -5,7 +5,7 @@ mod record;
 mod registry;
 mod storage;
 
-use std::{path::PathBuf, time::Duration};
+use std::{path::PathBuf, process::ExitCode, time::Duration};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use galaxy_image::ImageProfile;
@@ -18,7 +18,7 @@ use galaxy_xrpl::{
 };
 use serde_json::{json, Value};
 
-pub(crate) type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+pub(crate) type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 pub(crate) const DEVELOPMENT: &str = "development";
 const NETWORK: u32 = 1;
 
@@ -40,7 +40,7 @@ enum Command {
         action: WalletAction,
     },
     RegisterCircuit {
-        #[arg(default_value = "circuits/artifacts/v1m/circuit.gxcb")]
+        #[arg(default_value = "circuits/artifacts/v1m/circuit_bundle.bin")]
         bundle: PathBuf,
     },
     RegisterDevDevice {
@@ -86,10 +86,9 @@ fn hash(s: &str) -> std::result::Result<Hash32, &'static str> {
     Ok(value)
 }
 
-fn output(fields: Value) {
-    let mut fields = fields.as_object().expect("command output object").clone();
-    fields.insert("mode".into(), DEVELOPMENT.into());
-    println!("{}", Value::Object(fields));
+fn output(mut fields: Value) {
+    fields.as_object_mut().expect("command output object").insert("mode".into(), DEVELOPMENT.into());
+    println!("{fields}");
 }
 
 async fn delay() {
@@ -106,7 +105,7 @@ async fn ledger(rpc: &RpcClient, index: u32) -> Result<galaxy_xrpl::ledger::Ledg
 
 fn load_network(path: &std::path::Path) -> Result<NetworkConfig> {
     let config = NetworkConfig::load(path)?;
-    if config.network_id.as_u32() != NETWORK {
+    if config.network_id.as_u32() != NETWORK || config.allow_mainnet {
         return Err(error("galaxy-dev is restricted to XRPL Testnet (network ID 1)"));
     }
     Ok(config)
@@ -117,7 +116,7 @@ fn rpc(config: &NetworkConfig) -> Result<RpcClient> {
     Ok(RpcClient::new(endpoints, NETWORK, false)?)
 }
 
-async fn run(args: Args) -> Result<()> {
+async fn run(args: Args) -> Result<ExitCode> {
     let name = &args.wallet;
     match args.command {
         Command::Wallet { action: WalletAction::New } => {
@@ -156,12 +155,12 @@ async fn run(args: Args) -> Result<()> {
             match command {
                 Command::RegisterCircuit { bundle } => registry::circuit(&session, &bundle).await?,
                 Command::RegisterDevDevice { device } => registry::device(&session, &device).await?,
-                Command::Capture(args) => capture::run(&session, *args).await?,
+                Command::Capture(args) => return capture::run(&session, *args).await,
                 _ => unreachable!("wallet and recorder handled separately"),
             }
         }
     }
-    Ok(())
+    Ok(ExitCode::SUCCESS)
 }
 
 pub(crate) struct Session<'a> {
@@ -174,9 +173,12 @@ pub(crate) struct Session<'a> {
 }
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() {
-    if let Err(err) = run(Args::parse()).await {
-        eprintln!("galaxy-dev (development): {err}");
-        std::process::exit(1);
+async fn main() -> ExitCode {
+    match run(Args::parse()).await {
+        Ok(code) => code,
+        Err(err) => {
+            eprintln!("galaxy-dev (development): {err}");
+            ExitCode::FAILURE
+        }
     }
 }

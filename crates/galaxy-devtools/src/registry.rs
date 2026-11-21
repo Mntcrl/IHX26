@@ -3,6 +3,7 @@ use std::{path::Path, time::Instant};
 use ed25519_dalek::{Signer, SigningKey};
 use galaxy_attestation::{verify_registration, AcceptedAttestation, VerifiedCredential};
 use galaxy_protocol::{
+    policy::Policy,
     ids,
     wire::{AttestationEnv, CircuitBundle, DeviceBundle, DeviceKind},
     Hash32,
@@ -16,7 +17,6 @@ use galaxy_xrpl::{
 };
 use serde::Serialize;
 use serde_json::json;
-use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use crate::{delay, error, ledger, output, storage, Result, Session, NETWORK};
@@ -75,14 +75,29 @@ async fn publish(session: &Session<'_>, kind: BundleKind, bytes: &[u8]) -> Resul
 pub(crate) async fn circuit(session: &Session<'_>, path: &Path) -> Result<()> {
     let bytes = storage::read(path, storage::BUNDLE_CAP)?;
     let circuit = CircuitBundle::decode(&bytes)?;
+    let circuit_id = ids::circuit_id(&circuit.descriptor_json)?;
+    let policy_id = ids::policy_id(&circuit.policy_json)?;
+    let vk_digest = ids::vk_digest(&circuit.vk_bytes);
+    let descriptor: serde_json::Value = serde_json::from_slice(&circuit.descriptor_json)?;
+    let policy: Policy = serde_json::from_slice(&circuit.policy_json)?;
+    policy.validate()?;
+    if descriptor["policy_id"] != hex::encode(policy_id)
+        || descriptor["vk_digest"] != hex::encode(vk_digest)
+        || descriptor["public_layout"] != "galaxy-pc-v1-public-22"
+        || descriptor["n_public"] != 22
+        || descriptor["ceremony"] != "development-single-party"
+        || circuit.vk_bytes.get(2..6) != Some(&22u32.to_be_bytes())
+    {
+        return Err(error("expected a development v1 circuit descriptor bound to its policy and verifying key"));
+    }
     let _ = galaxy_crypto::groth16::VerifyingKey::from_bytes(&circuit.vk_bytes)?;
     let start = Instant::now();
     let (published, transactions) = publish(session, BundleKind::Circuit, &bytes).await?;
     output(json!({
         "registry": "circuit",
-        "circuit_id": hex::encode(ids::circuit_id(&circuit.descriptor_json)),
-        "policy_id": hex::encode(ids::policy_id(&circuit.policy_json)),
-        "vk_digest": hex::encode(ids::vk_digest(&circuit.vk_bytes)),
+        "circuit_id": hex::encode(circuit_id),
+        "policy_id": hex::encode(policy_id),
+        "vk_digest": hex::encode(vk_digest),
         "registration_tx": hex::encode_upper(published.manifest_tx),
         "transactions": transactions,
         "publish_and_retrieve_ms": start.elapsed().as_millis(),
@@ -117,7 +132,7 @@ pub(crate) fn device_key(session: &Session<'_>, name: &str, create: bool) -> Res
 pub(crate) async fn device(session: &Session<'_>, name: &str) -> Result<()> {
     let key = device_key(session, name, true)?;
     let key_bytes = key.verifying_key().to_bytes();
-    let key_id: Hash32 = Sha256::digest(key_bytes).into();
+    let key_id = ids::dev_key_id(&key_bytes);
     let journal = session.journal.subdir("registrations")?;
     let file = format!("{name}.gxdb");
     let bytes = match journal.read(&file, storage::BUNDLE_CAP)? {
@@ -181,8 +196,7 @@ pub(crate) async fn credential(session: &Session<'_>, tx: &Hash32, key: &Signing
 }
 
 pub(crate) fn assertion(core: &[u8], key: &SigningKey) -> Vec<u8> {
-    let mut message = b"GALAXY/DEV-ASSERT/v1\0".to_vec();
-    message.extend_from_slice(core);
+    let message = ids::dev_assertion_message(core);
     let mut result = Vec::with_capacity(65);
     result.push(0xf0);
     result.extend_from_slice(&key.sign(&message).to_bytes());

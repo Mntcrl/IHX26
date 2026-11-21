@@ -26,6 +26,7 @@ galaxy-witness.workspace = true
 galaxy-xrpl = { workspace = true, features = ["native"] }
 getrandom.workspace = true
 hex.workspace = true
+rustix = { version = "=1.1.6", features = ["stdio"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

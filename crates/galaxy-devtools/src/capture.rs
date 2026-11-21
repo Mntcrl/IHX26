@@ -1,6 +1,9 @@
 use std::{
     collections::HashSet,
-    path::{Path, PathBuf},
+    fs::OpenOptions,
+    io::{self, Write},
+    path::PathBuf,
+    process::ExitCode,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -9,7 +12,7 @@ use galaxy_attestation::verify_capture_assertion;
 use galaxy_crypto::{field::fr_to_be, sampling::Challenge};
 use galaxy_evidence::{bundle, ingest, try_commit, Salts};
 use galaxy_geometry::{build_view, synthetic::{self, Scenario}, try_evaluate};
-use galaxy_image::{ImageProfile, HEIGHT, MAX_IMAGE_BYTES, WIDTH};
+use galaxy_image::{ImageProfile, HEIGHT, WIDTH};
 use galaxy_protocol::{
     ids,
     policy::Policy,
@@ -17,7 +20,7 @@ use galaxy_protocol::{
     xmp::GalaxyXmp,
     Hash32,
 };
-use galaxy_prover::{Phase, ProveControl, Prover};
+use galaxy_prover::{ArtifactDigests, Phase, ProofOutput, ProveControl, Prover, ProverConfig};
 use galaxy_xrpl::{
     ledger::{LedgerHeader, LedgerTx, RpcTransport},
     registry::{fetch_bundle, Manifest},
@@ -26,6 +29,7 @@ use galaxy_xrpl::{
     LedgerSource,
 };
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 use crate::{delay, error, hash, ledger, output, registry, storage, Profile, Result, Session, DEVELOPMENT, NETWORK};
 
@@ -59,6 +63,9 @@ pub(crate) struct CaptureArgs {
     /// During the original CAPTURE submission, submit the same signed blob a second time.
     #[arg(long)]
     duplicate_capture: bool,
+    /// Persist an expired-proof experiment's signed blob, then exit before waiting.
+    #[arg(long)]
+    defer_expired_assertion: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, ValueEnum)]
@@ -136,7 +143,10 @@ async fn check_history(session: &Session<'_>, first: &LedgerTx, second: &LedgerT
     Ok(seen_markers.len() + 1)
 }
 
-pub(crate) async fn run(session: &Session<'_>, args: CaptureArgs) -> Result<()> {
+pub(crate) async fn run(session: &Session<'_>, args: CaptureArgs) -> Result<ExitCode> {
+    if args.defer_expired_assertion && (args.case != Case::ExpiredProof || args.interrupt_after_capture) {
+        return Err(error("--defer-expired-assertion requires --case expired-proof without interruption"));
+    }
     let dir = storage::PrivateDir::open(&args.run_dir)?;
     let _lock = dir.lock()?;
     let profile: ImageProfile = args.profile.into();
@@ -154,27 +164,38 @@ pub(crate) async fn run(session: &Session<'_>, args: CaptureArgs) -> Result<()> 
         "device_tx": hex::encode_upper(args.device_tx), "circuit_tx": hex::encode_upper(args.circuit_tx),
         "profile": profile, "case": args.case,
     });
-    let source_mode = match dir.read("intent.json", 4096)? {
+    let (source_mode, run_token) = match dir.read("intent.json", 4096)? {
         Some(bytes) => {
             let saved: Value = serde_json::from_slice(&bytes)?;
             if saved["capture"] != intent {
                 return Err(error("saved development run uses different capture arguments"));
             }
-            match saved["source"].as_str() {
+            let run_token = saved["run_token"].as_str().filter(|token| token.len() == 32)
+                .ok_or_else(|| error("saved development run is missing its identity"))?;
+            let source = match saved["source"].as_str() {
                 Some("raw") if args.synthetic_seed.is_none() => "raw",
                 Some("synthetic") if args.raw.is_none() && (args.synthetic_seed.is_none() || saved["synthetic_seed"].as_u64() == args.synthetic_seed) => "synthetic",
                 _ => return Err(error("saved development run uses another evidence source")),
-            }
+            };
+            (source, run_token.to_owned())
         }
         None => {
             let source = if args.raw.is_some() { "raw" } else if args.synthetic_seed.is_some() { "synthetic" } else {
                 return Err(error("new runs require exactly one of --raw or --synthetic-seed"));
             };
-            let saved = json!({"capture": intent, "source": source, "synthetic_seed": args.synthetic_seed});
+            let run_token = hex::encode(storage::random::<16>()?);
+            let saved = json!({"capture": intent, "source": source, "synthetic_seed": args.synthetic_seed, "run_token": run_token});
             dir.write("intent.json", &serde_json::to_vec(&saved)?)?;
-            source
+            (source, run_token)
         }
     };
+    let run_path = args.run_dir.canonicalize()?;
+    if source_mode == "raw" {
+        let private_root = std::path::Path::new("fixtures/real").canonicalize()?;
+        if run_path == private_root || !run_path.starts_with(private_root) {
+            return Err(error("real capture journals and exports must stay under fixtures/real"));
+        }
+    }
 
     let start = Instant::now();
     let (evidence, salts) = match dir.read("capture.gxev", storage::EVIDENCE_CAP)? {
@@ -185,6 +206,22 @@ pub(crate) async fn run(session: &Session<'_>, args: CaptureArgs) -> Result<()> 
         None => {
             let evidence = if let Some(raw) = &args.raw {
                 let bytes = storage::read(raw, storage::EVIDENCE_CAP)?;
+                // Claim this real sensor capture once, independently of profile,
+                // circuit, and wallet. A failed challenge must never be retried.
+                let claims = storage::PrivateDir::open(&session.wallet_root.join("development-raw-claims"))?;
+                let claims_lock = claims.lock()?;
+                let fingerprint = hex::encode(Sha256::digest(&bytes));
+                let mut owner = run_token.as_bytes().to_vec();
+                owner.extend_from_slice(run_path.as_os_str().as_encoded_bytes());
+                match claims.read(&fingerprint, 4096)? {
+                    Some(saved) if saved != owner => {
+                        output(json!({"state": "CAPTURE_ALREADY_USED"}));
+                        return Ok(ExitCode::from(17));
+                    }
+                    Some(_) => {}
+                    None => claims.write(&fingerprint, &owner)?,
+                }
+                drop(claims_lock);
                 ingest::from_gxrw(&bytes, profile).map_err(|_| error("GXRW ingest rejected the private sensor evidence"))?
             } else if let Some(seed) = args.synthetic_seed {
                 synthetic::synthesize_with_profile(Scenario::Room, seed, &policy, profile)
@@ -193,9 +230,10 @@ pub(crate) async fn run(session: &Session<'_>, args: CaptureArgs) -> Result<()> 
                 return Err(error("capture was interrupted before GXEV persistence; supply the original evidence source"));
             };
             let salts = Salts::random().map_err(|_| error("could not generate private salts"))?;
-            let bytes = bundle::encode(&evidence, &salts).map_err(|_| error("could not encode private evidence journal"))?;
+            let saved = bundle::EvidenceBundle { evidence, salts, capture_state: Vec::new() };
+            let bytes = bundle::encode(&saved).map_err(|_| error("could not encode private evidence journal"))?;
             dir.write("capture.gxev", &bytes)?;
-            (evidence, salts)
+            (saved.evidence, saved.salts)
         }
     };
     if evidence.image.profile != profile {
@@ -209,10 +247,19 @@ pub(crate) async fn run(session: &Session<'_>, args: CaptureArgs) -> Result<()> 
     let evidence_root = fr_to_be(&commitments.evidence_root);
     let commitment_ms = start.elapsed().as_millis();
 
-    // Check that the desktop proving key matches the published circuit before
-    // spending a CAPTURE fee. A proof from another graph must also pass the
-    // registered verification key with exactly the derived public inputs.
-    let prover = Prover::open(&args.graph, &args.zkey).map_err(|_| error("could not open desktop witness graph or zkey"))?;
+    // Pin the exact registered graph and zkey before paying for a CAPTURE.
+    #[derive(serde::Deserialize)]
+    struct Digests {
+        witness_graph_sha256: String,
+        zkey_sha256: String,
+    }
+    let digests: Digests = serde_json::from_slice(&circuit.descriptor_json)?;
+    let digests = ArtifactDigests {
+        witness_graph_sha256: hash(&digests.witness_graph_sha256).map_err(error)?,
+        zkey_sha256: hash(&digests.zkey_sha256).map_err(error)?,
+    };
+    let prover = Prover::open_pinned(&args.graph, &args.zkey, &digests, ProverConfig::default())
+        .map_err(|_| error("desktop witness graph or zkey does not match the registered descriptor"))?;
     if prover.n_public() != 22 || prover.vk_bytes()? != circuit.vk_bytes {
         return Err(error("desktop proving key does not match the registered verifying key/public layout"));
     }
@@ -255,7 +302,7 @@ pub(crate) async fn run(session: &Session<'_>, args: CaptureArgs) -> Result<()> 
     if args.interrupt_after_capture {
         let submit = session.submitter.submit_saved(&pending).await?;
         output(json!({"interrupted": "after-capture-submit", "capture_tx": hex::encode_upper(pending.hash), "engine_result": submit.code}));
-        return Ok(());
+        return Ok(ExitCode::SUCCESS);
     }
     let capture = submit(session, &pending, args.duplicate_capture).await?;
     let l0 = ledger(session.rpc, capture.tx.ledger_index).await?;
@@ -266,6 +313,19 @@ pub(crate) async fn run(session: &Session<'_>, args: CaptureArgs) -> Result<()> 
     let proof_deadline = lsel_index.checked_add(policy.windows.w_proof).ok_or_else(|| error("proof deadline overflow"))?;
     let lsel = wait_for(session, lsel_index).await?;
     let challenge = Challenge::derive(NETWORK, &capture_id, lsel_index, &lsel.hash);
+    let mut report = json!({
+        "mode": DEVELOPMENT, "format": "galaxy-development-run/v1", "source": source_mode,
+        "case": args.case, "profile": profile, "credential": "development unattested credential",
+        "photo_id": hex::encode(photo_id), "capture_id": hex::encode(capture_id),
+        "device_registration_tx": hex::encode_upper(args.device_tx), "circuit_registration_tx": hex::encode_upper(args.circuit_tx),
+        "Lpre": lpre.ledger_index, "L0": l0.ledger_index, "Lsel": lsel.ledger_index,
+        "selection_ledger_hash": hex::encode_upper(lsel.hash), "seed": hex::encode(challenge.seed), "sampled_tiles": challenge.tiles,
+        "capture": registry::observe(&capture.tx, session.config.max_fee_drops)?,
+        "capture_engine_result": capture.engine_result, "duplicate_capture_engine_result": capture.duplicate_engine_result,
+        "proof_deadline": proof_deadline, "capture_to_selection_ledger_seconds": lsel.close_time.checked_sub(l0.close_time),
+        "capture_submit_to_validated_ms": capture.submit_to_validated_ms,
+        "load_or_ingest_evidence_ms": evidence_ms, "commitment_ms": commitment_ms,
+    });
     let public = galaxy_witness::public_inputs(&commitments, &capture_id, &challenge).map(|f| fr_to_be(&f));
     let mut proof_timings = Value::Null;
     let proof_bytes = match dir.read("proof.memo", 361)? {
@@ -277,15 +337,20 @@ pub(crate) async fn run(session: &Session<'_>, args: CaptureArgs) -> Result<()> 
             let start = Instant::now();
             let view = build_view(&evidence, &challenge).map_err(|_| error("private geometry view rejected"))?;
             if !try_evaluate(&view, &policy).map_err(|_| error("reference geometry evaluation failed"))?.pass {
-                return Err(error("development capture INCONCLUSIVE: reference policy did not pass for the committed ledger challenge"));
+                report["state"] = json!("INCONCLUSIVE");
+                report["reason"] = json!("reference policy did not pass for the committed ledger challenge");
+                report["transaction_count"] = json!(1);
+                dir.write("run.json", &serde_json::to_vec_pretty(&report)?)?;
+                output(report);
+                return Ok(ExitCode::from(30));
             }
             let input = galaxy_witness::build_input(&evidence, &salts, &commitments, &challenge, &capture_id, &view)
                 .map_err(|_| error("private circuit input construction failed"))?;
             let input = serde_json::to_string(&input).map_err(|_| error("private circuit input JSON encoding failed"))?;
             let input_ms = start.elapsed().as_millis();
-            let desktop = prover.prove(&input, &ProveControl::default()).map_err(|_| error("desktop witness/proof or prover self-check failed"))?;
-            if desktop.public_inputs != public || !galaxy_prover::verify(&circuit.vk_bytes, &public, &desktop.proof)? {
-                return Err(error("desktop proof did not verify for the exact registered key and ledger-derived public inputs"));
+            let desktop = quiet_prove(&prover, &input)?;
+            if desktop.public_inputs != public {
+                return Err(error("desktop proof returned different ledger-derived public inputs"));
             }
             proof_timings = json!({"build_input_ms": input_ms, "witness_seconds": desktop.timings.witness(),
                 "prove_seconds": desktop.timings.prove(), "self_verify_seconds": desktop.timings.get(Phase::SelfVerify)});
@@ -295,9 +360,6 @@ pub(crate) async fn run(session: &Session<'_>, args: CaptureArgs) -> Result<()> 
                 // Replace C with A (a canonical on-curve point); this tests the
                 // pairing check, not only malformed proof decoding.
                 proof.copy_within(..64, 192);
-                if galaxy_prover::verify(&circuit.vk_bytes, &public, &proof)? {
-                    return Err(error("bad-proof experiment unexpectedly retained a valid proof"));
-                }
             }
             let proof = ProofMemo { network: NETWORK, manifest_tx: capture.tx.hash, selection_ledger_index: lsel_index,
                 selection_ledger_hash: lsel.hash, circuit_id: manifest.circuit_id, proof };
@@ -311,6 +373,8 @@ pub(crate) async fn run(session: &Session<'_>, args: CaptureArgs) -> Result<()> 
             proof_timings = serde_json::from_slice(&bytes)?;
         }
     }
+    report["reference_policy_passed"] = json!(true);
+    report["desktop_prover"] = proof_timings;
     let proof = ProofMemo::decode(&proof_bytes)?;
     if proof.network != NETWORK || proof.manifest_tx != capture.tx.hash || proof.selection_ledger_index != lsel_index
         || proof.selection_ledger_hash != lsel.hash || proof.circuit_id != manifest.circuit_id
@@ -320,21 +384,13 @@ pub(crate) async fn run(session: &Session<'_>, args: CaptureArgs) -> Result<()> 
     }
     let purpose = format!("development/{}/proof", hex::encode(capture_id));
     let pending = session.submitter.prepare(&purpose, session.wallet, Memo { kind: MemoKind::Proof.as_str(), data: &proof_bytes }, Some(proof_deadline)).await?;
-    let mut report = json!({
-        "mode": DEVELOPMENT, "format": "galaxy-development-run/v1", "source": source_mode,
-        "case": args.case, "profile": profile, "credential": "development unattested credential",
-        "photo_id": hex::encode(photo_id), "capture_id": hex::encode(capture_id),
-        "device_registration_tx": hex::encode_upper(args.device_tx), "circuit_registration_tx": hex::encode_upper(args.circuit_tx),
-        "Lpre": lpre.ledger_index, "L0": l0.ledger_index, "Lsel": lsel.ledger_index,
-        "selection_ledger_hash": hex::encode_upper(lsel.hash), "seed": hex::encode(challenge.seed), "sampled_tiles": challenge.tiles,
-        "capture": registry::observe(&capture.tx, session.config.max_fee_drops)?,
-        "capture_engine_result": capture.engine_result, "duplicate_capture_engine_result": capture.duplicate_engine_result,
-        "proof_deadline": proof_deadline, "capture_to_selection_ledger_seconds": lsel.close_time.checked_sub(l0.close_time),
-        "capture_submit_to_validated_ms": capture.submit_to_validated_ms,
-        "load_or_ingest_evidence_ms": evidence_ms, "commitment_ms": commitment_ms, "desktop_prover": proof_timings,
-    });
     if args.case == Case::ExpiredProof {
-        let expired = expired_experiment(session, &pending, proof_deadline).await?;
+        let expired = if args.defer_expired_assertion {
+            json!({"tx": hex::encode_upper(pending.hash), "last_ledger_sequence": pending.last_ledger,
+                "state": "SIGNED_NOT_SUBMITTED"})
+        } else {
+            expired_experiment(session, &pending, proof_deadline).await?
+        };
         report["transaction_count"] = json!(1);
         report["expired_proof"] = expired;
     } else {
@@ -364,14 +420,21 @@ pub(crate) async fn run(session: &Session<'_>, args: CaptureArgs) -> Result<()> 
         }
         report["export"] = json!(name);
     }
+    if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+        if let Some(kib) = status.lines().find_map(|line| line.strip_prefix("VmHWM:"))
+            .and_then(|line| line.split_whitespace().next()).and_then(|value| value.parse::<u64>().ok())
+        {
+            report["peak_process_rss_kib"] = json!(kib);
+        }
+    }
     dir.write("run.json", &serde_json::to_vec_pretty(&report)?)?;
     output(report);
-    Ok(())
+    Ok(ExitCode::SUCCESS)
 }
 
 async fn expired_experiment(session: &Session<'_>, proof: &PendingTx, deadline: u32) -> Result<Value> {
     let end = deadline.checked_add(1).ok_or_else(|| error("expired proof ledger overflow"))?;
-    wait_for(session, end).await?;
+    let head = wait_for(session, end).await?;
     if !matches!(session.submitter.state(proof).await?, TxState::Expired) {
         return Err(error("expired test blob was not proven absent from its signed validation window"));
     }
@@ -384,12 +447,28 @@ async fn expired_experiment(session: &Session<'_>, proof: &PendingTx, deadline: 
     if session.rpc.tx(&proof.hash).await?.is_some_and(|tx| tx.validated) {
         return Err(error("expired PROOF unexpectedly validated"));
     }
-    Ok(json!({"tx": hex::encode_upper(proof.hash), "engine_result": "tefMAX_LEDGER", "last_ledger_sequence": proof.last_ledger, "attempted_after_ledger": deadline}))
+    Ok(json!({"tx": hex::encode_upper(proof.hash), "engine_result": "tefMAX_LEDGER", "last_ledger_sequence": proof.last_ledger, "attempted_at_or_after_ledger": head.ledger_index}))
+}
+
+// The witness backend unconditionally prints timing diagnostics. Keep stdout
+// reserved for development-labelled JSON; the same timings are in ProofOutput.
+// This binary is single-command and uses a current-thread Tokio runtime.
+fn quiet_prove(prover: &Prover, input: &str) -> Result<ProofOutput> {
+    let mut stdout = io::stdout();
+    stdout.flush()?;
+    let saved = rustix::io::dup(&stdout)?;
+    let discard = OpenOptions::new().write(true).open("/dev/null")?;
+    rustix::stdio::dup2_stdout(&discard)?;
+    let result = prover.prove(input, &ProveControl::default());
+    let flush = stdout.flush();
+    rustix::stdio::dup2_stdout(saved)?;
+    flush?;
+    result.map_err(|_| error("desktop witness/proof or prover self-check failed"))
 }
 
 fn write_export(dir: &storage::PrivateDir, filename: &str, encoded: &[u8], packet: &[u8], expected_photo_id: &Hash32) -> Result<()> {
     let output = galaxy_image::embed_xmp_packet(encoded, packet)?;
-    if output.len() > MAX_IMAGE_BYTES || galaxy_image::decode_any(&output)?.photo_id != *expected_photo_id {
+    if galaxy_image::photo_id(&galaxy_image::decode_any(&output)?.raster)? != *expected_photo_id {
         return Err(error("XMP export changed the committed raster"));
     }
     dir.write(filename, &output)

@@ -1,0 +1,18 @@
+# Development Testnet only. The operator explicitly selected the local circuit bundle.
+name = "xrpl-testnet"
+network_id = 1
+json_rpc = "https://s.altnet.rippletest.net:51234/"
+websocket = "wss://s.altnet.rippletest.net:51233/"
+inception_ledger = 22480444
+max_fee_drops = 1000
+allow_mainnet = false
+explorer_tx = "https://testnet.xrpl.org/transactions/{hash}"
+explorer_ledger = "https://testnet.xrpl.org/ledgers/{index}"
+accepted_app_ids = ["PPS57BF3X3.utcq.XRPL-Galaxy"]
+accepted_attestation_environments = ["development", "production"]
+
+[[accepted_circuits]]
+circuit_id = "a0bed7f1cdad94c33f9ff22e8b6cdd1bdb7e7f873ce73c8038e8a403213fa68b"
+policy_id = "4ad25185f11bfb52af5dee5a1ab39d4e2428c1c83188c7483db1777d22367073"
+vk_digest = "7cf9640233d89ee56677b2737f846cb9af215faaabe9fe8fd05062df5463a908"
+registration_tx = "B0C14DC5C6BEC26A5C43CD236383EC1893F164DF0047498ACF38F67C4DC75D66"
