@@ -1,10 +1,16 @@
-use galaxy_protocol::network::{NetworkConfig, NetworkError, NetworkId};
-use galaxy_protocol::wire::AttestationEnv;
+use galaxy_protocol::network::{AcceptedCircuit, NetworkConfig, NetworkError, NetworkId};
+use galaxy_protocol::{wire::AttestationEnv, Hash32};
 
 const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../deployments/networks/");
 
 fn testnet_text() -> String {
     std::fs::read_to_string(format!("{ROOT}xrpl-testnet.toml")).unwrap()
+}
+
+fn decode_hash(hex: &str) -> Hash32 {
+    let mut out = [0; 32];
+    hex::decode_to_slice(hex, &mut out).unwrap();
+    out
 }
 
 #[test]
@@ -19,7 +25,12 @@ fn shipped_configs_load() {
     assert_eq!(testnet.trusted_local_rippled, None);
     assert_eq!(testnet.accepted_app_ids, ["PPS57BF3X3.utcq.XRPL-Galaxy"]);
     assert_eq!(testnet.accepted_attestation_environments, [AttestationEnv::Development, AttestationEnv::Production]);
-    assert!(testnet.accepted_circuits.is_empty());
+    assert_eq!(testnet.accepted_circuits, [AcceptedCircuit {
+        circuit_id: decode_hash("a0bed7f1cdad94c33f9ff22e8b6cdd1bdb7e7f873ce73c8038e8a403213fa68b"),
+        vk_digest: decode_hash("7cf9640233d89ee56677b2737f846cb9af215faaabe9fe8fd05062df5463a908"),
+        policy_id: decode_hash("4ad25185f11bfb52af5dee5a1ab39d4e2428c1c83188c7483db1777d22367073"),
+        registration_tx: decode_hash("B0C14DC5C6BEC26A5C43CD236383EC1893F164DF0047498ACF38F67C4DC75D66"),
+    }]);
     assert_eq!(
         testnet.explorer_tx_url(&[0xab; 32]),
         format!("https://testnet.xrpl.org/transactions/{}", "AB".repeat(32))
@@ -33,16 +44,15 @@ fn shipped_configs_load() {
 #[test]
 fn accepted_circuits_parse() {
     let hex = |b: &str| b.repeat(32);
-    let text = testnet_text().replace(
-        "accepted_circuits = []",
-        &format!(
-            "[[accepted_circuits]]\ncircuit_id = \"{}\"\nvk_digest = \"{}\"\npolicy_id = \"{}\"\nregistration_tx = \"{}\"\n",
-            hex("01"),
-            hex("aB"),
-            hex("03"),
-            hex("04")
-        ),
-    );
+    let mut text = testnet_text();
+    text.truncate(text.find("[[accepted_circuits]]").unwrap());
+    text.push_str(&format!(
+        "[[accepted_circuits]]\ncircuit_id = \"{}\"\nvk_digest = \"{}\"\npolicy_id = \"{}\"\nregistration_tx = \"{}\"\n",
+        hex("01"),
+        hex("aB"),
+        hex("03"),
+        hex("04"),
+    ));
     let config = NetworkConfig::from_toml(&text).unwrap();
     let circuit = config.accepted_circuit(&[1; 32]).unwrap();
     assert_eq!(circuit.vk_digest, [0xab; 32]);

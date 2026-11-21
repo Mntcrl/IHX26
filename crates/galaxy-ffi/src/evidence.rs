@@ -67,6 +67,16 @@ impl CaptureEvidence {
     }
 }
 
+/// Strictly ingest a GXRW calibration capture and return its encoded canonical
+/// image without XMP, randomness, commitments, or a certification state.
+#[uniffi::export]
+pub fn canonical_image_from_gxrw(raw: Vec<u8>, profile: CaptureProfile) -> Result<Vec<u8>> {
+    guarded(|| {
+        let evidence = ingest::from_gxrw(&raw, profile.into()).map_err(|_| GalaxyError::Evidence)?;
+        Ok(evidence.image.encoded)
+    })
+}
+
 #[uniffi::export]
 pub fn ingest_gxrw(
     raw: Vec<u8>,

@@ -34,7 +34,7 @@ use crate::{
 };
 
 const BUNDLED_POLICY: &[u8] = include_bytes!(env!("GALAXY_BUNDLED_POLICY"));
-const BUNDLED_NETWORK: &str = include_str!(env!("GALAXY_BUNDLED_NETWORK"));
+pub(crate) const BUNDLED_NETWORK: &str = include_str!(env!("GALAXY_BUNDLED_NETWORK"));
 const PUBLIC_COUNT: usize = 22;
 
 #[derive(Deserialize)]

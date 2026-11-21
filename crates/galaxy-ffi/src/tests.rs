@@ -354,8 +354,10 @@ fn real_gxrw_uses_strict_ingest_and_resumable_bundle() {
         eprintln!("skipped: no local private calibration capture");
         return;
     };
+    let raw = fs::read(fixture).expect("read local calibration capture");
+    let preview = crate::canonical_image_from_gxrw(raw.clone(), CaptureProfile::PngV1).unwrap();
     let evidence = ingest_gxrw(
-        fs::read(fixture).expect("read local calibration capture"),
+        raw,
         CaptureProfile::PngV1,
         vec![],
     )
@@ -367,9 +369,16 @@ fn real_gxrw_uses_strict_ingest_and_resumable_bundle() {
     assert_eq!(original.photo_id, recovered.photo_id);
     assert_eq!(original.rgb_root, recovered.rgb_root);
     assert_eq!(original.evidence_root, recovered.evidence_root);
-    assert!(evidence.canonical_image() == restored.canonical_image());
+    assert!(evidence.capture_state().is_empty());
+    assert!(galaxy_image::decode_any(&preview).unwrap().xmp.is_none());
+    assert!(preview == evidence.canonical_image());
+    assert!(preview == restored.canonical_image());
     assert!(matches!(
         ingest_gxrw(Vec::new(), CaptureProfile::PngV1, vec![]),
+        Err(GalaxyError::Evidence)
+    ));
+    assert!(matches!(
+        crate::canonical_image_from_gxrw(Vec::new(), CaptureProfile::PngV1),
         Err(GalaxyError::Evidence)
     ));
     assert!(matches!(

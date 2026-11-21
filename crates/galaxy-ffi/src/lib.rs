@@ -3,11 +3,13 @@
 
 mod capture;
 mod evidence;
+mod export;
 mod ledger;
 mod registration;
 
 pub use capture::*;
 pub use evidence::*;
+pub use export::*;
 pub use ledger::*;
 pub use registration::*;
 

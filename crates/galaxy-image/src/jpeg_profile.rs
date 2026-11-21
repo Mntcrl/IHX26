@@ -2,7 +2,7 @@ use jpeg_encoder::{ColorType, Encoder, SamplingFactor};
 use zune_core::{colorspace::ColorSpace, options::DecoderOptions};
 use zune_jpeg::JpegDecoder;
 
-use crate::{ImageError, HEIGHT, MAX_IMAGE_BYTES, MAX_XMP_BYTES, RGB_LEN, WIDTH};
+use crate::{ImageError, XmpLayout, HEIGHT, MAX_XMP_BYTES, RGB_LEN, WIDTH};
 use ImageError::{Invalid, Unsupported};
 
 const XMP_HEADER: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
@@ -32,11 +32,6 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Vec<u8>, ImageError> {
     let mut rgb = vec![0; RGB_LEN];
     decoder.decode_into(&mut rgb).map_err(|_| Invalid("JPEG entropy decode"))?;
     Ok(rgb)
-}
-
-pub(crate) struct Layout<'a> {
-    pub(crate) packet: Option<&'a [u8]>,
-    insert_at: usize,
 }
 
 fn segment(bytes: &[u8]) -> Result<(&[u8], &[u8]), ImageError> {
@@ -208,9 +203,9 @@ fn exif_orientation(tiff: &[u8]) -> Result<(), ImageError> {
     Ok(())
 }
 
-pub(crate) fn inspect(bytes: &[u8]) -> Result<Layout<'_>, ImageError> {
+pub(crate) fn inspect(bytes: &[u8]) -> Result<XmpLayout<'_>, ImageError> {
     let mut rest = bytes.strip_prefix(b"\xff\xd8").ok_or(Invalid("JPEG SOI"))?;
-    let mut layout = Layout { packet: None, insert_at: 2 };
+    let mut layout = XmpLayout { existing: None, insert_at: 2 };
     let (mut ids, mut scanned, mut adobe, mut exif) = (None, false, false, false);
     loop {
         let start = bytes.len() - rest.len();
@@ -261,7 +256,8 @@ pub(crate) fn inspect(bytes: &[u8]) -> Result<Layout<'_>, ImageError> {
             0xe0 if start == 2 => layout.insert_at = bytes.len() - rest.len(),
             0xe1 => {
                 if let Some(packet) = data.strip_prefix(XMP_HEADER) {
-                    if scanned || layout.packet.replace(packet).is_some() {
+                    let range = start..bytes.len() - rest.len();
+                    if scanned || layout.existing.replace((packet, range)).is_some() {
                         return Err(Invalid("late or duplicate JPEG XMP"));
                     }
                     if packet.len() > MAX_XMP_BYTES {
@@ -292,19 +288,12 @@ pub(crate) fn inspect(bytes: &[u8]) -> Result<Layout<'_>, ImageError> {
     }
 }
 
-pub(crate) fn embed(bytes: &[u8], packet: &[u8]) -> Result<Vec<u8>, ImageError> {
-    let layout = inspect(bytes)?;
+pub(crate) fn write_xmp(bytes: &[u8], packet: &[u8], layout: &XmpLayout<'_>) -> Result<Vec<u8>, ImageError> {
     let length = u16::try_from(2 + XMP_HEADER.len() + packet.len()).map_err(|_| Unsupported("JPEG XMP size"))?;
-    let size = bytes.len() + 2 + usize::from(length);
-    if size > MAX_IMAGE_BYTES {
-        return Err(Unsupported("container size"));
-    }
-    let mut out = Vec::with_capacity(size);
-    out.extend_from_slice(&bytes[..layout.insert_at]);
-    out.extend_from_slice(b"\xff\xe1");
-    out.extend_from_slice(&length.to_be_bytes());
-    out.extend_from_slice(XMP_HEADER);
-    out.extend_from_slice(packet);
-    out.extend_from_slice(&bytes[layout.insert_at..]);
-    Ok(out)
+    layout.splice(bytes, 2 + usize::from(length), |out| {
+        out.extend_from_slice(b"\xff\xe1");
+        out.extend_from_slice(&length.to_be_bytes());
+        out.extend_from_slice(XMP_HEADER);
+        out.extend_from_slice(packet);
+    })
 }

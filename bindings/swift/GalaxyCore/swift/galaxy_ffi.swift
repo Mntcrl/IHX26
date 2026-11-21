@@ -2373,6 +2373,71 @@ public func FfiConverterTypeCaptureVerdict_lower(_ value: CaptureVerdict) -> Rus
 }
 
 
+/**
+ * Local photo binding and explorer links. These details are not a ledger verdict.
+ */
+public struct CertifiedPhotoDetails: Equatable, Hashable {
+    public var photoId: String
+    public var imageProfile: CaptureProfile
+    public var captureTxUrl: String
+    public var proofTxUrl: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(photoId: String, imageProfile: CaptureProfile, captureTxUrl: String, proofTxUrl: String) {
+        self.photoId = photoId
+        self.imageProfile = imageProfile
+        self.captureTxUrl = captureTxUrl
+        self.proofTxUrl = proofTxUrl
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension CertifiedPhotoDetails: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCertifiedPhotoDetails: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CertifiedPhotoDetails {
+        return
+            try CertifiedPhotoDetails(
+                photoId: FfiConverterString.read(from: &buf), 
+                imageProfile: FfiConverterTypeCaptureProfile.read(from: &buf), 
+                captureTxUrl: FfiConverterString.read(from: &buf), 
+                proofTxUrl: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: CertifiedPhotoDetails, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.photoId, into: &buf)
+        FfiConverterTypeCaptureProfile.write(value.imageProfile, into: &buf)
+        FfiConverterString.write(value.captureTxUrl, into: &buf)
+        FfiConverterString.write(value.proofTxUrl, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCertifiedPhotoDetails_lift(_ buf: RustBuffer) throws -> CertifiedPhotoDetails {
+    return try FfiConverterTypeCertifiedPhotoDetails.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCertifiedPhotoDetails_lower(_ value: CertifiedPhotoDetails) -> RustBuffer {
+    return FfiConverterTypeCertifiedPhotoDetails.lower(value)
+}
+
+
 public struct ChallengeInfo: Equatable, Hashable {
     public var seed: Data
     public var sampledTiles: Data
@@ -2554,6 +2619,115 @@ public func FfiConverterTypeDevicePublication_lift(_ buf: RustBuffer) throws -> 
 #endif
 public func FfiConverterTypeDevicePublication_lower(_ value: DevicePublication) -> RustBuffer {
     return FfiConverterTypeDevicePublication.lower(value)
+}
+
+
+/**
+ * Public export metadata only. Omit values not known from the capture journal.
+ */
+public struct ExportInfo: Equatable, Hashable {
+    public var account: String?
+    public var registrationTx: String?
+    public var captureLedger: UInt32?
+    public var selectionLedger: UInt32?
+    public var proofLedger: UInt32?
+    public var captureTime: String?
+    public var claimedTime: String?
+    public var circuitId: String?
+    public var policyId: String?
+    public var policyName: String?
+    public var setupCeremony: String?
+    public var attestationEnvironment: String?
+    public var captureTxUrl: String?
+    public var proofTxUrl: String?
+    public var appVersion: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(account: String?, registrationTx: String?, captureLedger: UInt32?, selectionLedger: UInt32?, proofLedger: UInt32?, captureTime: String?, claimedTime: String?, circuitId: String?, policyId: String?, policyName: String?, setupCeremony: String?, attestationEnvironment: String?, captureTxUrl: String?, proofTxUrl: String?, appVersion: String) {
+        self.account = account
+        self.registrationTx = registrationTx
+        self.captureLedger = captureLedger
+        self.selectionLedger = selectionLedger
+        self.proofLedger = proofLedger
+        self.captureTime = captureTime
+        self.claimedTime = claimedTime
+        self.circuitId = circuitId
+        self.policyId = policyId
+        self.policyName = policyName
+        self.setupCeremony = setupCeremony
+        self.attestationEnvironment = attestationEnvironment
+        self.captureTxUrl = captureTxUrl
+        self.proofTxUrl = proofTxUrl
+        self.appVersion = appVersion
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ExportInfo: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeExportInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ExportInfo {
+        return
+            try ExportInfo(
+                account: FfiConverterOptionString.read(from: &buf), 
+                registrationTx: FfiConverterOptionString.read(from: &buf), 
+                captureLedger: FfiConverterOptionUInt32.read(from: &buf), 
+                selectionLedger: FfiConverterOptionUInt32.read(from: &buf), 
+                proofLedger: FfiConverterOptionUInt32.read(from: &buf), 
+                captureTime: FfiConverterOptionString.read(from: &buf), 
+                claimedTime: FfiConverterOptionString.read(from: &buf), 
+                circuitId: FfiConverterOptionString.read(from: &buf), 
+                policyId: FfiConverterOptionString.read(from: &buf), 
+                policyName: FfiConverterOptionString.read(from: &buf), 
+                setupCeremony: FfiConverterOptionString.read(from: &buf), 
+                attestationEnvironment: FfiConverterOptionString.read(from: &buf), 
+                captureTxUrl: FfiConverterOptionString.read(from: &buf), 
+                proofTxUrl: FfiConverterOptionString.read(from: &buf), 
+                appVersion: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ExportInfo, into buf: inout [UInt8]) {
+        FfiConverterOptionString.write(value.account, into: &buf)
+        FfiConverterOptionString.write(value.registrationTx, into: &buf)
+        FfiConverterOptionUInt32.write(value.captureLedger, into: &buf)
+        FfiConverterOptionUInt32.write(value.selectionLedger, into: &buf)
+        FfiConverterOptionUInt32.write(value.proofLedger, into: &buf)
+        FfiConverterOptionString.write(value.captureTime, into: &buf)
+        FfiConverterOptionString.write(value.claimedTime, into: &buf)
+        FfiConverterOptionString.write(value.circuitId, into: &buf)
+        FfiConverterOptionString.write(value.policyId, into: &buf)
+        FfiConverterOptionString.write(value.policyName, into: &buf)
+        FfiConverterOptionString.write(value.setupCeremony, into: &buf)
+        FfiConverterOptionString.write(value.attestationEnvironment, into: &buf)
+        FfiConverterOptionString.write(value.captureTxUrl, into: &buf)
+        FfiConverterOptionString.write(value.proofTxUrl, into: &buf)
+        FfiConverterString.write(value.appVersion, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeExportInfo_lift(_ buf: RustBuffer) throws -> ExportInfo {
+    return try FfiConverterTypeExportInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeExportInfo_lower(_ value: ExportInfo) -> RustBuffer {
+    return FfiConverterTypeExportInfo.lower(value)
 }
 
 
@@ -3616,6 +3790,30 @@ fileprivate struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
+    typealias SwiftType = String?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterString.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterString.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionData: FfiConverterRustBuffer {
     typealias SwiftType = Data?
 
@@ -3793,6 +3991,19 @@ public func buildCaptureMemo(core: Data, assertion: Data)throws  -> Memo  {
     )
 })
 }
+/**
+ * Strictly ingest a GXRW calibration capture and return its encoded canonical
+ * image without XMP, randomness, commitments, or a certification state.
+ */
+public func canonicalImageFromGxrw(raw: Data, profile: CaptureProfile)throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeGalaxyError_lift) {
+        uniffiCallStatus in
+    uniffi_galaxy_ffi_fn_func_canonical_image_from_gxrw(
+        FfiConverterData.lower(raw),
+        FfiConverterTypeCaptureProfile_lower(profile),uniffiCallStatus
+    )
+})
+}
 public func decodeEvidenceBundle(bytes: Data)throws  -> CaptureEvidence  {
     return try  FfiConverterTypeCaptureEvidence_lift(try rustCallWithError(FfiConverterTypeGalaxyError_lift) {
         uniffiCallStatus in
@@ -3808,6 +4019,41 @@ public func ingestGxrw(raw: Data, profile: CaptureProfile, captureState: Data)th
         FfiConverterData.lower(raw),
         FfiConverterTypeCaptureProfile_lower(profile),
         FfiConverterData.lower(captureState),uniffiCallStatus
+    )
+})
+}
+/**
+ * Replace the XMP with the same Galaxy references and public informational fields.
+ * The input must already be certified; this does not contact XRPL or certify a file.
+ */
+public func certifiedFileWithInfo(file: Data, info: ExportInfo)throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeGalaxyError_lift) {
+        uniffiCallStatus in
+    uniffi_galaxy_ffi_fn_func_certified_file_with_info(
+        FfiConverterData.lower(file),
+        FfiConverterTypeExportInfo_lower(info),uniffiCallStatus
+    )
+})
+}
+/**
+ * Read the committed profile and configured explorer links of a photo-bound export.
+ */
+public func certifiedPhotoDetails(file: Data)throws  -> CertifiedPhotoDetails  {
+    return try  FfiConverterTypeCertifiedPhotoDetails_lift(try rustCallWithError(FfiConverterTypeGalaxyError_lift) {
+        uniffiCallStatus in
+    uniffi_galaxy_ffi_fn_func_certified_photo_details(
+        FfiConverterData.lower(file),uniffiCallStatus
+    )
+})
+}
+/**
+ * Re-encode the reference-decoded jpeg-v1 raster as PNG with the exact XMP bytes.
+ */
+public func losslessPngFromCertifiedJpeg(file: Data)throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeGalaxyError_lift) {
+        uniffiCallStatus in
+    uniffi_galaxy_ffi_fn_func_lossless_png_from_certified_jpeg(
+        FfiConverterData.lower(file),uniffiCallStatus
     )
 })
 }
@@ -4003,10 +4249,22 @@ private let initializationResult: InitializationResult = {
     if (uniffi_galaxy_ffi_checksum_func_build_capture_memo() != 4009) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_galaxy_ffi_checksum_func_canonical_image_from_gxrw() != 5163) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_galaxy_ffi_checksum_func_decode_evidence_bundle() != 40484) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_galaxy_ffi_checksum_func_ingest_gxrw() != 5514) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_galaxy_ffi_checksum_func_certified_file_with_info() != 65472) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_galaxy_ffi_checksum_func_certified_photo_details() != 58942) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_galaxy_ffi_checksum_func_lossless_png_from_certified_jpeg() != 693) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_galaxy_ffi_checksum_func_wallet_identity() != 11043) {

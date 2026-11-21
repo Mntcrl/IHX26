@@ -1,15 +1,17 @@
+use std::ops::Range;
+
 use crc32fast::Hasher;
 use flate2::{Decompress, FlushDecompress, Status};
 
-use crate::{ImageError, HEIGHT, MAX_IMAGE_BYTES, MAX_XMP_BYTES, RGB_LEN, WIDTH};
+use crate::{ImageError, XmpLayout, HEIGHT, MAX_IMAGE_BYTES, MAX_XMP_BYTES, RGB_LEN, WIDTH};
 use ImageError::{Invalid, Unsupported};
 
 const SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
-const XMP_KEY: &[u8] = b"XML:com.adobe.xmp";
+const XMP_KEY: &str = "XML:com.adobe.xmp";
 const STRIDE: usize = WIDTH * 3;
 const FILTERED_LEN: usize = HEIGHT * (STRIDE + 1);
 
-pub(crate) fn encode(rgb: &[u8]) -> Result<Vec<u8>, ImageError> {
+pub(crate) fn encode(rgb: &[u8], packet: Option<&str>) -> Result<Vec<u8>, ImageError> {
     let mut result = Vec::new();
     {
         let mut encoder = png::Encoder::new(&mut result, WIDTH as u32, HEIGHT as u32);
@@ -17,6 +19,10 @@ pub(crate) fn encode(rgb: &[u8]) -> Result<Vec<u8>, ImageError> {
         encoder.set_depth(png::BitDepth::Eight);
         encoder.set_compression(png::Compression::Fast);
         encoder.set_filter(png::Filter::Paeth);
+        if let Some(packet) = packet {
+            encoder.add_itxt_chunk(XMP_KEY.into(), packet.to_owned())
+                .map_err(|_| Invalid("PNG encoder XMP"))?;
+        }
         let mut writer = encoder.write_header().map_err(|_| Invalid("PNG encoder header"))?;
         writer.write_image_data(rgb).map_err(|_| Invalid("PNG encoder raster"))?;
         writer.finish().map_err(|_| Invalid("PNG encoder finish"))?;
@@ -66,7 +72,7 @@ fn packet_from_text(kind: [u8; 4], data: &[u8]) -> Result<Option<&[u8]>, ImageEr
     {
         return Err(Invalid("PNG text keyword"));
     }
-    if keyword == XMP_KEY && kind != *b"iTXt" {
+    if keyword == XMP_KEY.as_bytes() && kind != *b"iTXt" {
         return Err(Invalid("XMP must use iTXt"));
     }
     match &kind {
@@ -77,7 +83,7 @@ fn packet_from_text(kind: [u8; 4], data: &[u8]) -> Result<Option<&[u8]>, ImageEr
             }
             let (_, data) = split_text(data)?;
             let (_, text) = split_text(data)?;
-            if keyword == XMP_KEY {
+            if keyword == XMP_KEY.as_bytes() {
                 if flag != 0 {
                     return Err(Unsupported("compressed PNG XMP"));
                 }
@@ -94,11 +100,11 @@ fn packet_from_text(kind: [u8; 4], data: &[u8]) -> Result<Option<&[u8]>, ImageEr
 }
 
 struct Layout<'a> {
-    packet: Option<&'a [u8]>,
+    xmp: XmpLayout<'a>,
     first_idat: usize,
 }
 
-fn walk<'a>(bytes: &'a [u8], mut idat: impl FnMut(&[u8]) -> Result<(), ImageError>) -> Result<Layout<'a>, ImageError> {
+fn walk(bytes: &[u8]) -> Result<Layout<'_>, ImageError> {
     let start = bytes.strip_prefix(SIGNATURE).ok_or(Invalid("PNG signature"))?;
     let header = next_chunk(start)?;
     if header.kind != *b"IHDR" || header.data.len() != 13 {
@@ -108,7 +114,8 @@ fn walk<'a>(bytes: &'a [u8], mut idat: impl FnMut(&[u8]) -> Result<(), ImageErro
     if dim != [0, 0, 4, 0, 0, 0, 3, 0] || header.data[8..] != [8, 2, 0, 0, 0] {
         return Err(Unsupported("PNG IHDR profile"));
     }
-    let (mut packet, mut first_idat) = (None, None);
+    let mut existing: Option<(&[u8], Range<usize>)> = None;
+    let mut first_idat = None;
     let (mut after_idat, mut srgb, mut phys, mut time) = (false, false, false, false);
     let mut rest = header.rest;
     loop {
@@ -119,13 +126,14 @@ fn walk<'a>(bytes: &'a [u8], mut idat: impl FnMut(&[u8]) -> Result<(), ImageErro
                     return Err(Invalid("non-contiguous IDAT"));
                 }
                 first_idat.get_or_insert(bytes.len() - rest.len());
-                idat(chunk.data)?;
             }
             b"IEND" => {
                 if !chunk.data.is_empty() || !chunk.rest.is_empty() {
                     return Err(Invalid("PNG IEND or trailing data"));
                 }
-                return Ok(Layout { packet, first_idat: first_idat.ok_or(Invalid("PNG missing IDAT"))? });
+                let first_idat = first_idat.ok_or(Invalid("PNG missing IDAT"))?;
+                let insert_at = existing.as_ref().map_or(first_idat, |(_, range)| range.start);
+                return Ok(Layout { xmp: XmpLayout { existing, insert_at }, first_idat });
             }
             b"IHDR" => return Err(Invalid("duplicate IHDR")),
             b"sRGB" => {
@@ -148,7 +156,8 @@ fn walk<'a>(bytes: &'a [u8], mut idat: impl FnMut(&[u8]) -> Result<(), ImageErro
             }
             b"tEXt" | b"zTXt" | b"iTXt" => {
                 if let Some(text) = packet_from_text(chunk.kind, chunk.data)? {
-                    if first_idat.is_some() || packet.replace(text).is_some() {
+                    let range = bytes.len() - rest.len()..bytes.len() - chunk.rest.len();
+                    if first_idat.is_some() || existing.replace((text, range)).is_some() {
                         return Err(Invalid("late or duplicate PNG XMP"));
                     }
                 }
@@ -162,9 +171,9 @@ fn walk<'a>(bytes: &'a [u8], mut idat: impl FnMut(&[u8]) -> Result<(), ImageErro
     }
 }
 
-pub(crate) fn decode(bytes: &[u8]) -> Result<(Vec<u8>, Option<&[u8]>), ImageError> {
+pub(crate) fn decode(bytes: &[u8]) -> Result<(Vec<u8>, XmpLayout<'_>), ImageError> {
     // Inspect all chunks before allocating the fixed-size raster or running the inflater.
-    let layout = walk(bytes, |_| Ok(()))?;
+    let layout = walk(bytes)?;
     let mut inflater = Decompress::new(true);
     let mut filtered = vec![0; FILTERED_LEN + 1];
     let mut finished = false;
@@ -192,7 +201,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<(Vec<u8>, Option<&[u8]>), ImageErro
     }
     unfilter(&mut filtered)?;
     filtered.truncate(RGB_LEN);
-    Ok((filtered, layout.packet))
+    Ok((filtered, layout.xmp))
 }
 
 fn paeth(a: u8, b: u8, c: u8) -> u8 {
@@ -232,22 +241,15 @@ fn unfilter(bytes: &mut [u8]) -> Result<(), ImageError> {
     Ok(())
 }
 
-pub(crate) fn embed(bytes: &[u8], packet: &[u8]) -> Result<Vec<u8>, ImageError> {
-    let at = walk(bytes, |_| Ok(()))?.first_idat;
+pub(crate) fn write_xmp(bytes: &[u8], packet: &[u8], layout: &XmpLayout<'_>) -> Result<Vec<u8>, ImageError> {
     let length = XMP_KEY.len() + 5 + packet.len();
-    let size = bytes.len() + 12 + length;
-    if size > MAX_IMAGE_BYTES {
-        return Err(Unsupported("container size"));
-    }
-    let mut out = Vec::with_capacity(size);
-    out.extend_from_slice(&bytes[..at]);
-    out.extend_from_slice(&(length as u32).to_be_bytes());
-    let crc_start = out.len();
-    out.extend_from_slice(b"iTXt");
-    out.extend_from_slice(XMP_KEY);
-    out.extend_from_slice(&[0; 5]);
-    out.extend_from_slice(packet);
-    out.extend_from_slice(&crc32fast::hash(&out[crc_start..]).to_be_bytes());
-    out.extend_from_slice(&bytes[at..]);
-    Ok(out)
+    layout.splice(bytes, 12 + length, |out| {
+        out.extend_from_slice(&(length as u32).to_be_bytes());
+        let crc_start = out.len();
+        out.extend_from_slice(b"iTXt");
+        out.extend_from_slice(XMP_KEY.as_bytes());
+        out.extend_from_slice(&[0; 5]);
+        out.extend_from_slice(packet);
+        out.extend_from_slice(&crc32fast::hash(&out[crc_start..]).to_be_bytes());
+    })
 }

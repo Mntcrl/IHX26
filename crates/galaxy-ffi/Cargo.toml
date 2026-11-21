@@ -31,7 +31,9 @@ uniffi.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+galaxy-verifier.workspace = true
 sha2.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
 
 [[bin]]
 name = "galaxy-ffi-bindgen"

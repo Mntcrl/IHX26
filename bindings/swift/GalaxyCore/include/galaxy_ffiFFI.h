@@ -483,6 +483,11 @@ RustBuffer uniffi_galaxy_ffi_fn_method_captureevidence_encode_bundle(uint64_t pt
 RustBuffer uniffi_galaxy_ffi_fn_func_build_capture_memo(RustBuffer core, RustBuffer assertion, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_FN_FUNC_CANONICAL_IMAGE_FROM_GXRW
+#define UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_FN_FUNC_CANONICAL_IMAGE_FROM_GXRW
+RustBuffer uniffi_galaxy_ffi_fn_func_canonical_image_from_gxrw(RustBuffer raw, RustBuffer profile, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_FN_FUNC_DECODE_EVIDENCE_BUNDLE
 #define UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_FN_FUNC_DECODE_EVIDENCE_BUNDLE
 uint64_t uniffi_galaxy_ffi_fn_func_decode_evidence_bundle(RustBuffer bytes, RustCallStatus *_Nonnull out_status
@@ -491,6 +496,21 @@ uint64_t uniffi_galaxy_ffi_fn_func_decode_evidence_bundle(RustBuffer bytes, Rust
 #ifndef UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_FN_FUNC_INGEST_GXRW
 #define UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_FN_FUNC_INGEST_GXRW
 uint64_t uniffi_galaxy_ffi_fn_func_ingest_gxrw(RustBuffer raw, RustBuffer profile, RustBuffer capture_state, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_FN_FUNC_CERTIFIED_FILE_WITH_INFO
+#define UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_FN_FUNC_CERTIFIED_FILE_WITH_INFO
+RustBuffer uniffi_galaxy_ffi_fn_func_certified_file_with_info(RustBuffer file, RustBuffer info, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_FN_FUNC_CERTIFIED_PHOTO_DETAILS
+#define UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_FN_FUNC_CERTIFIED_PHOTO_DETAILS
+RustBuffer uniffi_galaxy_ffi_fn_func_certified_photo_details(RustBuffer file, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_FN_FUNC_LOSSLESS_PNG_FROM_CERTIFIED_JPEG
+#define UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_FN_FUNC_LOSSLESS_PNG_FROM_CERTIFIED_JPEG
+RustBuffer uniffi_galaxy_ffi_fn_func_lossless_png_from_certified_jpeg(RustBuffer file, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_FN_FUNC_WALLET_IDENTITY
@@ -846,6 +866,12 @@ uint16_t uniffi_galaxy_ffi_checksum_func_build_capture_memo(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_CHECKSUM_FUNC_CANONICAL_IMAGE_FROM_GXRW
+#define UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_CHECKSUM_FUNC_CANONICAL_IMAGE_FROM_GXRW
+uint16_t uniffi_galaxy_ffi_checksum_func_canonical_image_from_gxrw(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_CHECKSUM_FUNC_DECODE_EVIDENCE_BUNDLE
 #define UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_CHECKSUM_FUNC_DECODE_EVIDENCE_BUNDLE
 uint16_t uniffi_galaxy_ffi_checksum_func_decode_evidence_bundle(void
@@ -855,6 +881,24 @@ uint16_t uniffi_galaxy_ffi_checksum_func_decode_evidence_bundle(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_CHECKSUM_FUNC_INGEST_GXRW
 #define UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_CHECKSUM_FUNC_INGEST_GXRW
 uint16_t uniffi_galaxy_ffi_checksum_func_ingest_gxrw(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_CHECKSUM_FUNC_CERTIFIED_FILE_WITH_INFO
+#define UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_CHECKSUM_FUNC_CERTIFIED_FILE_WITH_INFO
+uint16_t uniffi_galaxy_ffi_checksum_func_certified_file_with_info(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_CHECKSUM_FUNC_CERTIFIED_PHOTO_DETAILS
+#define UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_CHECKSUM_FUNC_CERTIFIED_PHOTO_DETAILS
+uint16_t uniffi_galaxy_ffi_checksum_func_certified_photo_details(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_CHECKSUM_FUNC_LOSSLESS_PNG_FROM_CERTIFIED_JPEG
+#define UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_CHECKSUM_FUNC_LOSSLESS_PNG_FROM_CERTIFIED_JPEG
+uint16_t uniffi_galaxy_ffi_checksum_func_lossless_png_from_certified_jpeg(void
     
 );
 #endif

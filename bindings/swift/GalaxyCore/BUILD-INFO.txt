@@ -1,4 +1,5 @@
-git: 10502cb195ec12234b49fe6f082fb3df7ea4d35e
+git: baded2455814df126ef75d1acf13e006a43c01ea
+worktree: dirty
 rustc: rustc 1.91.1 (ed61e7d7e 2025-11-07)
 cargo: cargo 1.91.1 (ea2d97820 2025-10-10)
 target: aarch64-apple-ios IPHONEOS_DEPLOYMENT_TARGET=17.0 lto=fat codegen-units=1
@@ -6,7 +7,7 @@ circuit registration tx and ceremony: B0C14DC5C6BEC26A5C43CD236383EC1893F164DF00
 40bcc6ddc85a04990f05faf4280e20006d9b06f1a2ad75961666c99db6f29dda  build input (policy JSON)
 1d9bf2c5217f6cee430bff3f900f9256a0ffa30df9d42b2d424c2591bae95110  build input (network TOML)
 8595da756e5d19df929d6337c764d7114b0243b07e24f2d7e6bf22d89573463c  build input (descriptor JSON)
-ab8d10daa93806520bcd30727647894905b51c6f38600831eed39afc82ac7677  ios-arm64/libgalaxy_ffi.a
-32ddbd88c7e2475efcf023f7b08e2afa242a074a5b34c347ed5dbe18d179c088  swift/galaxy_ffi.swift
-c35fde50223c2da9a8b9d604e933a722986a12c943c32108e8072d28946572f4  include/galaxy_ffiFFI.h
+d3ed5a75db84559d095c7f02c32e877a7cba82a1b6222eafc72de879b17b768a  ios-arm64/libgalaxy_ffi.a
+987afe449e763739b6ac3b5522a8a68ada0749ea35fa76f6d63a75a14d491a3e  swift/galaxy_ffi.swift
+a8de4c97e20691f03e4c19d69321c582a491ebddcca552f584391670d83b0806  include/galaxy_ffiFFI.h
 34e1591b2fc7e7ae51a4467187e5d509736d45568fcdbb49ba8a8e331af5708a  include/module.modulemap

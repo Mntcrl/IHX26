@@ -1,4 +1,5 @@
-use galaxy_protocol::xmp::{GalaxyXmp, XmpError, MAX_PACKET_LEN};
+use galaxy_protocol::xmp::{GalaxyInfo, GalaxyXmp, XmpError, INFO_NAMESPACE, MAX_PACKET_LEN};
+use proptest::prelude::*;
 
 fn sample() -> GalaxyXmp {
     GalaxyXmp {
@@ -123,5 +124,77 @@ fn truncated_and_mutated_packets_never_panic() {
             bytes[at] = (state >> 32) as u8;
         }
         let _ = GalaxyXmp::parse_packet(&bytes);
+    }
+}
+
+fn export_info() -> GalaxyInfo<'static> {
+    GalaxyInfo {
+        account: Some("rrrrrrrrrrrrrrrrrrrrrhoLvTp"),
+        registration_tx: Some(MANIFEST),
+        capture_ledger: Some(24),
+        selection_ledger: Some(29),
+        proof_ledger: Some(30),
+        capture_time: Some("2026-11-21T10:57:18Z"),
+        claimed_time: Some("2026-11-21T10:57:17.123Z"),
+        circuit_id: Some(PHOTO),
+        policy_id: Some(PROOF),
+        policy_name: Some("Galaxy <v1> & public"),
+        setup_ceremony: Some("development-single-party"),
+        attestation_environment: Some("development"),
+        capture_tx_url: "https://example.org/transactions?kind=capture&network=testnet",
+        proof_tx_url: "https://example.org/transactions?kind=proof&network=testnet",
+        app_version: "2.0.4",
+    }
+}
+
+#[test]
+fn informational_packet_vector_keeps_lookup_references() {
+    let expected = include_str!("../../../test-vectors/protocol/xmp-info.xml");
+    let packet = sample().to_packet_with_info(&export_info()).unwrap();
+    assert_eq!(std::str::from_utf8(&packet).unwrap(), expected.trim_end());
+    assert_eq!(GalaxyXmp::parse_packet(&packet).unwrap(), sample());
+}
+
+#[test]
+fn rejects_invalid_info_and_enforces_packet_cap() {
+    let too_long = "<".repeat(MAX_PACKET_LEN / 3);
+    for info in [
+        GalaxyInfo { registration_tx: Some(PROOF), ..export_info() },
+        GalaxyInfo { circuit_id: Some(MANIFEST), ..export_info() },
+        GalaxyInfo { policy_id: Some("abcd"), ..export_info() },
+        GalaxyInfo { capture_time: Some("2026-02-30T00:00:00Z"), ..export_info() },
+        GalaxyInfo { claimed_time: Some("2026-01-01T00:00:00+02:00"), ..export_info() },
+        GalaxyInfo { attestation_environment: Some("other"), ..export_info() },
+        GalaxyInfo { capture_tx_url: "http://example.org/transactions", ..export_info() },
+        GalaxyInfo { app_version: "bad\0version", ..export_info() },
+    ] {
+        assert!(matches!(sample().to_packet_with_info(&info), Err(XmpError::Invalid(_))));
+    }
+    let oversized = GalaxyInfo { policy_name: Some(&too_long), ..export_info() };
+    assert!(matches!(sample().to_packet_with_info(&oversized), Err(XmpError::TooLarge)));
+    let only_known = GalaxyInfo { capture_time: None, proof_ledger: None, ..export_info() };
+    let packet = String::from_utf8(sample().to_packet_with_info(&only_known).unwrap()).unwrap();
+    assert!(!packet.contains("CreateDate"));
+    assert!(!packet.contains("proofLedger"));
+}
+
+proptest! {
+    #[test]
+    fn informational_markup_cannot_change_lookup_refs(
+        field in "[A-Za-z][a-z0-9]{0,20}", text in any::<String>(),
+        conflicting_hash in "[A-Fa-f0-9]{64}", depth in 0..8usize,
+    ) {
+        let text: String = text.chars().filter(|c| !c.is_control() && !matches!(c, '\u{fffe}' | '\u{ffff}')).collect();
+        let escaped = quick_xml::escape::escape(&text);
+        let opens = "<extra>".repeat(depth);
+        let closes = "</extra>".repeat(depth);
+        let body = format!(
+            "<i:{field} xmlns:i=\"{INFO_NAMESPACE}\" g:photoId=\"{conflicting_hash}\">\
+             {opens}{escaped}<g:proofTx>{conflicting_hash}</g:proofTx>{closes}</i:{field}>\
+             <i:photoId xmlns:i=\"{INFO_NAMESPACE}\" g:captureId=\"{conflicting_hash}\"/>{}",
+            elements(None),
+        );
+        let packet = packet_with(&body);
+        prop_assert_eq!(GalaxyXmp::parse_packet(packet.as_bytes()).unwrap(), sample());
     }
 }

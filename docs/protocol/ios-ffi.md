@@ -97,6 +97,45 @@ if evaluation.verdict().pass {
 
 All recoverable Rust errors use stable `GalaxyError` cases; use the case, not localized string matching. Surface no downstream errors, private evidence, raw bundle/witness bytes, seeds, salts, or raw ledger responses in logs or crash breadcrumbs. Swift owns durable storage and the ordering of externally observed events; Rust verifies format, windows and bindings from those observations, not endpoint honesty.
 
+## Gallery previews and certified exports
+
+- Use `try canonicalImageFromGxrw(raw: raw, profile: profile)` for a local calibration
+  preview. This is the exact encoded, XMP-free canonical image in the selected
+  `CaptureProfile`. Ingest still validates the GXRW structure and evidence, but it
+  does not generate salts, compute commitments, apply the challenge-dependent
+  policy, or require certification state. Do not label a preview certified.
+- `certifiedPhotoDetails(file:)` checks that the raster has the photo ID named by Galaxy XMP and
+  returns `photoId` (lowercase hex), the committed `imageProfile`, and `captureTxUrl` / `proofTxUrl`
+  derived from the bundled network's HTTPS explorer template. Use these details even after raw
+  evidence has been removed. The call checks local binding, not the ledger or proof.
+- Call `certifiedFileWithInfo(file:info:)` on an already-certified `png-v1` or `jpeg-v1` export.
+  It writes one XMP packet with the same Galaxy references, §4 `galaxyinfo` annotations, and
+  `xmp:CreatorTool`. It does not re-encode PNG IDAT chunks or the JPEG scan. Include only public
+  capture-journal values; do not consult existing informational XMP for truth. Omit unknown
+  values instead of guessing. The verifier ignores the annotations and its report supersedes them.
+
+`ExportInfo` fields and Swift types:
+
+| Fields | Type and encoding |
+|---|---|
+| `account` | `String?`, XRPL classic address (checksum verified) |
+| `registrationTx` | `String?`, DEVICE registration hash, 64 uppercase hex digits |
+| `captureLedger`, `selectionLedger`, `proofLedger` | `UInt32?`, written in decimal |
+| `captureTime`, `claimedTime` | `String?`, ISO-8601 UTC ending `Z`, fractional seconds allowed. `captureTime` is the L0 close time and also supplies `xmp:CreateDate` |
+| `circuitId`, `policyId` | `String?`, 64 lowercase hex digits |
+| `policyName`, `setupCeremony` | `String?`, public policy name and ceremony label |
+| `attestationEnvironment` | `String?`, `development`, `production`, or `dev-unattested` |
+| `captureTxUrl`, `proofTxUrl` | `String?`, `nil` derives the link automatically. A supplied value must exactly match the bundled HTTPS template filled with the corresponding Galaxy XMP transaction hash |
+| `appVersion` | `String`, required; `xmp:CreatorTool` is `XRPL Galaxy <appVersion>` |
+
+For a `jpeg-v1` capture, pass the enriched JPEG to `losslessPngFromCertifiedJpeg(file:)`
+if the user requests PNG. It reference-decodes the original JPEG, losslessly encodes those
+pixels as `png-v1`, and embeds the complete unchanged packet. The PNG keeps the JPEG capture's
+`imageProfile`, `photoId`, and `rgb_root`. A generic JPEG encode of a `png-v1` capture is not a
+certified export. Pass the returned bytes as a file/photo resource, not through `UIImage`
+or an image editor. Invalid XMP, changed pixels, overlong metadata (64 KiB overall, subject to
+JPEG APP1's smaller maximum), or mismatched explorer URLs fail rather than modifying the input.
+
 ## Linux checks
 
 ```sh
@@ -111,6 +150,18 @@ and a private GXRW round trip (skipped if no local calibration fixture exists).
 The ignored proof test needs the same accepted build-time policy/network pins
 and `descriptor.json`, `main_v1m.graph.bin`, `main_v1m.zkey` in
 `circuits/artifacts/v1m/` (or `GALAXY_IOS_TEST_ARTIFACTS`).
+
+Export checks use committed PNG verifier recordings, reference JPEG vectors and an opt-in
+JPEG ledger replay. With the matching private Testnet JPEG already in `fixtures/real/`, run:
+
+```sh
+GALAXY_EXPORT_REPLAY_JPEG="$PWD/fixtures/real/<private jpeg-v1 export>" \
+  scripts/with-slot.sh cargo test --release -p galaxy-ffi --test exports \
+  recorded_jpeg_and_lossless_png_bind_to_same_capture -- --ignored
+```
+
+The replay uses the committed `development-4ad25185-account-txn-id` ledger recording.
+The device image is not part of the recording and must never be committed.
 
 ## Checkpoints on the Mac and phone
 
