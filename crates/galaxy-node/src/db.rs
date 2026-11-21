@@ -79,6 +79,21 @@ impl CachedReport {
     }
 }
 
+pub(crate) struct Job {
+    pub proof: String,
+    pub generation: i64,
+    pub fairness_key: String,
+    retry_delay_secs: u32,
+}
+
+impl Job {
+    fn next_retry(&self) -> u32 {
+        const INITIAL: u32 = 60;
+        const MAXIMUM: u32 = 6 * 60 * 60;
+        (self.retry_delay_secs * 2).clamp(INITIAL, MAXIMUM)
+    }
+}
+
 pub(crate) const FILE_NAME: &str = "index.sqlite3";
 
 impl Db {
@@ -132,9 +147,22 @@ impl Db {
         match tx.query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))? {
             0 => tx.execute_batch(concat!(
                 include_str!("schema.sql"),
-                "PRAGMA user_version = 1;"
+                "PRAGMA user_version = 2;"
             ))?,
-            1 => (),
+            1 => tx.execute_batch(
+                "ALTER TABLE reports ADD COLUMN fairness_key TEXT NOT NULL DEFAULT '';
+                 ALTER TABLE reports ADD COLUMN retry_delay_secs INTEGER NOT NULL DEFAULT 0
+                    CHECK(retry_delay_secs BETWEEN 0 AND 21600);
+                 UPDATE reports SET fairness_key = COALESCE((
+                    SELECT COALESCE(p.account || ':' || c.registration,p.account)
+                    FROM records p LEFT JOIN records c ON c.hash=p.reference AND c.account=p.account
+                        AND c.kind='galaxy/v1/capture' AND c.rejected IS NULL
+                    WHERE p.hash=reports.proof), '');
+                 DROP INDEX report_queue;
+                 CREATE INDEX report_queue ON reports(due,proof,fairness_key) WHERE due IS NOT NULL;
+                 PRAGMA user_version = 2;",
+            )?,
+            2 => (),
             _ => return Err(Error::Config("unsupported cache schema version")),
         }
         tx.commit()?;
@@ -434,35 +462,47 @@ impl Db {
             (SELECT COUNT(*) FROM reports WHERE due IS NOT NULL)", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?)
     }
 
-    pub fn job(&self, now: i64) -> Result<Option<(String, i64)>> {
-        Ok(self
-            .lock()?
-            .query_row(
-                "SELECT proof,generation FROM reports WHERE due<=?1 ORDER BY due,proof LIMIT 1",
-                [now],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
+    pub fn job(&self, now: i64, exclude: Option<&str>) -> Result<Option<Job>> {
+        let conn = self.lock()?;
+        let mut query = conn.prepare_cached(
+            "SELECT proof,generation,fairness_key,retry_delay_secs FROM reports
+             WHERE due<=?1 AND (?2 IS NULL OR fairness_key<>?2) ORDER BY due,proof LIMIT 1",
+        )?;
+        Ok(query
+            .query_row(params![now, exclude], |r| {
+                Ok(Job {
+                    proof: r.get(0)?,
+                    generation: r.get(1)?,
+                    fairness_key: r.get(2)?,
+                    retry_delay_secs: r.get(3)?,
+                })
+            })
             .optional()?)
     }
 
     pub fn store_report(
         &self,
-        proof: &str,
-        generation: i64,
+        job: &Job,
         now: i64,
         version: &str,
         document: &str,
-        next: Option<i64>,
+        retry: bool,
     ) -> Result<()> {
-        self.lock()?.execute("UPDATE reports SET due=?3,checked_at=?4,report_version=?5,document=?6 WHERE proof=?1 AND generation=?2",
-            params![proof,generation,next,now,version,document])?;
+        let delay = if retry { job.next_retry() } else { 0 };
+        let due = retry.then_some(now + i64::from(delay));
+        self.lock()?.execute(
+            "UPDATE reports SET due=?3,checked_at=?4,report_version=?5,document=?6,retry_delay_secs=?7
+             WHERE proof=?1 AND generation=?2",
+            params![job.proof, job.generation, due, now, version, document, delay],
+        )?;
         Ok(())
     }
 
-    pub fn defer_report(&self, proof: &str, generation: i64, due: i64) -> Result<()> {
+    pub fn defer_report(&self, job: &Job, now: i64) -> Result<()> {
+        let delay = job.next_retry();
         self.lock()?.execute(
-            "UPDATE reports SET due=?3 WHERE proof=?1 AND generation=?2",
-            params![proof, generation, due],
+            "UPDATE reports SET due=?3,retry_delay_secs=?4 WHERE proof=?1 AND generation=?2",
+            params![job.proof, job.generation, now + i64::from(delay), delay],
         )?;
         Ok(())
     }
@@ -472,7 +512,7 @@ impl Db {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let changed = tx.execute("INSERT INTO settings VALUES ('report_build',?1) ON CONFLICT (key) DO UPDATE SET value=excluded.value WHERE value<>?1", [build])?;
         if changed != 0 {
-            tx.execute("UPDATE reports SET due=0,generation=generation+1,checked_at=NULL,report_version=NULL,document=NULL", [])?;
+            tx.execute("UPDATE reports SET due=0,retry_delay_secs=0,generation=generation+1,checked_at=NULL,report_version=NULL,document=NULL", [])?;
         }
         tx.commit()?;
         Ok(())
@@ -604,16 +644,35 @@ fn insert_records(conn: &Connection, records: &[Record]) -> Result<()> {
             }
         }
         if r.kind == PROOF {
-            conn.execute("INSERT INTO reports(proof,due) VALUES (?1,0)", [&r.hash])?;
+            // A PROOF carries only its CAPTURE reference. When the matching
+            // CAPTURE isn't indexed, use the signing account as the group.
+            // Scope the registration claim to that account: the index has
+            // not verified that the account owns the referenced registration.
+            let account = r
+                .account
+                .as_deref()
+                .ok_or(Error::Invariant("indexed proof has no account"))?;
+            conn.prepare_cached(
+                "INSERT INTO reports(proof,due,fairness_key) VALUES (?1,0,COALESCE(
+                    (SELECT account || ':' || registration FROM records WHERE hash=?2 AND account=?3
+                        AND kind='galaxy/v1/capture' AND rejected IS NULL), ?3))",
+            )?
+            .execute(params![r.hash, r.reference, account])?;
         } else if r.kind == REVOKE {
-            conn.execute("UPDATE reports SET due=0,generation=generation+1,checked_at=NULL,report_version=NULL,document=NULL
+            conn.execute("UPDATE reports SET due=CASE WHEN retry_delay_secs=0 THEN 0 ELSE due END,
+                generation=generation+1,checked_at=NULL,report_version=NULL,document=NULL
                 WHERE proof IN (SELECT p.hash FROM records c JOIN records p ON p.reference=c.hash
                 WHERE c.kind='galaxy/v1/capture' AND c.rejected IS NULL AND c.registration=?1 AND c.account=?2
                 AND p.kind='galaxy/v1/proof' AND p.rejected IS NULL AND p.account=c.account)", params![r.registration, r.account])?;
         } else if r.kind == CAPTURE {
+            conn.prepare_cached("UPDATE reports SET fairness_key=COALESCE(?3 || ':' || ?1, ?3)
+                WHERE proof IN (SELECT p.hash FROM records p WHERE p.kind='galaxy/v1/proof' AND p.rejected IS NULL
+                    AND p.reference=?2 AND p.account=?3)")?
+                .execute(params![r.registration, r.hash, r.account])?;
             // Live closes may index a proof and revocation before backfill
             // identifies their relationship through this capture.
-            conn.prepare_cached("UPDATE reports SET due=0,generation=generation+1,checked_at=NULL,report_version=NULL,document=NULL
+            conn.prepare_cached("UPDATE reports SET due=CASE WHEN retry_delay_secs=0 THEN 0 ELSE due END,
+                generation=generation+1,checked_at=NULL,report_version=NULL,document=NULL
                 WHERE EXISTS (SELECT 1 FROM records v WHERE v.kind='galaxy/v1/revoke' AND v.rejected IS NULL
                     AND v.registration=?1 AND v.account=?2)
                 AND proof IN (SELECT p.hash FROM records p WHERE p.kind='galaxy/v1/proof' AND p.rejected IS NULL

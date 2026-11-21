@@ -28,12 +28,14 @@ CREATE INDEX announcements_by_expiry ON announcements(expires);
 CREATE TABLE reports(
     proof TEXT PRIMARY KEY REFERENCES records(hash) ON DELETE CASCADE,
     generation INTEGER NOT NULL DEFAULT 0,
+    fairness_key TEXT NOT NULL DEFAULT '',
+    retry_delay_secs INTEGER NOT NULL DEFAULT 0 CHECK(retry_delay_secs BETWEEN 0 AND 21600),
     due INTEGER,
     checked_at INTEGER,
     report_version TEXT,
     document TEXT
 ) WITHOUT ROWID;
-CREATE INDEX report_queue ON reports(due,proof) WHERE due IS NOT NULL;
+CREATE INDEX report_queue ON reports(due,proof,fairness_key) WHERE due IS NOT NULL;
 CREATE TABLE peers(
     id TEXT PRIMARY KEY, expires INTEGER NOT NULL, document TEXT NOT NULL
 ) WITHOUT ROWID;

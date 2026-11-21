@@ -94,12 +94,12 @@ pub async fn run(config: Config) -> Result<()> {
             db.clone(),
             rpc.clone(),
             sources,
-            limiter.clone(),
+            limiter,
             resync,
             proof.clone(),
         ));
     }
-    tasks.spawn(verify::run(config.clone(), db.clone(), rpc, limiter, proof));
+    tasks.spawn(verify::run(config.clone(), db.clone(), rpc, proof));
     if config.node.discovery {
         tasks.spawn(discovery::run(config.clone(), db.clone(), identity.clone()));
     }
@@ -147,7 +147,7 @@ pub async fn sync_once(config: Config) -> Result<Value> {
     let sources = sync::Sources::new(&config)?;
     let limiter = sync::Limiter::new(config.node.limits.sync_requests_per_second);
     sync::catch_up(&config, &db, &sources, &limiter).await?;
-    verify::drain(&config, &db, &rpc, &limiter).await?;
+    verify::drain(&config, &db, &rpc).await?;
     api::status_document(&config, &db)
 }
 

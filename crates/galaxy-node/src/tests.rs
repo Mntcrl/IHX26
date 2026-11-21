@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     fs,
-    net::{Ipv4Addr, SocketAddr},
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     path::Path,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -175,6 +175,7 @@ allow_private_peers = true
 {additional}
 [limits]
 sync_requests_per_second = 50
+verify_requests_per_second = 50
 discovery_interval_secs = 5
 "#
         ),
@@ -221,17 +222,52 @@ fn request_budgets_group_ipv6_prefixes_and_mapped_ipv4() {
         ("::ffff:192.0.2.1", false),
         ("192.0.2.2", true),
     ] {
-        assert_eq!(rate.allow(ip.parse().unwrap(), now, 1, 10), expected);
+        assert_eq!(rate.allow(ip.parse().unwrap(), now, 1, 40), expected);
     }
     let ip = "192.0.2.1".parse().unwrap();
-    assert!(!rate.allow(ip, now + Duration::from_secs(59), 1, 10));
-    assert!(rate.allow(ip, now + Duration::from_secs(60), 1, 10));
+    assert!(!rate.allow(ip, now + Duration::from_secs(59), 1, 40));
+    assert!(rate.allow(ip, now + Duration::from_secs(60), 1, 40));
+}
+
+#[test]
+fn one_ipv6_56_with_256_clients_cannot_exhaust_the_global_budget() {
+    let now = Instant::now();
+    let mut rate = api::Rate::default();
+    let base = "2001:db8:1:ab00::".parse::<Ipv6Addr>().unwrap().to_bits();
+    let admitted = (0..256u128)
+        .map(|subnet| Ipv6Addr::from(base | (subnet << 64)).into())
+        .map(|ip| (0..180).filter(|_| rate.allow(ip, now, 180, 36_000)).count())
+        .sum::<usize>();
+    assert_eq!(admitted, 1_800);
+    let neighbor = "2001:db8:1:ac00::1".parse().unwrap();
+    let unrelated = "2001:db8:2::1".parse().unwrap();
+    assert!(rate.allow(neighbor, now, 180, 36_000));
+    assert!(rate.allow(unrelated, now, 180, 36_000));
+    let first = Ipv6Addr::from(base).into();
+    assert!(!rate.allow(first, now + Duration::from_secs(59), 180, 36_000));
+    assert!(rate.allow(first, now + Duration::from_secs(60), 180, 36_000));
+}
+
+#[test]
+fn aggregate_budgets_group_ipv6_48_and_ipv4_24() {
+    let now = Instant::now();
+    let mut rate = api::Rate::default();
+    let allow = |rate: &mut api::Rate, s: &str| rate.allow(s.parse().unwrap(), now, 20, 100);
+    for n in 0..5 {
+        assert!(allow(&mut rate, &format!("2001:db8:1:{n:x}::1")));
+        assert!(allow(&mut rate, &format!("2001:db8:1:1{n:02x}::1")));
+        assert!(allow(&mut rate, &format!("192.0.2.{n}")));
+    }
+    assert!(!allow(&mut rate, "2001:db8:1:200::1"));
+    assert!(!allow(&mut rate, "::ffff:192.0.2.10"));
+    assert!(allow(&mut rate, "2001:db8:2::1"));
+    assert!(allow(&mut rate, "192.0.3.10"));
 }
 
 #[test]
 fn request_budgets_evict_least_recently_seen_without_resetting_global_cap() {
     let now = Instant::now();
-    let ip = |n| Ipv4Addr::from(0x0a00_0000 + n).into();
+    let ip = |n| Ipv4Addr::from(0x0a00_0000 + 256 * n).into();
     let mut rate = api::Rate::default();
     let global = 4098;
     for n in 0u32..4096 {
@@ -280,7 +316,7 @@ async fn request_budgets_use_only_single_addresses_from_trusted_proxies() {
         ] {
             assert_eq!(forwarded(ip).send().await.unwrap().status(), expected);
         }
-        assert_eq!(forwarded("192.0.2.2").send().await.unwrap().status(), 429);
+        assert_eq!(forwarded("192.0.3.2").send().await.unwrap().status(), 429);
     }
 }
 
@@ -517,16 +553,29 @@ fn revocation_requeues_exact_proof_in_both_arrival_orders() {
         };
         store(&proof);
         store(first);
-        let (hash, generation) = db.job(0).unwrap().unwrap();
-        assert_eq!(hash, proof.hash);
-        db.store_report(&hash, generation, 0, "galaxy-report/v1", "{}", None)
+        let job = db.job(0, None).unwrap().unwrap();
+        assert_eq!(job.proof, proof.hash);
+        let account = proof.account.as_deref().unwrap();
+        let registration = format!("{account}:{}", capture.registration.as_deref().unwrap());
+        assert_eq!(
+            job.fairness_key,
+            if revocation_first {
+                account
+            } else {
+                registration.as_str()
+            }
+        );
+        db.store_report(&job, 0, "galaxy-report/v1", "{}", false)
             .unwrap();
-        assert!(db.job(0).unwrap().is_none());
+        assert!(db.job(0, None).unwrap().is_none());
         store(second);
         store(second); // replay is idempotent, including report invalidation
-        assert_eq!(db.job(0).unwrap(), Some((hash.clone(), generation + 1)));
+        let next = db.job(0, None).unwrap().unwrap();
+        assert_eq!(next.proof, job.proof);
+        assert_eq!(next.generation, job.generation + 1);
+        assert_eq!(next.fairness_key, registration);
         // An in-flight evaluation that started before invalidation is stale.
-        db.store_report(&hash, generation, 0, "galaxy-report/v1", "{}", None)
+        db.store_report(&job, 0, "galaxy-report/v1", "{}", false)
             .unwrap();
         let reports = db
             .reports(

@@ -83,6 +83,7 @@ pub(crate) struct Limits {
     pub requests_per_minute: u32,
     pub global_requests_per_minute: u32,
     pub sync_requests_per_second: u32,
+    pub verify_requests_per_second: u32,
     pub ledgers_per_pass: u32,
     pub poll_interval_secs: u64,
     pub discovery_interval_secs: u64,
@@ -94,6 +95,7 @@ impl Default for Limits {
             requests_per_minute: 180,
             global_requests_per_minute: 36_000,
             sync_requests_per_second: 4,
+            verify_requests_per_second: 4,
             ledgers_per_pass: 128,
             poll_interval_secs: 5,
             discovery_interval_secs: 60,
@@ -136,6 +138,7 @@ impl Config {
             || !(1..=36_000).contains(&lim.requests_per_minute)
             || lim.global_requests_per_minute == 0
             || !(1..=50).contains(&lim.sync_requests_per_second)
+            || !(1..=50).contains(&lim.verify_requests_per_second)
             || !(1..=4096).contains(&lim.ledgers_per_pass)
             || !(1..=3600).contains(&lim.poll_interval_secs)
             || !(5..=3600).contains(&lim.discovery_interval_secs)

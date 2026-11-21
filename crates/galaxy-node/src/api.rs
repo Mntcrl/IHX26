@@ -34,6 +34,7 @@ const ACCOUNT_RANGES: usize = 32;
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 100;
 const MAX_CLIENTS: usize = 4096;
+const MAX_PREFIX_BUCKETS: usize = 2 * MAX_CLIENTS;
 const MAX_CONCURRENT_REQUESTS: usize = 64;
 const WINDOW: Duration = Duration::from_secs(60);
 
@@ -64,6 +65,14 @@ pub(crate) struct Rate {
     recency: BTreeSet<(u64, IpAddr)>,
     sequence: u64,
     global: Option<Budget>,
+    prefixes: HashMap<Prefix, u32>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Prefix {
+    V4_24(u32),
+    V6_56(u64),
+    V6_48(u64),
 }
 
 struct ClientBudget {
@@ -92,13 +101,42 @@ impl Budget {
 impl Rate {
     pub(crate) fn allow(&mut self, ip: IpAddr, now: Instant, client: u32, global: u32) -> bool {
         let global_budget = self.global.get_or_insert_with(|| Budget::new(now));
-        if !global_budget.available(now, global) {
+        if now.duration_since(global_budget.since) >= WINDOW {
+            *global_budget = Budget::new(now);
+            self.prefixes.clear();
+        }
+        if global_budget.used >= global {
             return false;
         }
-        let ip = match ip.to_canonical() {
-            IpAddr::V6(v6) => IpAddr::V6(Ipv6Addr::from(v6.to_bits() & (u128::MAX << 64))),
-            v4 => v4,
+
+        let small_share = (global / 20).max(1);
+        let large_share = (global / 10).max(1);
+        let (ip, small, large) = match ip.to_canonical() {
+            IpAddr::V4(v4) => (IpAddr::V4(v4), Prefix::V4_24(v4.to_bits() >> 8), None),
+            IpAddr::V6(v6) => {
+                let subnet = (v6.to_bits() >> 64) as u64;
+                (
+                    IpAddr::V6(Ipv6Addr::from(u128::from(subnet) << 64)),
+                    Prefix::V6_56(subnet >> 8),
+                    Some(Prefix::V6_48(subnet >> 16)),
+                )
+            }
         };
+        let small_used = self.prefixes.get(&small);
+        let large_used = large.and_then(|key| self.prefixes.get(&key));
+        if small_used.is_some_and(|&used| used >= small_share)
+            || large_used.is_some_and(|&used| used >= large_share)
+        {
+            return false;
+        }
+        // Keep admitted prefix counts until the global window ends. Evicting
+        // them under address churn would allow a prefix to regain its share.
+        let needed =
+            usize::from(small_used.is_none()) + usize::from(large.is_some() && large_used.is_none());
+        if self.prefixes.len() + needed > MAX_PREFIX_BUCKETS {
+            return false;
+        }
+
         self.sequence += 1;
         let entry = self.clients.entry(ip).or_insert_with(|| ClientBudget {
             budget: Budget::new(now),
@@ -113,6 +151,10 @@ impl Rate {
         if allowed {
             entry.budget.used += 1;
             global_budget.used += 1;
+            *self.prefixes.entry(small).or_default() += 1;
+            if let Some(key) = large {
+                *self.prefixes.entry(key).or_default() += 1;
+            }
         }
         if self.clients.len() > MAX_CLIENTS {
             let (_, oldest) = self.recency.pop_first().expect("client recency is populated");
