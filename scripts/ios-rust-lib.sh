@@ -4,6 +4,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+rev=$(git rev-parse HEAD)
+dirty=$(git status --porcelain --untracked-files=no)
 TARGET=aarch64-apple-ios
 OUT="$ROOT/bindings/swift/GalaxyCore"
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target/GalaxyCore}"
@@ -48,8 +50,8 @@ cp "$GEN/galaxy_ffiFFI.modulemap" "$OUT/include/module.modulemap"
 cp "$CARGO_TARGET_DIR/$TARGET/release/libgalaxy_ffi.a" "$OUT/ios-arm64/"
 
 {
-    echo "git: $(git rev-parse HEAD)"
-    if [[ -n "$(git status --porcelain)" ]]; then echo 'worktree: dirty'; fi
+    echo "git: $rev"
+    if [[ -n "$dirty" ]]; then echo 'worktree: dirty'; fi
     echo "rustc: $(rustc --version)"
     echo "cargo: $(cargo --version)"
     echo "target: $TARGET IPHONEOS_DEPLOYMENT_TARGET=$IPHONEOS_DEPLOYMENT_TARGET lto=fat codegen-units=1"
