@@ -2,6 +2,7 @@
   "name": "galaxy-xrpl-vectors",
   "version": "1.0.0",
   "private": true,
+  "license": "UNLICENSED",
   "type": "module",
   "dependencies": {
     "ripple-binary-codec": "2.11.0",

@@ -14,7 +14,7 @@ PHØTON lets anyone verify that a photo from a phone matches a zero-knowledge pr
 [![XRPL Testnet: live](https://img.shields.io/badge/XRPL_Testnet-live-237B57)](#see-it-on-the-ledger)
 [![Groth16 on-device](https://img.shields.io/badge/Groth16-on--device-8B5E26)](#cryptography)
 [![Rust](https://img.shields.io/badge/core-Rust-B44D27)](crates/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-237B57)](LICENSE)
+[![License: All rights reserved](https://img.shields.io/badge/license-all_rights_reserved-8B5E26)](LICENSE)
 
 ## See it on the ledger
 
@@ -132,3 +132,9 @@ target/release/galaxy proof verify F50D1D20B1B784657B941CD291B6EB44B9B332AF63D8A
 ## Team
 
 [Nicola Balzano](https://github.com/nicolabalzano) · [Valerio Bertinetto](https://github.com/uwu-k) · [Diego Lasorsa](https://github.com/utcq) · [Giuseppe Moscatelli](https://github.com/GiuMox) · [Ivan Terracciano](https://github.com/Sx4DoW)
+
+## License
+
+PHØTON is proprietary; all rights reserved. See the [PHØTON Proprietary License](LICENSE). The contents of [`circuits/`](circuits/) are licensed under [GPL-3.0-only](circuits/LICENSE) because they incorporate circomlib. Third-party components remain under their own licenses; see [Third-Party Notices](THIRD_PARTY_NOTICES.md).
+
+PHØTON and the PHØTON logo are trademarks of the copyright holders. No trademark license is granted.

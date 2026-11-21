@@ -4,7 +4,7 @@ members = ["crates/*"]
 
 [workspace.package]
 edition = "2021"
-license = "MIT"
+license = "LicenseRef-Proprietary"
 rust-version = "1.91"
 repository = "https://github.com/Mntcrl/IHX26"
 

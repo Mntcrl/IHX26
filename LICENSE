@@ -1,21 +1,45 @@
-MIT License
+PHØTON — Proprietary License
 
-Copyright (c) 2026 Nicola Balzano, Valerio Bertinetto, Diego Lasorsa, Giuseppe Moscatelli, Ivan Terracciano
+Copyright (c) 2026 Nicola Balzano, Valerio Bertinetto, Diego Lasorsa,
+Giuseppe Moscatelli, Ivan Terracciano. All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This repository and all of its contents, including source code,
+documentation, specifications, designs, images and logos (the "Software"),
+are the proprietary property of the copyright holders, except for the
+components listed under "Exceptions" below.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+No license or right is granted to use, copy, modify, merge, publish,
+distribute, sublicense, sell, deploy or create derivative works of the
+Software, in whole or in part, except:
+
+  (a) viewing the Software and building and running it locally solely to
+      review or judge the project;
+  (b) the rights GitHub's Terms of Service grant to GitHub users for content
+      in public repositories; and
+  (c) as expressly permitted in writing by all copyright holders.
+
+Exceptions:
+  - The contents of circuits/ and the circuit sources and outputs listed
+    below are licensed under the GNU General Public License, version 3 only
+    (GPL-3.0-only), because they incorporate circomlib (GPL-3.0). See
+    circuits/LICENSE. This includes ignored build outputs and copies
+    outside their original locations, including copies installed on devices:
+      - Compiled outputs of circuits/, including R1CS files, witness WASM
+        and graphs, zkeys, verification keys, descriptors and circuit bundles.
+      - test-vectors/prover/fixture.circom and its compiled outputs, including
+        test-vectors/prover/fixture.graph.bin, test-vectors/prover/fixture.r1cs,
+        test-vectors/prover/fixture.zkey, test-vectors/prover/fixture_zkey_new.zkey,
+        test-vectors/prover/vk.bin and test-vectors/prover/vk.json.
+      - test-vectors/verifier/main-v1m/circuit_bundle.bin.
+      - apps/prover-bench-ios/circuit/prover_bench.circom and its generated
+        main.circom and compiled outputs under apps/prover-bench-ios/artifacts/,
+        including the R1CS, witness graph, zkey and verification key.
+  - Third-party components remain under their own licenses. See
+    THIRD_PARTY_NOTICES.md.
+
+PHØTON and the PHØTON logo are trademarks of the copyright holders. No
+trademark license is granted.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+IMPLIED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+DAMAGES OR OTHER LIABILITY ARISING FROM THE SOFTWARE OR ITS USE.
