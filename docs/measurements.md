@@ -1,6 +1,6 @@
-# XRPL Galaxy development measurements
+# PHØTON measurements
 
-Linux desktop, XRPL Testnet (`network_id = 1`). These runs use a development-single-party circuit setup and a development-unattested Ed25519 credential. They are not evidence of Apple App Attest, on-device proving, or an end-to-end `VERIFIED` capture.
+Runs use XRPL Testnet (`network_id = 1`) and a single-party development setup. The earlier desktop runs below use dev-unattested Ed25519 credentials, which cannot yield `VERIFIED`. The [phone run](#first-phone-certified-photo) uses Apple App Attest in the development environment.
 
 ## Testnet registration — initial artifact set
 
@@ -159,7 +159,14 @@ The verdict was unchanged (`UNSUPPORTED`, dev-unattested credential) with `histo
 
 ## First phone-certified photo
 
-The iPhone capture app's third attempt produced a certified `jpeg-v1` directly on the phone. On XRPL Testnet, [CAPTURE `7DEA7F30…`](https://testnet.xrpl.org/transactions/7DEA7F30DBCEBE5461CDC1E57B2E3E66A4F5617D6708F6B0250796B3BF4C369D) validated at 22,494,316, the selection ledger was 22,494,321, and [PROOF `F50D1D20…`](https://testnet.xrpl.org/transactions/F50D1D20B1B784657B941CD291B6EB44B9B332AF63D8A1356C144C94C69C7800) validated at 22,494,467. The verifier accepted Apple App Attest in the development environment and circuit `a0bed7f1cdad94c33f9ff22e8b6cdd1bdb7e7f873ce73c8038e8a403213fa68b`.
+The PHØTON iPhone app's third attempt produced a certified `jpeg-v1` directly on the phone. The phone's [DEVICE manifest](https://testnet.xrpl.org/transactions/76D0884DDC2129FCE8D906B92468943D12377418711B5A111A07C2379FAC7A91) validated at ledger 22,493,823. [CAPTURE `7DEA7F30…`](https://testnet.xrpl.org/transactions/7DEA7F30DBCEBE5461CDC1E57B2E3E66A4F5617D6708F6B0250796B3BF4C369D) validated at 22,494,316, selection was at 22,494,321, and [PROOF `F50D1D20…`](https://testnet.xrpl.org/transactions/F50D1D20B1B784657B941CD291B6EB44B9B332AF63D8A1356C144C94C69C7800) validated at 22,494,467. The PROOF signed the CAPTURE's hash as its `AccountTxnID`. The verifier accepted Apple App Attest in the development environment and the [final calibrated circuit](#testnet-registration--final-calibrated-artifact-set).
+
+| First phone photo, from validated Testnet records | MemoData | Signed blob | Fee |
+|---|---:|---:|---:|
+| CAPTURE (App Attest) | 442 B | 673 B | 10 drops |
+| PROOF | 361 B | 590 B | 10 drops |
+
+Sizes are from the XRPL `tx` responses: decoded hexadecimal `MemoData` and binary signed transaction. The validated close times were 12 s apart from CAPTURE to selection and 502 s apart from CAPTURE to PROOF for this first capture. These are ledger intervals, not handset timings.
 
 The native report summary was “Physical consistency verified under Galaxy policy galaxy-pc-v1m (4ad25185f11bfb52af5dee5a1ab39d4e2428c1c83188c7483db1777d22367073).” Direct verification passed 39 checks:
 
@@ -184,3 +191,15 @@ The native report summary was “Physical consistency verified under Galaxy poli
 | macOS Chrome, original JPEG, default live XRPL | `VERIFIED` | 6.153 s |
 
 The local node took 149.287 s to index the contiguous range 22,494,316–22,494,467. This was a deliberately bounded index, not complete Testnet history. Stripping XMP left the canonical raster unchanged. Linux Chromium's full report on the 13 replayed RPC calls matched the native report except for the RPC endpoint label. Both live browsers and the macOS CLI agreed with the Linux CLI on the verdict, the image binding, transaction references, and every check status; the live runs consulted different validated tips.
+
+## On-device proving and capture timings
+
+The [device acceptance run](PROGRESS.md#acceptance-criteria-brief-25) recorded these ranges on iPhone 13 Pro Max; the shutter-to-certified range is not a timing for the first historical transaction pair above.
+
+| Quantity | Measured |
+|---|---:|
+| Groth16 circuit constraints | 876,639 |
+| Witness generation | 0.27–0.38 s |
+| Groth16 proving | 6.2–9.1 s |
+| Peak physical memory footprint | ~1.0 GiB |
+| Shutter to certified | 35–46 s |

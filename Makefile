@@ -34,13 +34,13 @@ endef
 	test integration-test doctor
 
 help:
-	@echo "Targets:"
+	@echo "PHØTON (Galaxy v1 protocol) — targets:"
 	@echo "  doctor                        environment report (scripts/doctor.sh)"
 	@echo "  core-build core-test          Rust workspace (native; galaxy-wasm checked for wasm32)"
-	@echo "  ios-build ios-install ios-run capture app on the Mac + device (scripts/ios.sh); build/install/run alias these"
+	@echo "  ios-build ios-install ios-run PHØTON capture app on the Mac + device (scripts/ios.sh); build/install/run alias these"
 	@echo "  circuit-build circuit-test circuit-setup-dev   circom circuit (scripts/circuit.sh)"
 	@echo "  node-build node-run node-test galaxy-node daemon (scripts/node.sh)"
-	@echo "  verifier-build verifier-run verifier-test   browser verifier (scripts/web.sh)"
+	@echo "  verifier-build verifier-run verifier-test   PHØTON browser verifier (scripts/web.sh)"
 	@echo "  test                          core + circuit + node + verifier tests"
 	@echo "  integration-test              end-to-end Testnet run (scripts/integration-test.sh)"
 	@echo "Variables: DEVICE=$(DEVICE) MAC_HOST=$(MAC_HOST) MAC_MIRROR=$(MAC_MIRROR) NETWORK=$(NETWORK)"

@@ -1,7 +1,7 @@
-//! Permissionless Galaxy verifier node (spec §14): XRPL backfill and live
-//! subscription into a disposable SQLite cache, autonomous proof-only
-//! verification, a versioned REST API and signed peer discovery. Nodes never
-//! decide validity; every response is a hint that clients verify locally.
+//! PHØTON lookup node (Galaxy v1 protocol, spec §14): XRPL backfill and live
+//! subscription into a disposable SQLite cache, proof-only verification, a
+//! versioned REST API, and signed peer discovery. Nodes do not decide validity;
+//! clients verify candidate references independently.
 
 mod api;
 mod client;

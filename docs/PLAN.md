@@ -1,6 +1,6 @@
-# XRPL Galaxy — Implementation Plan (docs/PLAN.md)
+# PHØTON implementation plan
 
-Normative spec: `docs/protocol/galaxy-v1-spec.md` (derived from `arch.docx`, the primary reference). Progress and measurements: `docs/PROGRESS.md`. Decisions: `docs/adr/`.
+PHØTON implements the [Galaxy v1 protocol](protocol/galaxy-v1-spec.md), derived from the [original architecture reference](reference/XRPL_Galaxy_Architettura_v1.docx). See [progress](PROGRESS.md), [measurements](measurements.md) and [architecture decisions](adr/README.md).
 
 ## Starting point (inventory 2026-11-20)
 - iOS app (history imported from the Mac remote `mac/main`, 7 commits): SwiftUI + ARKit (`sceneDepth`), rolling buffers, CoreMotion 100 Hz, CoreBluetooth HMAC-dedup scanner, SHA-256 Merkle commitment, App Attest client talking to a project backend, Secure Enclave signing, POV committee client (Shamir/HPKE shares to a coordinator at a LAN address).

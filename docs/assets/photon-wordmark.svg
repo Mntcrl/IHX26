@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="360" height="96" viewBox="0 0 360 96" role="img" aria-labelledby="title">
+  <title id="title">PHØTON</title>
+  <rect width="360" height="96" rx="16" fill="#16171b"/>
+  <g transform="translate(27 24)" fill="none" stroke="#f4f1e9" stroke-width="8" stroke-linejoin="round">
+    <path d="M4 48V0h22a12 12 0 0 1 0 24H4M57 0v48m33-48v48M57 24h33M159 0h42m-21 0v48M268 48V0l35 48V0"/>
+    <rect x="215" width="32" height="48" rx="16"/>
+    <rect x="111" width="32" height="48" rx="16" stroke="#eac584"/>
+    <path d="M105 49 149-1" stroke="#eac584"/>
+  </g>
+</svg>

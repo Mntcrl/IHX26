@@ -1,6 +1,6 @@
-# XRPL Galaxy — Threat and trust model (v1)
+# PHØTON threat and trust model
 
-Scope: protocol `galaxy/v1`, policy `galaxy-pc-v1m`, XRPL Testnet. Normative details: [spec](../protocol/galaxy-v1-spec.md). Decisions: [ADR 0006](../adr/0006-trust-model.md). Code-level review findings are recorded separately in `docs/security/review-*.md`.
+Scope: Galaxy v1 protocol (`galaxy/v1`), policy `galaxy-pc-v1m`, XRPL Testnet. See the [specification](../protocol/galaxy-v1-spec.md), [trust-model decision](../adr/0006-trust-model.md) and [code-level review and remediation](review-2026-11-21.md).
 
 What a positive result means: the photograph's canonical raster is bound to a CAPTURE published by a registered (App Attest) app instance, and a Groth16 proof shows that the committed sensor evidence, opened at positions chosen by a ledger after the commitment, satisfies the public physical-consistency policy. It does **not** prove that the scene is real, that the sensors were not fed synthetic data, or that the photo depicts what a viewer believes it depicts.
 

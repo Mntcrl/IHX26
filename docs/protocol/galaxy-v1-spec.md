@@ -1,6 +1,6 @@
-# XRPL Galaxy v1 — Protocol Specification and Engineering Contract
+# Galaxy v1 protocol, implemented by PHØTON
 
-Primary protocol reference: `arch.docx` (repo root, Italian, "XRPL_Galaxy_Architettura_v1"). This contract resolves its open points and is the normative spec for every workstream; it will live in the repo as `docs/protocol/galaxy-v1-spec.md`. Deviations from arch.docx are listed in §18 and each has an ADR in `docs/adr/`. If you find a contradiction, an infeasible requirement, or a formula that cannot be implemented exactly, STOP that sub-part and message the orchestrator (your final report, or `write agent://<orchestrator>` if available); never diverge silently. Changes to this contract are made only by the orchestrator.
+This specification is the normative protocol and engineering contract. It resolves open points in the [original Italian architecture reference](../reference/XRPL_Galaxy_Architettura_v1.docx) (`arch.docx`); deviations are listed in §18 and each has an ADR in [`docs/adr/`](../adr/README.md). If a requirement is contradictory or infeasible, or a formula cannot be implemented exactly, stop that part and contact the orchestrator rather than diverging. Changes to this contract are made only by the orchestrator.
 
 ## 0. Ground rules (all agents)
 - Real implementations only: no mocked proofs, hardcoded VERIFIED, simulated attestations, fake success paths, stubs, TODO placeholders. Test-only paths (desktop prover, synthetic scenes, dev-unattested credential) are allowed only when explicitly labelled and impossible to confuse with certified results.

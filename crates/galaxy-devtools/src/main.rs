@@ -23,7 +23,7 @@ pub(crate) const DEVELOPMENT: &str = "development";
 const NETWORK: u32 = 1;
 
 #[derive(Parser)]
-#[command(about = "XRPL Galaxy development tools — not a certification path")]
+#[command(about = "PHØTON development tools — not a certification path")]
 struct Args {
     #[arg(long, global = true, default_value = "deployments/networks/xrpl-testnet.toml")]
     config: PathBuf,

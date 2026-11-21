@@ -23,7 +23,11 @@ const DEFAULT_CONFIG: &str = include_str!("../../../deployments/networks/xrpl-te
 const NODE_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Parser)]
-#[command(name = "galaxy", version, about = "XRPL Galaxy verifier and protocol tools")]
+#[command(
+    name = "galaxy",
+    version,
+    about = "PHØTON verifier (Galaxy v1 protocol)"
+)]
 struct Cli {
     #[command(flatten)]
     global: Global,

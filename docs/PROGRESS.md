@@ -1,8 +1,8 @@
-# XRPL Galaxy — Progress
+# PHØTON implementation progress
 
 Status values: DONE (demonstrated, evidence linked), PARTIAL (some evidence, gaps listed), IN PROGRESS (code exists, not yet demonstrated), INCOMPLETE (not demonstrated; reason given). Measurements come only from real runs; anything else is labelled [INFERENCE].
 
-Normative spec: [`docs/protocol/galaxy-v1-spec.md`](protocol/galaxy-v1-spec.md). Plan: [`docs/PLAN.md`](PLAN.md). Decisions: [`docs/adr/`](adr/README.md). Incidents: [`docs/incidents/`](incidents/).
+Protocol: [Galaxy v1 specification](protocol/galaxy-v1-spec.md). [Plan](PLAN.md) · [Decisions](adr/README.md) · [Incidents](incidents/).
 
 Last update: 2026-11-21 10:45 CET (orchestrator).
 
@@ -33,7 +33,7 @@ Phone evidence (2026-11-21): the iPhone 13 Pro Max app, registered with App Atte
 
 | # | Criterion | Status | Reason / evidence |
 |---|---|---|---|
-| 1 | Launch XRPL Galaxy on the physical iPhone 13 Pro Max | DONE | signed builds installed in place and run on the device (launch crash fixed: CoreMotion handler isolation) |
+| 1 | Launch PHØTON on the physical iPhone 13 Pro Max | DONE | signed builds installed in place and run on the device (launch crash fixed: CoreMotion handler isolation) |
 | 2 | Capture a synchronized photograph with actual LiDAR and complementary sensor evidence | DONE | t−/t0/t+ RGB, depth, confidence, poses, IMU, Bluetooth/noise aggregates; readiness gates for tracking and depth |
 | 3 | Generate the canonical image and evidence commitments | DONE | on the device via GalaxyCore (ingest + commitments ~0.9–1.0 s); the CAPTURE commitments match the Linux recomputation |
 | 4 | Authenticate the capture using the implemented attestation mechanism | DONE | App Attest (development environment) registration + per-capture assertion; verifier checks `registration.attestation`, `capture.assertion`, `capture.counter` |

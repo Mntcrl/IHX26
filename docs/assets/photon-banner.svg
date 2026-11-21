@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-labelledby="title description">
+  <title id="title">PHØTON</title>
+  <desc id="description">The PHØTON wordmark beside a gold camera reticle on a dark field.</desc>
+  <defs>
+    <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path d="M0 24V0h24" fill="none" stroke="#353943"/>
+    </pattern>
+    <radialGradient id="light">
+      <stop stop-color="#79613d" stop-opacity=".54"/>
+      <stop offset="1" stop-color="#79613d" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x=".5" y=".5" width="1199" height="319" rx="20" fill="#16171b" stroke="#373841"/>
+  <rect x="707" y="36" width="453" height="248" rx="12" fill="#1b1e25"/>
+  <rect x="707" y="36" width="453" height="248" rx="12" fill="url(#grid)"/>
+  <circle cx="933" cy="160" r="116" fill="url(#light)"/>
+  <g fill="none" stroke="#62646e">
+    <path d="M749 91V75h37m295 0h37v16m0 138v16h-37m-295 0h-37v-16"/>
+    <path d="M788 160h290m-145-111v222" stroke-dasharray="3 6"/>
+    <circle cx="933" cy="160" r="105" stroke-dasharray="1 5"/>
+    <circle cx="933" cy="160" r="77"/>
+    <circle cx="933" cy="160" r="41"/>
+  </g>
+  <g fill="none" stroke="#eac584">
+    <circle cx="933" cy="160" r="92" opacity=".7"/>
+    <path d="M913 160h40m-20-20v40m-67-69v-18h18m98 0h18v18m0 98v18h-18m-98 0h-18v-18"/>
+    <path d="M792 218h26l21-27m188-62 21-27h26" opacity=".8"/>
+  </g>
+  <g fill="#eac584">
+    <circle cx="933" cy="160" r="4"/>
+    <circle cx="818" cy="218" r="3"/>
+    <circle cx="1048" cy="102" r="3"/>
+  </g>
+  <g transform="translate(65 110) scale(1.78)" fill="none" stroke="#f4f1e9" stroke-width="8" stroke-linejoin="round">
+    <path d="M4 48V0h22a12 12 0 0 1 0 24H4M57 0v48m33-48v48M57 24h33M159 0h42m-21 0v48M268 48V0l35 48V0"/>
+    <rect x="215" width="32" height="48" rx="16"/>
+    <rect x="111" width="32" height="48" rx="16" stroke="#eac584"/>
+    <path d="M105 49 149-1" stroke="#eac584"/>
+  </g>
+  <path d="M66 233h546" stroke="#3e414a"/>
+  <circle cx="72" cy="256" r="3" fill="#eac584"/>
+  <text x="86" y="261" fill="#eac584" font-family="monospace" font-size="15" letter-spacing="3">ON-DEVICE PROOF · XRP LEDGER</text>
+</svg>
