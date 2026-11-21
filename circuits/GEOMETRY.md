@@ -27,7 +27,7 @@ On a policy change, regenerate the Circom constants, protocol policy vector and 
 
 ## Constraint measurements
 
-Circom 2.2.3, standalone `GalaxyPolicyV1m`, policy `f3999a9faa4d5ff2af9e6cf9be7ebd5da3122bc4ab7475db9be63bb220016638`:
+Circom 2.2.3, standalone `GalaxyPolicyV1m`, policy `4ad25185f11bfb52af5dee5a1ab39d4e2428c1c83188c7483db1777d22367073`:
 
 | Optimization | R1CS rows | Purpose |
 |---|---:|---|
