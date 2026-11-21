@@ -28,12 +28,7 @@ accepted_app_ids = ["PPS57BF3X3.utcq.XRPL-Galaxy"]
 # (Dev-unattested credentials have no environment and can never reach VERIFIED.)
 accepted_attestation_environments = ["development", "production"]
 
-# Empty until the circuit is registered on Testnet (CIRCUIT manifest tx). Entry shape:
-# [[accepted_circuits]]
-# circuit_id = "<64 hex>"
-# vk_digest = "<64 hex>"
-# policy_id = "<64 hex>"
-# registration_tx = "<64 hex CIRCUIT manifest tx hash>"
+# Final calibrated development circuit, registered on XRPL Testnet.
 
 # Offline test vector: development circuit (tests/support), never a real trust anchor.
 [[accepted_circuits]]

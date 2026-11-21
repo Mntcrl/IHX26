@@ -29,7 +29,8 @@ export function accountSetVectors() {
       // Exercise the two-byte variable-length prefix and data that is not UTF-8.
       memo_data: hex(Buffer.from(Array.from({ length: 193 }, (_, i) => 255 - i))),
     },
-  ].map(({ network_id, sequence, memo_data }) => {
+    { network_id: 1, sequence: 3, memo_data: '000102FF', account_txn_id: '03'.repeat(32) },
+  ].map(({ network_id, sequence, memo_data, account_txn_id }) => {
     const unsigned = {
       TransactionType: 'AccountSet',
       Account: wallet.classicAddress,
@@ -37,6 +38,7 @@ export function accountSetVectors() {
       Fee: '12',
       LastLedgerSequence: 50,
       ...(network_id <= 1024 ? {} : { NetworkID: network_id }),
+      ...(account_txn_id ? { AccountTxnID: account_txn_id } : {}),
       Memos: [{ Memo: {
         MemoType: ascii(memoType),
         MemoFormat: ascii('application/octet-stream'),

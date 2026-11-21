@@ -36,7 +36,15 @@ Normative text: spec §10 (wire formats), §12 (XRPL conventions), §13 (LedgerS
 
 ## Galaxy transactions
 
-AccountSet with the common fields only (`Account`, `Fee`, `Sequence`, `LastLedgerSequence`, `SigningPubKey`, `TxnSignature`, `NetworkID` only for network ids > 1024) and exactly one Memo: `MemoType` = ASCII type (hex on the wire), `MemoFormat` = `application/octet-stream`, `MemoData` = payload. `decode_galaxy_object` rejects any other AccountSet field (e.g. `SetFlag`), extra memos, a wrong MemoFormat or a NetworkID inconsistent with the network.
+Galaxy AccountSets carry only common fields and exactly one Memo. The decoder
+checks the Memo envelope and the Ed25519 master-key signature: the public key
+must derive `Account`. Device-account publications also sign `AccountTxnID`:
+the hash of the last successful transaction sent by that account, or zero
+for the first device chunk after tracking is enabled. `AccountSet` with
+`SetFlag: 5` and **no Memo** enables tracking; it is not a Galaxy record.
+CIRCUIT records may omit `AccountTxnID`. A CAPTURE or DEVICE manifest without
+a nonzero predecessor is invalid; a PROOF without one is not a candidate.
+A valid REVOKE remains effective without the field.
 
 MemoType namespaces: `galaxy/v1/*` for protocol records (spec §10); `galaxy/test/*` for every test and measurement transaction (`registry::Namespace::Test`). Readers of one namespace never consider records of the other.
 
@@ -44,7 +52,7 @@ MemoType namespaces: `galaxy/v1/*` for protocol records (spec §10); `galaxy/tes
 
 | Data | Source of truth |
 |---|---|
-| Transaction content (all fields, memo) | Cryptographic: the hash is recomputed from `tx_blob` and must equal the requested hash (`tx`) or the listed hash (`account_tx`, `ledger`); the content is therefore bound to the hash the caller holds. |
+| Transaction content (all fields, memo) | The blob must hash to the requested transaction ID. Galaxy records must also verify under the account's Ed25519 master key; fields in history and chunks cannot be substituted without invalidating the signature. |
 | `validated`, `TransactionResult`, `TransactionIndex`, ledger index, ledger hash, close time, `complete_ledgers` | RPC-trusted (`proven_by: ledger-rpc`). A light client cannot check validator signatures or state proofs. |
 | Network | `server_info.network_id` must equal the configured network before every operation, on each endpoint, over the same connection type used for the operation (HTTP preflight per request, WebSocket `server_info` before `subscribe`). Network id 0 (mainnet) is refused unless `allow_mainnet = true`. |
 
@@ -52,9 +60,21 @@ Remote endpoint (default, `s.altnet.rippletest.net`): a dishonest or compromised
 
 ## LedgerSource and native client
 
-`LedgerSource` (spec §13): `tx(hash) → Option<LedgerTx>` (blob, meta blob, TransactionResult, TransactionIndex, ledger index, validated, close time), `ledger_header(index)` (hash, parent hash, close time, validated), `account_tx(account, min, max, marker, limit)` (validated range, opaque marker), `server_info()` (network id, complete_ledgers, validated ledger). `RpcLedger<T: RpcTransport>` implements it over any transport (WASM uses a JS callback); `RpcClient` is the native transport. `RpcClient::ledger_transactions(index)` returns a validated ledger header with all its binary transactions sorted by TransactionIndex (node backfill).
+`LedgerSource` (spec §13): `tx(hash)` (binary transaction and metadata, order,
+result and validation status), `ledger_header(index)`, `account_root(account, index)`
+(validated `AccountTxnID` via `account_info`), `account_tx(account, min, max, marker, limit)`
+and `server_info()`. `LedgerTx::previous_account_txn_id` reads the RPC metadata
+link for a transaction that did not sign one. `RpcLedger<T: RpcTransport>`
+works with native, browser and recording transports. Native
+`ledger_transactions` provides an indexed full validated ledger for node backfill.
 
-`RpcClient` (feature `native`): HTTPS only (HTTP only for loopback rippled); redirects never followed; no proxy; connect timeout 5 s, request timeout 15 s; response caps 64 KiB (preflight), 8 MiB (commands), 32 MiB (ledger backfill), enforced with and without `Content-Length`. Read transport failures and `ledger`/`tx` history misses try the next endpoint; a complete `searched_all: true` transaction search is definitive for its queried range. Use a single endpoint for a paginated `account_tx` scan because markers are server-specific. A `submit` is never retried on another endpoint (an ambiguous write is resolved by the submission state machine).
+`RpcClient` (feature `native`): HTTPS only except loopback rippled; no redirects
+or proxies; connect timeout 5 s, request timeout 15 s; response caps 64 KiB
+(preflight), 8 MiB (commands), 32 MiB (backfill). CLI and node verification use
+`pinned_endpoints()` for whole-attempt failover; the browser uses an explicit
+endpoint index per attempt. Reports label the endpoint used. Other RPC callers
+may use per-request failover for reads; a `submit` is never retried on another
+endpoint (an ambiguous write is resolved by the submission state machine).
 
 `Subscription` (WebSocket, `wss://` only, message/frame cap 4 MiB): `server_info` network check, then `subscribe` to `ledger` + `transactions`. The first event after every (re)connection is `Connected { ledger_index, ledger_hash }` (the validated tip); notifications received before the subscribe acknowledgement are buffered and delivered after it. Events: `LedgerClosed` (index, hash, close time, transaction count) and `Transaction` notices (hash, ledger, TransactionIndex, result, untrusted Galaxy memo hint; only validated transactions). A disconnect, an idle stream (45 s), a malformed message or a network mismatch returns `Err`; the next `next_event` reconnects after 1 s, rotating endpoints, and the caller must backfill from its last durable checkpoint to the new tip (no events are synthesized or replayed across a gap). Live check (2026-11-20, `native::tests::testnet_ws_tip_matches_http_backfill`): the subscription tip and the next `ledgerClosed` (ledger 22482048, 26 transactions) matched HTTP backfills (hash, close time, transaction count; all 26 transaction notices present with equal TransactionIndex and result).
 
@@ -63,6 +83,8 @@ Remote endpoint (default, `s.altnet.rippletest.net`): a dishonest or compromised
 `Submitter<R: RpcTransport, S: TxStore>`, constructed with `network_id`, `allow_mainnet`, `max_fee_drops`:
 
 1. `prepare(purpose, wallet, memo, deadline)`: if the store holds a record for `purpose`, return it unchanged after checking that it binds the same account, memo and deadline (it never re-signs). Otherwise autofill from validated data — `server_info` (network check, validated ledger *V*), `fee` (`open_ledger_fee`, refused above `max_fee_drops`), `account_info` at ledger *V* (Sequence) — set `LastLedgerSequence = min(V + 20, deadline)`, sign, and persist `{purpose, hash, blob, network_id, first_possible_ledger = V + 1, last_ledger}` with an atomic compare-and-swap **before** any submit.
+   For device-account publications, validated `account_info` also supplies
+   the predecessor (`AccountTxnID`); it is signed and persisted with the blob.
 2. `submit_saved(pending)`: submits exactly the persisted bytes (verified against the store, fee cap rechecked), refuses once the validated ledger reached `last_ledger`. Engine results are provisional.
 3. `run(pending, delay)`: look up the hash; if not final and still open, submit; poll; every `REBROADCAST_POLLS` (8) pending polls rebroadcast the identical blob (same hash and Sequence, so at most one copy can apply). Returns `Validated(tx)` or `Expired`.
 4. `state(pending)`: `Validated` requires the returned blob to equal the persisted blob, `validated = true`, a ledger inside `first_possible_ledger..=last_ledger` and a `tes`/`tec` result. `Expired` requires both a validated ledger > `last_ledger` and a `tx` lookup bounded to `min_ledger..max_ledger` that reports `searched_all: true`; a bare `txnNotFound` is never treated as expiry.
@@ -82,14 +104,20 @@ Owned types only (`String`, `Vec<u8>`, integers, records, fieldless enums, `Opti
 
 ## Registry (spec §10)
 
-Publishing (`publish_bundle_in(submitter, wallet, namespace, kind, bytes, delay)`): bundle ≤ 1 MiB → `bundle_id = ids::bundle_id(bytes)` → chunks of ≤ 800 payload bytes (`ChunkMemo`) → one chunk transaction each, strictly serial, each validated with `tesSUCCESS` before the next → manifest (`DeviceManifest` / `CircuitManifest`) with the ledgers of the first and last chunk → manifest transaction. Purposes `registry/<network>/<account>/<kind>/<bundle_id>/…` make the whole publication resumable after a crash without re-signing.
+Publishing (`publish_bundle_in(submitter, wallet, namespace, kind, bytes, delay)`):
+before DEVICE chunks, enable tracking once with a journaled, validated,
+memo-free AccountSet if needed. Then publish the ≤ 1 MiB bundle in chunks of
+≤ 800 payload bytes, strictly serial, each validated with `tesSUCCESS` before
+the next. The manifest commits the first and last chunk ledgers. Stable
+`registry/<network>/<account>/<kind>/<bundle_id>/…` journal purposes allow
+resuming without re-signing.
 
 Retrieval (`fetch_bundle_in(source, manifest_tx, network, allow_mainnet, namespace)`): manifest tx by hash (hash recomputed) → validated ∧ tesSUCCESS → manifest decode, network and (DEVICE) account / registration ledger checks → `complete_ledgers` must cover `first..last` (otherwise `HistoryUnavailable`) → `account_tx(account, first, last)` with all pages (marker loop bounded, repeated marker rejected) → records naming this bundle id are validated and collected. Rejections (each covered by `tests/registry.rs`):
 
 | Condition | Result |
 |---|---|
-| Chunk tx unvalidated or not `tesSUCCESS` | `Invalid` |
-| Wrong MemoType, other account, ledger outside `first..last`, or at/after the manifest position (ledger, TransactionIndex) | `Invalid` |
+| Unvalidated, failed, mis-signed, third-party, or wrong-namespace row | Ignored and counted; a missing required chunk still rejects retrieval |
+| Correctly signed chunk for this bundle outside `first..last` or at/after the manifest position | `Invalid` |
 | `bundle_id` / `total` mismatch, `index ≥ total` | `Invalid` |
 | Two different payloads for the same index (conflicting duplicate) | `Invalid`; identical duplicates are ignored |
 | Gap (missing index) or first/last chunk ledger differs from the manifest | `Invalid` |
@@ -103,7 +131,9 @@ Retrieval (`fetch_bundle_in(source, manifest_tx, network, allow_mainnet, namespa
 
 ### Serialized sizes of v1 records (offline, `xrpl-tool measure`)
 
-Signed AccountSet with `Fee`, `Sequence`, `LastLedgerSequence`, ed25519 signing key and signature, one Memo; no NetworkID (Testnet id 1). Sizes are exact byte counts of the signed blob; `Memos` = blob minus the same transaction re-encoded without `Memos`.
+Legacy pre-hardening baseline (no AccountTxnID), signed AccountSet with one
+Memo. A device record carrying AccountTxnID adds 33 B to the blob but does
+not change the Memos field size.
 
 | Record | MemoData (B) | Memos field (B) | Signed blob (B) |
 |---|---:|---:|---:|
@@ -167,6 +197,57 @@ The retriever rejected these validated `galaxy/test/*` manifests:
 An honest validated `account_tx` cannot return an unvalidated row or an AccountSet from a different account. The test exercises those two checks by altering the first CIRCUIT chunk row of an otherwise live Testnet response; both were rejected without submitting an altered row.
 
 Explorer: `https://testnet.xrpl.org/transactions/<hash>`.
+
+### Testnet account-history tests (2026-11-21)
+
+Fresh faucet accounts A `rN8crTvZHvpFpv6g3ZDUsyrKPQDHHFkTPB` and B
+`rnJ23Q2mVqjTtvNbZRhDNHDKVk1aZJHmmM`; memos under `galaxy/test/deposit-auth/*`.
+The AccountRoot column matches `ModifiedNode.LedgerIndex`, **not**
+`FinalFields.Account` (thread-only nodes lack `FinalFields`).
+
+| Transaction | Hash | Ledger | TransactionResult | A's AccountRoot ModifiedNode | Listed by A's `account_tx` |
+|---|---|---:|---|---|---|
+| A: AccountSet `SetFlag: 9` + Memo | `A08DF8F02C840C3D96DF97846BFDEF60B043C37B26A2D18C29E86443E925BF15` | 22486054 | `tesSUCCESS` | yes | yes |
+| B: Payment to A | `E91B2E954F25028BC39EC720F398942087666E4F48503ED1F4F5C7483FCA0BCF` | 22486056 | `tecNO_PERMISSION` | no | no |
+| B: TrustSet with A as issuer | `4095843B4A470FE02C51F96F5D30E365A30F3574BCF9F5DE6CA132BB8420439E` | 22486058 | `tesSUCCESS` | yes (thread only) | yes |
+| B: EscrowCreate to A | `FD5B8E6D3C5AE66F3AC31D40A4A6B94468B200DC7B787A48808528868C40A732` | 22486060 | `tesSUCCESS` | yes (thread only) | yes |
+| B: SetRegularKey naming A | `47E382E3FFC165BC2EB3282CE7FFFC70E83C90FA6BF099E019B612C6641C64E7` | 22486062 | `tesSUCCESS` | no | yes |
+
+At validated ledger 22486062, A's flags were `0x01000000` (`lsfDepositAuth`)
+and `PreviousTxnID` walked from B's EscrowCreate to B's TrustSet, A's AccountSet,
+and finally the faucet Payment `D14412E50CCBA8F1BDEA030AC629A151B573FC47C977D6099C54139F77C4C448`
+(created A in ledger 22486052). This disproves owner-only `PreviousTxnID`
+threading even with DepositAuth enabled.
+
+Separate fresh faucet accounts A `raasnzjwGpGRXgHmuMPqnHYPWr9uERg9Fn` and B
+`rEG7YM9F2rZcwvqTrmo5xVYsq4CDNXGeF`; memos under
+`galaxy/test/account-txn-id/*` except the memo-free preparation transaction.
+
+| Transaction | Hash | Ledger | Result | A's `AccountTxnID` after |
+|---|---|---:|---|---|
+| A: AccountSet `SetFlag: 5` | `2AAA0576BF841B1E6BF21EA368A080815024A7D910D89ECEBB8670BB62B69EF2` | 22486124 | `tesSUCCESS` | all-zero sentinel |
+| A: first chained AccountSet | `F7EBDC587AA2C34E2C904479852996BBAA4EA69A017EFF10926E041EDDED9FBA` | 22486126 | `tesSUCCESS` | first AccountSet hash |
+| A: second chained AccountSet | `81E36C9EC7CB4A402C00F73A5734719AD76A4784CB9C7A2B6025A8AD7BA146B5` | 22486128 | `tesSUCCESS` | second AccountSet hash |
+| A: AccountSet with wrong prior | `C3031E1476C9516975B2AE5BB7732027FB26EC6951269755EC6844D810FD602A` | — | submit `tefWRONG_PRIOR` | unchanged |
+| B: Payment to A | `4C529A59C0D0D4B172DD528E09142BBD070A35548FCA6BEDCA686EA8E146D1D6` | 22486130 | `tesSUCCESS` | unchanged |
+| B: TrustSet with A as issuer | `198E852A7555FDBA11DC37B307551DBE7EF1AAF64500AB3784B63E48B22FCD53` | 22486132 | `tesSUCCESS` | unchanged |
+| B: EscrowCreate to A | `A6477BDE4D6BC5DEEE14391C56A0AC2A009FDF5DD0EF54BC1EC1B9D872AF170A` | 22486134 | `tesSUCCESS` | unchanged |
+| B: SetRegularKey naming A | `78657BF798211B4C862F34245D41196D3CE75E7A650E93951D6078DA5DDA0001` | 22486136 | `tesSUCCESS` | unchanged |
+| A: 1-drop Payment to an unfunded destination | `048976BCCE8E8F2E64BE663D181C7D018FD94699C7F4144F94E53B362C300952` | 22486138 | `tecNO_DST_INSUF_XRP` | unchanged |
+
+The failed own Payment advanced `PreviousTxnID`, not `AccountTxnID`. The
+first successful transaction after setup explicitly signed the all-zero value;
+the second signed the first transaction's hash. The verifier walks this
+separate own-success chain, not `PreviousTxnID`.
+
+The hardened registry test passed in 149.63 s. In its round trip, wallet
+`rH8rVRgV8tuygJQ3v2h2uPyBwsngi2xpmP` first validated the memo-free SetFlag 5
+`38C9311729CCBFB7318D8C3371B989932D52C2C345D2F3C0095D0E8298A7D2CE` (22489326),
+then the zero-predecessor device chunk
+`092A7A4A98001D9C89DBAA16512086CEEBDD6B690948492260F1187FA8C8DA68` (22489328),
+then the linked `galaxy/test/device` manifest
+`3A5DA53149EF3EA4E31ADF9E2791EA2D57E4EBF1457D1EC1FB33D23124BC37F3` (22489330).
+The AccountRoot at 22489330 named that manifest as its `AccountTxnID`.
 
 ## xrpl-tool
 

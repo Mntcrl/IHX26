@@ -3,7 +3,7 @@
 use galaxy_protocol::{ids, wire::{ChunkMemo, CircuitBundle, CircuitManifest, MemoKind}};
 use galaxy_xrpl::registry::{fetch_bundle_in, BundleKind, Namespace};
 use galaxy_xrpl::keys::Wallet;
-use galaxy_xrpl::ledger::{AccountTxPage, LedgerHeader, LedgerTx, ServerInfo};
+use galaxy_xrpl::ledger::{AccountRoot, AccountTxPage, LedgerHeader, LedgerTx, ServerInfo};
 use galaxy_xrpl::registry::fetch_bundle;
 use galaxy_xrpl::transaction::{AccountSet, Memo};
 use galaxy_xrpl::{AccountId, Error, Hash32, LedgerSource};
@@ -22,6 +22,7 @@ impl LedgerSource for History {
         Ok((hash == &self.manifest.hash).then(|| self.manifest.clone()))
     }
     async fn ledger_header(&self, _: u32) -> Result<LedgerHeader, Error> { panic!("unexpected header query") }
+    async fn account_root(&self, _: &AccountId, _: u32) -> Result<AccountRoot, Error> { panic!("unexpected AccountRoot query") }
     async fn account_tx(&self, _: &AccountId, min: u32, max: u32, marker: Option<Value>, _: u16) -> Result<AccountTxPage, Error> {
         assert_eq!((min, max), (100, 102));
         if let Some(marker) = marker {
@@ -44,7 +45,7 @@ fn record(wallet: &Wallet, kind: MemoKind, data: &[u8], ledger_index: u32) -> Le
 
 fn record_typed(wallet: &Wallet, kind: &str, data: &[u8], ledger_index: u32) -> LedgerTx {
     let tx = AccountSet { account:wallet.account_id(), sequence:1, fee_drops:10, last_ledger_sequence:105,
-        network_id:1, memo:Memo { kind, data } }.sign(wallet).unwrap();
+        network_id:1, account_txn_id:None, memo:Memo { kind, data } }.sign(wallet).unwrap();
     LedgerTx { hash:tx.hash, tx_blob:tx.blob, meta_blob:Vec::new(), transaction_result:"tesSUCCESS".into(),
         transaction_index:0, ledger_index, validated:true, close_time:None }
 }
@@ -112,12 +113,20 @@ async fn reconstruct_pages_and_reject_conflicts_gaps_and_untrusted_records() {
     last.payload[0] ^= 1;
     history.extra = Some(record(&wallet, MemoKind::CircuitChunk, &last.encode(), 102));
     assert!(fetch(&history).await.unwrap_err().to_string().contains("conflicting"));
+    let forged = history.extra.as_mut().unwrap();
+    let mut object = galaxy_xrpl::codec::decode(&forged.tx_blob).unwrap();
+    object["TxnSignature"] = json!(hex::encode_upper([1; 64]));
+    forged.tx_blob = galaxy_xrpl::codec::encode(&object).unwrap();
+    forged.hash = galaxy_xrpl::keys::tx_hash(&forged.tx_blob);
+    let fetched = fetch(&history).await.unwrap();
+    assert_eq!(fetched.ignored_records, 1);
+    assert_eq!(fetched.bytes, bytes);
     history.extra = None;
     history.chunk1 = record(&wallet, MemoKind::CircuitChunk, &last.encode(), 102);
     assert!(fetch(&history).await.unwrap_err().to_string().contains("digest mismatch"));
     last.payload[0] ^= 1;
     history.chunk1 = record(&Wallet::from_entropy(&[9;16]), MemoKind::CircuitChunk, &last.encode(), 102);
-    assert!(fetch(&history).await.unwrap_err().to_string().contains("wrong type, account or ledger"));
+    assert!(fetch(&history).await.unwrap_err().to_string().contains("missing chunks"));
     last.index = 2;
     history.chunk1 = record(&wallet, MemoKind::CircuitChunk, &last.encode(), 102);
     assert!(fetch(&history).await.is_err());

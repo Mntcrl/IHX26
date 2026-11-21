@@ -25,7 +25,7 @@ use galaxy_verifier::{recorded::Recording, LookupError, LookupResult, LookupSour
 use galaxy_xrpl::{
     codec,
     keys::{classic_address, Wallet},
-    ledger::RpcLedger,
+    ledger::{account_root_keylet, RpcLedger},
     transaction::{AccountSet, Memo},
 };
 use serde_json::{json, Value};
@@ -65,6 +65,7 @@ pub struct Tx {
     pub result: &'static str,
     pub validated: bool,
     pub account: AccountId,
+    pub predecessor: Hash32,
 }
 
 /// A synthetic validated ledger history holding real signed transaction blobs.
@@ -94,17 +95,23 @@ impl Chain {
     }
 
     pub fn add_with(&mut self, wallet: &Wallet, kind: &str, data: &[u8], ledger: u32, result: &'static str) -> Hash32 {
+        let account = wallet.account_id();
+        let predecessor = self.txs.iter().filter(|tx| {
+            tx.account == account && tx.result == "tesSUCCESS" && tx.validated && tx.ledger <= ledger
+        }).max_by_key(|tx| (tx.ledger, tx.index)).map_or([0; 32], |tx| tx.hash);
+        let account_txn_id = (!matches!(MemoKind::from_memo_type(kind), Some(MemoKind::Circuit | MemoKind::CircuitChunk)))
+            .then_some(predecessor);
         let tx = AccountSet {
-            account: wallet.account_id(), sequence: self.sequence, fee_drops: 12,
+            account, sequence: self.sequence, fee_drops: 12,
             last_ledger_sequence: ledger + 20, network_id: self.network_id.min(NETWORK),
-            memo: Memo { kind, data },
+            memo: Memo { kind, data }, account_txn_id,
         }
         .sign(wallet)
         .expect("sign");
         self.sequence += 1;
         let index = self.txs.iter().filter(|t| t.ledger == ledger).count() as u32;
         self.txs.push(Tx {
-            hash: tx.hash, blob: tx.blob, ledger, index, result, validated: true, account: wallet.account_id(),
+            hash: tx.hash, blob: tx.blob, ledger, index, result, validated: true, account, predecessor,
         });
         tx.hash
     }
@@ -116,7 +123,11 @@ impl Chain {
     fn meta(tx: &Tx) -> String {
         hex::encode_upper(
             codec::encode(&json!({
-                "AffectedNodes": [], "TransactionIndex": tx.index, "TransactionResult": tx.result,
+                "AffectedNodes": [{"ModifiedNode": {
+                    "LedgerEntryType": "AccountRoot", "LedgerIndex": hex::encode_upper(account_root_keylet(&tx.account)),
+                    "FinalFields": {"Account": classic_address(&tx.account), "AccountTxnID": hex::encode_upper(tx.hash)},
+                    "PreviousFields": {"AccountTxnID": hex::encode_upper(tx.predecessor)},
+                }}], "TransactionIndex": tx.index, "TransactionResult": tx.result,
             }))
             .expect("meta"),
         )
@@ -158,7 +169,29 @@ impl Chain {
         for index in INCEPTION - 10..=self.tip {
             rec.push("ledger", json!({"ledger_index": index, "transactions": false}), Self::header(index));
         }
-        for &(account, min, max) in &self.queries {
+        let mut queries = self.queries.clone();
+        for &(account, from, to) in &self.queries {
+            if from == DEVICE_MANIFEST && to.is_none() {
+                let address = classic_address(&account);
+                let anchor = self.txs.iter().filter(|tx| tx.account == account && tx.result == "tesSUCCESS" && self.validated(tx))
+                    .max_by_key(|tx| (tx.ledger, tx.index)).map_or([0; 32], |tx| tx.hash);
+                rec.push("account_info", json!({"account": address, "ledger_index": self.tip}), json!({
+                    "validated": true, "ledger_index": self.tip, "account_data": {
+                        "LedgerEntryType": "AccountRoot", "index": hex::encode_upper(account_root_keylet(&account)),
+                        "Account": address, "AccountTxnID": hex::encode_upper(anchor),
+                    },
+                }));
+                for tx in self.txs.iter().filter(|tx| tx.account == account && self.validated(tx) && tx.ledger >= from) {
+                    queries.push((account, from, Some(tx.ledger)));
+                    let select = tx.ledger + 5;
+                    let through = (select + 300).min(self.tip);
+                    if select < through { queries.push((account, select + 1, Some(through))); }
+                }
+            }
+        }
+        queries.sort_unstable();
+        queries.dedup();
+        for (account, min, max) in queries {
             let max = max.unwrap_or(self.tip);
             let mut entries: Vec<&Tx> = self.txs.iter()
                 .filter(|t| t.account == account && (min..=max).contains(&t.ledger) && self.validated(t))

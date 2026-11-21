@@ -22,11 +22,32 @@ pub struct Refs {
     pub proof_tx: Option<Hash32>,
 }
 
+/// Work limits for each registration history window.
+#[derive(Clone, Copy, Debug)]
+pub struct VerifierConfig {
+    /// Number of 200-row account_tx pages; zero goes directly to AccountTxnID.
+    pub history_pages: u16,
+    /// Maximum own-transaction steps in an AccountTxnID walk.
+    pub history_walk: u16,
+}
+
+impl VerifierConfig {
+    pub const DEFAULT_HISTORY_PAGES: u16 = 64;
+    pub const DEFAULT_HISTORY_WALK: u16 = 4_096;
+}
+
+impl Default for VerifierConfig {
+    fn default() -> Self {
+        Self { history_pages: Self::DEFAULT_HISTORY_PAGES, history_walk: Self::DEFAULT_HISTORY_WALK }
+    }
+}
+
 /// The caller controls the ledger and accepted trust roots. The transport
 /// must bound each request, including response bodies and elapsed time.
 pub struct VerifyContext<'a, L: LedgerSource> {
     pub ledger: &'a L,
     pub config: &'a NetworkConfig,
+    pub options: VerifierConfig,
     pub rpc_endpoints: Vec<String>,
     pub rpc_trust: RpcTrust,
     /// Optional canonical GXCB bytes, matched against all three configured IDs.
@@ -38,6 +59,7 @@ impl<'a, L: LedgerSource> VerifyContext<'a, L> {
         Self {
             ledger,
             config,
+            options: VerifierConfig::default(),
             rpc_endpoints: Vec::new(),
             rpc_trust: RpcTrust::Remote,
             local_circuit: None,

@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use galaxy_protocol::{AccountId, Hash32};
 use galaxy_verifier::{verify_proof_transaction, State, VerifyContext};
 use galaxy_xrpl::{
-    ledger::{AccountTxPage, LedgerHeader, LedgerTx, ServerInfo},
+    ledger::{AccountRoot, AccountTxPage, LedgerHeader, LedgerTx, ServerInfo},
     native::RpcClient,
     LedgerSource,
 };
@@ -35,6 +35,11 @@ impl LedgerSource for RateLimited<'_> {
         self.rpc.ledger_header(index).await
     }
 
+    async fn account_root(&self, account: &AccountId, index: u32) -> Result<AccountRoot, galaxy_xrpl::Error> {
+        self.limit.acquire().await;
+        self.rpc.account_root(account, index).await
+    }
+
     async fn account_tx(
         &self,
         account: &AccountId,
@@ -55,7 +60,7 @@ impl LedgerSource for RateLimited<'_> {
 
 fn refresh(config: &Config, db: &Db) -> Result<()> {
     db.refresh_reports(&format!(
-        "{SOFTWARE_VERSION}:exact-proof-v1:{:?}:{:?}:{:?}",
+        "{SOFTWARE_VERSION}:exact-proof-v1-account-txn-id:{:?}:{:?}:{:?}",
         config.network.accepted_circuits,
         config.network.accepted_app_ids,
         config.network.accepted_attestation_environments
@@ -75,24 +80,26 @@ async fn process(
     let mut hash = [0u8; 32];
     hex::decode_to_slice(&proof, &mut hash)
         .map_err(|_| Error::Invariant("invalid proof job hash"))?;
-    let ledger = RateLimited {
-        rpc,
-        limit: limiter,
-    };
-    let mut context = VerifyContext::new(&ledger, &config.network);
-    // Reports are public. Configured endpoint paths or queries can contain
-    // operator credentials, so disclose only the origin, never the request URL.
-    for endpoint in config.rpc_urls() {
-        if let Ok(url) = url::Url::parse(endpoint) {
-            let origin = url.origin().ascii_serialization();
-            if !context.rpc_endpoints.contains(&origin) {
-                context.rpc_endpoints.push(origin);
+    // A job is keyed by exact PROOF hash, not by whichever sibling is valid.
+    let verify = async {
+        let mut attempts = rpc.pinned_endpoints().peekable();
+        let mut report = None;
+        while let Some((url, pinned)) = attempts.next() {
+            let ledger = RateLimited { rpc: &pinned, limit: limiter };
+            let mut context = VerifyContext::new(&ledger, &config.network);
+            // Public reports disclose only the origin (paths/queries can include credentials).
+            context.rpc_endpoints.push(url.origin().ascii_serialization());
+            if config.network.trusted_local_rippled.as_deref() == Some(url.as_str()) {
+                context.rpc_trust = galaxy_verifier::RpcTrust::Local;
             }
+            let attempt = verify_proof_transaction(hash, &context).await;
+            let retry = attempt.needs_rpc_retry() && attempts.peek().is_some();
+            report = Some(attempt);
+            if !retry { break; }
         }
-    }
-    // A job is keyed by exact PROOF hash. Checking only its manifest could
-    // instead select and report a different, valid sibling proof.
-    if let Ok(report) = timeout(VERIFY_TIMEOUT, verify_proof_transaction(hash, &context)).await {
+        report
+    };
+    if let Ok(Some(report)) = timeout(VERIFY_TIMEOUT, verify).await {
         let now = unix_now() as i64;
         let retry = matches!(
             report.state,

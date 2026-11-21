@@ -4,8 +4,9 @@ use crate::{
     prepare_device_publication, wallet_identity, xrpl_account_info_request, xrpl_autofill,
     xrpl_latest_validated, xrpl_ledger_request, xrpl_parse_submit, xrpl_parse_tx,
     xrpl_parse_validated_ledger, xrpl_sign_account_set, xrpl_submit_request, xrpl_tx_request,
-    AppAttestEnvironment, CaptureProfile, RegistrationChallenge, SignedTransaction, XrplNetwork,
-    XrplSubmitClass, XrplTxStatus,
+    xrpl_sign_account_preparation,
+    AppAttestEnvironment, CaptureProfile, RegistrationChallenge, SignedTransaction, XrplAutofill,
+    XrplNetwork, XrplSubmitClass, XrplTxStatus,
 };
 use galaxy_evidence::{bundle::EvidenceBundle, Salts};
 use galaxy_geometry::synthetic::{synthesize_with_profile, Scenario};
@@ -89,7 +90,7 @@ fn restore_synthetic(
             meta: 8u8.into(),
         },
         capture_state: b"test journal state".to_vec(),
-    })
+    }, true)
     .unwrap();
     let restored = decode_evidence_bundle(inner.encode_bundle().unwrap()).unwrap();
     assert_eq!(
@@ -97,7 +98,7 @@ fn restore_synthetic(
         restored.commitment_ids().evidence_root
     );
     assert_eq!(restored.capture_state(), b"test journal state");
-    restored
+    inner
 }
 
 fn ledger(index: u32) -> ValidatedLedger {
@@ -108,26 +109,19 @@ fn ledger(index: u32) -> ValidatedLedger {
     }
 }
 
-fn statement(
-    circuit: &CaptureCircuit,
-    evidence: Arc<CaptureEvidence>,
-    case: u8,
-) -> CaptureStatement {
+fn statement_result(
+    circuit: &CaptureCircuit, evidence: Arc<CaptureEvidence>, case: u8,
+) -> Result<CaptureStatement> {
     let flags = u16::from(evidence.profile().code());
-    circuit
-        .build_capture_statement(
-            evidence,
-            CaptureParameters {
-                network: 1,
-                registration_tx: TX.into(),
-                preledger: ledger(400),
-                nonce: vec![case; 32],
-                claimed_time_ms: 1_800_000_000_000,
-                flags,
-                account_id: wallet_identity(SECRET.to_vec()).unwrap().account_id,
-            },
-        )
-        .unwrap()
+    circuit.build_capture_statement(evidence, CaptureParameters {
+        network: 1, registration_tx: TX.into(), preledger: ledger(400),
+        nonce: vec![case; 32], claimed_time_ms: 1_800_000_000_000, flags,
+        account_id: wallet_identity(SECRET.to_vec()).unwrap().account_id,
+    })
+}
+
+fn statement(circuit: &CaptureCircuit, evidence: Arc<CaptureEvidence>, case: u8) -> CaptureStatement {
+    statement_result(circuit, evidence, case).unwrap()
 }
 
 fn derive(circuit: Arc<CaptureCircuit>, core: Vec<u8>) -> Arc<CaptureChallenge> {
@@ -137,9 +131,10 @@ fn derive(circuit: Arc<CaptureCircuit>, core: Vec<u8>) -> Arc<CaptureChallenge> 
         .unwrap()
 }
 
-fn passing(circuit: Arc<CaptureCircuit>, evidence: Arc<CaptureEvidence>) -> Arc<CaptureEvaluation> {
+fn passing(circuit: Arc<CaptureCircuit>) -> Arc<CaptureEvaluation> {
     // Synthetic test only: try a fixed finite sequence of independent vectors.
     for case in 0..8 {
+        let evidence = restore_synthetic(&circuit, Scenario::Room, galaxy_image::ImageProfile::PngV1);
         let s = statement(&circuit, Arc::clone(&evidence), case);
         let ch = derive(Arc::clone(&circuit), s.core);
         let eval = ch.evaluate(Arc::clone(&evidence)).unwrap();
@@ -218,6 +213,10 @@ fn capture_core_challenge_and_witness_are_bound() {
     let circuit = fixture_circuit();
     let evidence = restore_synthetic(&circuit, Scenario::Room, galaxy_image::ImageProfile::PngV1);
     let s = statement(&circuit, Arc::clone(&evidence), 1);
+    assert!(matches!(statement_result(&circuit, Arc::clone(&evidence), 2), Err(GalaxyError::CaptureBinding)));
+    let restored = decode_evidence_bundle(evidence.encode_bundle().unwrap()).unwrap();
+    assert!(matches!(statement_result(&circuit, Arc::clone(&restored), 2), Err(GalaxyError::CaptureBinding)));
+    assert!(derive(Arc::clone(&circuit), s.core.clone()).evaluate(restored).is_ok());
     let core = CaptureCore::decode(&s.core).unwrap();
     let limit = circuit.policy_limits();
     assert_eq!(s.core.len(), 299);
@@ -265,7 +264,7 @@ fn capture_core_challenge_and_witness_are_bound() {
     assert_eq!(ch.public_inputs()[0], core.rgb_root);
     assert_eq!(ch.public_inputs()[1], core.evidence_root);
 
-    let passing = passing(Arc::clone(&circuit), Arc::clone(&evidence));
+    let passing = passing(Arc::clone(&circuit));
     let witness = passing.build_witness().unwrap();
     let json: Value = serde_json::from_str(&witness.json).unwrap();
     let expected = witness
@@ -469,11 +468,20 @@ fn signs_journals_and_evaluates_only_validated_xrpl_success() {
     ));
     let fee = rpc(json!({"drops":{"open_ledger_fee":"12"}}));
     let account = rpc(
-        json!({"validated":true,"ledger_index":400,"account_data":{"Account":wallet.classic_address,"Sequence":9}}),
+        json!({"validated":true,"ledger_index":400,"account_data":{"Account":wallet.classic_address,"Sequence":9,"AccountTxnID":TX}}),
     );
     assert!(xrpl_account_info_request(wallet.classic_address.clone(), 400).is_ok());
     let filled = xrpl_autofill(NET, 400, Some(410), wallet.classic_address, fee, account).unwrap();
     assert_eq!((filled.sequence, filled.last_ledger_sequence), (9, 410));
+    assert_eq!(filled.account_txn_id, Some(hex::decode(TX).unwrap()));
+    let prepare = xrpl_sign_account_preparation(SECRET.to_vec(), NET, XrplAutofill {
+        account_txn_id: None, ..filled.clone()
+    }).unwrap();
+    let setup = galaxy_xrpl::codec::decode(&prepare.blob).unwrap();
+    assert_eq!(setup["SetFlag"], 5);
+    assert!(setup.get("Memos").is_none());
+    assert_eq!(prepare.purpose, "account-prepare");
+    assert!(xrpl_submit_request(NET, prepare, 400).is_ok());
 
     let circuit = fixture_circuit();
     let ev = restore_synthetic(&circuit, Scenario::Room, galaxy_image::ImageProfile::PngV1);
@@ -481,7 +489,7 @@ fn signs_journals_and_evaluates_only_validated_xrpl_success() {
     let purpose = "capture/test".to_string();
     let memo = || build_capture_memo(capture.core.clone(), apple_assertion()).unwrap();
     let signed =
-        xrpl_sign_account_set(SECRET.to_vec(), NET, purpose.clone(), filled, memo()).unwrap();
+        xrpl_sign_account_set(SECRET.to_vec(), NET, purpose.clone(), filled.clone(), memo()).unwrap();
     assert_eq!(
         signed.hash_hex,
         hex::encode_upper(galaxy_xrpl::keys::tx_hash(&signed.blob))
@@ -625,8 +633,7 @@ fn accepted_main_v1m_proves_the_real_witness() {
             dir.join("main_v1m.zkey").to_str().unwrap().into(),
         )
         .unwrap();
-    let evidence = restore_synthetic(&circuit, Scenario::Room, galaxy_image::ImageProfile::PngV1);
-    let eval = passing(circuit, evidence);
+    let eval = passing(circuit);
     let out = prover
         .prove(eval.build_witness().unwrap(), None, None)
         .unwrap();

@@ -1156,7 +1156,7 @@ public func FfiConverterTypeCaptureEvaluation_lower(_ value: CaptureEvaluation) 
 
 
 /**
- * Sensitive, immutable capture state. No sensor planes or salts are exposed.
+ * Sensitive capture state. No sensor planes or salts are exposed.
  */
 public protocol CaptureEvidenceProtocol: AnyObject, Sendable {
     
@@ -1179,7 +1179,7 @@ public protocol CaptureEvidenceProtocol: AnyObject, Sendable {
     
 }
 /**
- * Sensitive, immutable capture state. No sensor planes or salts are exposed.
+ * Sensitive capture state. No sensor planes or salts are exposed.
  */
 open class CaptureEvidence: CaptureEvidenceProtocol, @unchecked Sendable {
     fileprivate let handle: UInt64
@@ -2922,14 +2922,22 @@ public struct XrplAutofill: Equatable, Hashable {
     public var feeDrops: UInt64
     public var lastLedgerSequence: UInt32
     public var firstPossibleLedger: UInt32
+    /**
+     * A 32-byte predecessor (including the initial zero sentinel); absent before setup.
+     */
+    public var accountTxnId: Data?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(sequence: UInt32, feeDrops: UInt64, lastLedgerSequence: UInt32, firstPossibleLedger: UInt32) {
+    public init(sequence: UInt32, feeDrops: UInt64, lastLedgerSequence: UInt32, firstPossibleLedger: UInt32, 
+        /**
+         * A 32-byte predecessor (including the initial zero sentinel); absent before setup.
+         */accountTxnId: Data?) {
         self.sequence = sequence
         self.feeDrops = feeDrops
         self.lastLedgerSequence = lastLedgerSequence
         self.firstPossibleLedger = firstPossibleLedger
+        self.accountTxnId = accountTxnId
     }
 
     
@@ -2951,7 +2959,8 @@ public struct FfiConverterTypeXrplAutofill: FfiConverterRustBuffer {
                 sequence: FfiConverterUInt32.read(from: &buf), 
                 feeDrops: FfiConverterUInt64.read(from: &buf), 
                 lastLedgerSequence: FfiConverterUInt32.read(from: &buf), 
-                firstPossibleLedger: FfiConverterUInt32.read(from: &buf)
+                firstPossibleLedger: FfiConverterUInt32.read(from: &buf), 
+                accountTxnId: FfiConverterOptionData.read(from: &buf)
         )
     }
 
@@ -2960,6 +2969,7 @@ public struct FfiConverterTypeXrplAutofill: FfiConverterRustBuffer {
         FfiConverterUInt64.write(value.feeDrops, into: &buf)
         FfiConverterUInt32.write(value.lastLedgerSequence, into: &buf)
         FfiConverterUInt32.write(value.firstPossibleLedger, into: &buf)
+        FfiConverterOptionData.write(value.accountTxnId, into: &buf)
     }
 }
 
@@ -3606,6 +3616,30 @@ fileprivate struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionData: FfiConverterRustBuffer {
+    typealias SwiftType = Data?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterData.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterData.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeCaptureProgress: FfiConverterRustBuffer {
     typealias SwiftType = CaptureProgress?
 
@@ -3872,6 +3906,19 @@ public func xrplServerInfoRequest() -> String  {
 })
 }
 /**
+ * Persist the one-time memo-free account preparation before submission.
+ */
+public func xrplSignAccountPreparation(entropy: Data, network: XrplNetwork, fields: XrplAutofill)throws  -> SignedTransaction  {
+    return try  FfiConverterTypeSignedTransaction_lift(try rustCallWithError(FfiConverterTypeGalaxyError_lift) {
+        uniffiCallStatus in
+    uniffi_galaxy_ffi_fn_func_xrpl_sign_account_preparation(
+        FfiConverterData.lower(entropy),
+        FfiConverterTypeXrplNetwork_lower(network),
+        FfiConverterTypeXrplAutofill_lower(fields),uniffiCallStatus
+    )
+})
+}
+/**
  * Persist the returned record durably before the first submit.
  */
 public func xrplSignAccountSet(entropy: Data, network: XrplNetwork, purpose: String, fields: XrplAutofill, memo: Memo)throws  -> SignedTransaction  {
@@ -3990,6 +4037,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_galaxy_ffi_checksum_func_xrpl_server_info_request() != 6619) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_galaxy_ffi_checksum_func_xrpl_sign_account_preparation() != 24043) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_galaxy_ffi_checksum_func_xrpl_sign_account_set() != 36321) {

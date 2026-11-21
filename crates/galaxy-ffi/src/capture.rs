@@ -201,6 +201,9 @@ impl CaptureCircuit {
                 return Err(GalaxyError::CaptureBinding);
             }
             let capture_deadline = add_window(core.preledger_index, self.policy.windows.w_cap)?;
+            if !evidence.statement_available.swap(false, Ordering::AcqRel) {
+                return Err(GalaxyError::CaptureBinding);
+            }
             let core = core.encode();
             Ok(CaptureStatement {
                 capture_id: ids::capture_id(&core).to_vec(),

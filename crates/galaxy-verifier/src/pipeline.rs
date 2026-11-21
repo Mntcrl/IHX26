@@ -11,21 +11,22 @@ use galaxy_crypto::{field, groth16, public::public_inputs_v1, sampling, Fr};
 use galaxy_image::{decode_with_xmp_status, photo_id, rgb_root_from_raster, Container, ImageError, ImageProfile};
 use galaxy_protocol::{
     ids,
-    wire::{CaptureMemo, DeviceBundle, MemoKind, ProofMemo, RevokeMemo},
+    wire::{CaptureCore, CaptureMemo, DeviceBundle, MemoKind, ProofMemo, RevokeMemo},
     AccountId, Hash32,
 };
 use galaxy_xrpl::{
-    keys::{classic_address, tx_hash},
+    codec,
+    keys::{classic_address, decode_address, tx_hash},
     ledger::{LedgerHeader, LedgerTx, ServerInfo},
     registry::{covers, fetch_bundle, Manifest},
-    transaction::{decode_galaxy_memo, GalaxyMemo},
+    transaction::{account_txn_id, decode_galaxy_memo, decode_galaxy_object, GalaxyMemo},
     Error as XrplError, LedgerSource,
 };
 use std::collections::{BTreeMap, HashSet};
 
-/// account_tx page size and page budget for one registration account scan.
+/// XRPL account_tx request page size; the page count is configurable per window.
 const PAGE_LIMIT: u16 = 200;
-const MAX_PAGES: usize = 64;
+const MAX_LOOKUP_RANGES: usize = 64;
 /// PROOF candidates evaluated per capture (each costs one pairing check).
 const MAX_PROOFS: usize = 32;
 const DEV_LABEL: &str = "development unattested credential";
@@ -61,7 +62,8 @@ impl Stop {
     /// decoding failure is a property of the record rather than of the RPC.
     pub fn from_rpc(check: &'static str, err: &XrplError, invalid_data: bool) -> Self {
         match err {
-            XrplError::Network => Self::invalid(check, "Record or RPC endpoint does not match the configured network"),
+            XrplError::Network if !invalid_data => Self::unavailable(check, "RPC endpoint does not serve the configured network"),
+            XrplError::Network => Self::invalid(check, "Record does not match the configured network"),
             XrplError::Invalid(_) | XrplError::Codec(_) | XrplError::Wire(_) if invalid_data => {
                 Self::invalid(check, err.to_string())
             }
@@ -214,11 +216,11 @@ pub async fn verify_by_photo_id<L: LedgerSource, N: LookupSource>(
             Err(_) => incomplete = true,
             Ok(LookupResult { candidates, ranges, incomplete: partial }) => {
                 incomplete |= partial || ranges.is_empty();
-                for range in ranges.iter().take(MAX_PAGES) {
+                for range in ranges.iter().take(MAX_LOOKUP_RANGES) {
                     if range.min == 0 || range.max < range.min { incomplete = true; continue; }
                     report.note_range("lookup index (untrusted)", range.min, range.max);
                 }
-                incomplete |= ranges.len() > MAX_PAGES || candidates.len() > MAX_LOOKUP_CANDIDATES;
+                incomplete |= ranges.len() > MAX_LOOKUP_RANGES || candidates.len() > MAX_LOOKUP_CANDIDATES;
                 for refs in candidates.into_iter().take(MAX_LOOKUP_CANDIDATES) {
                     if hints.len() >= MAX_LOOKUP_CANDIDATES && !hints.contains_key(&refs.manifest_tx) {
                         incomplete = true;
@@ -230,14 +232,53 @@ pub async fn verify_by_photo_id<L: LedgerSource, N: LookupSource>(
             }
         }
     }
+    // Establish order from XRPL, not from the lookup node or from hash order.
+    let mut lookup = Pipeline::new(ctx, report);
+    let info = if hints.is_empty() {
+        None
+    } else {
+        match lookup.server_info().await {
+            Ok(info) => Some(info),
+            Err(stop) => return lookup.finish(Err(stop)),
+        }
+    };
+    let mut ordered = Vec::with_capacity(hints.len());
+    for (hash, advertised_proof) in hints {
+        let tx = lookup.tx(&hash, "capture.found").await;
+        let key = match &tx {
+            Ok(Some(tx)) => lookup_capture_key(tx, identity, lookup.network(), info.as_ref().expect("lookup tip").validated_ledger),
+            _ => None,
+        };
+        ordered.push((key, hash, advertised_proof, tx));
+    }
+    ordered.sort_unstable_by_key(|(key, hash, _, _)| (key.map_or((u32::MAX, u32::MAX), |(position, _)| position), *hash));
+    let mut report = lookup.report;
+    let mut earliest = HashSet::new();
     let mut candidates = Vec::new();
     let mut best: Option<(State, Report)> = None;
     let mut ranges = std::mem::take(&mut report.trust.ledger_ranges);
-    let mut latest_validated = None;
-    for (manifest_tx, advertised_proof) in hints {
+    for (key, manifest_tx, advertised_proof, tx) in ordered {
+        if let Some((_, group)) = key {
+            if !earliest.insert(group) {
+                candidates.push(Candidate {
+                    manifest_tx: hex::encode_upper(manifest_tx),
+                    proof_tx: advertised_proof.map(hex::encode_upper),
+                    state: State::Invalid,
+                    summary: "Not evaluated: an earlier CAPTURE of this registration commits to the same evidence".into(),
+                    checks: vec![Check::new("capture.unique", Status::Fail, "Later CAPTURE shares the earliest candidate's evidence root")],
+                    proofs: Vec::new(),
+                });
+                continue;
+            }
+        }
         let refs = Refs { manifest_tx, proof_tx: None };
-        let (mut candidate, binding) = evaluate(ctx, report.clone(), Some(identity), refs).await;
-        latest_validated = latest_validated.max(candidate.trust.latest_validated);
+        let mut pipeline = Pipeline::new(ctx, report.clone());
+        let result = match tx {
+            Ok(tx) => pipeline.capture(refs, Some(identity), info.as_ref().expect("lookup tip"), None, tx).await,
+            Err(stop) => Err(stop),
+        };
+        let binding = pipeline.binding;
+        let mut candidate = pipeline.finish(result);
         ranges.append(&mut candidate.trust.ledger_ranges);
         // Non-binding hints are discarded; an untrusted node must not make an unrelated photo look invalid.
         let state = if binding == Binding::Matches || candidate.state == State::Unavailable {
@@ -273,10 +314,19 @@ pub async fn verify_by_photo_id<L: LedgerSource, N: LookupSource>(
         report.summary = "No capture bound to this image was found in the consulted index ranges and nodes.".into();
     }
     report.trust.ledger_ranges = ranges;
-    // Keep the selected candidate's evaluation tip, not another candidate's newer tip.
-    if report.trust.latest_validated.is_none() { report.trust.latest_validated = latest_validated; }
     report.candidates = candidates;
     report
+}
+
+type LookupCaptureKey = ((u32, u32), (Hash32, Hash32));
+
+fn lookup_capture_key(tx: &LedgerTx, image: PhotoIdentity, network: u32, tip: u32) -> Option<LookupCaptureKey> {
+    if !tx.validated || tx.ledger_index > tip || tx.transaction_result != "tesSUCCESS" { return None; }
+    let envelope = decode_kind(tx, MemoKind::Capture, "capture.decode").ok()?;
+    let core = CaptureMemo::decode(&envelope.data).ok()?.core;
+    (core.network == network && network_field(&envelope, network)
+        && core.account_id == envelope.account && image.photo_id == core.photo_id && image.rgb_root == core.rgb_root)
+        .then_some(((tx.ledger_index, tx.transaction_index), (core.registration_tx, core.evidence_root)))
 }
 
 fn priority(state: State) -> u8 {
@@ -299,7 +349,8 @@ async fn evaluate<L: LedgerSource>(
     let mut pipeline = Pipeline::new(ctx, report);
     let result = async {
         let info = pipeline.server_info().await?;
-        pipeline.capture(refs, image, &info, None).await
+        let tx = pipeline.tx(&refs.manifest_tx, "capture.found").await?;
+        pipeline.capture(refs, image, &info, None, tx).await
     }.await;
     let binding = pipeline.binding;
     (pipeline.finish(result), binding)
@@ -348,13 +399,27 @@ impl ProofOutcome {
     }
 }
 
-/// Earlier history of the capture's registration, scanned once up to the latest validated ledger.
-struct History {
-    counters: Vec<CounterRecord>,
-    duplicate: Option<u32>,
-    revoked_from: Option<(u32, Hash32)>,
-    ignored_revokes: usize,
-    proofs: Vec<LedgerTx>,
+#[derive(Clone, Copy)]
+enum HistoryAnchor {
+    Capture { predecessor: Hash32, before: (u32, u32), registration: Hash32 },
+    Tip { index: u32, registration: Option<Hash32> },
+}
+
+#[derive(Default)]
+struct HistoryScan {
+    records: Vec<(LedgerTx, GalaxyMemo)>,
+    pages: usize,
+    rows: usize,
+    ignored: usize,
+    walked: usize,
+    rpc_links: usize,
+}
+
+impl HistoryScan {
+    fn detail(&self, name: &str) -> String {
+        format!("{name}: {} account_tx pages, {} rows, {} non-records ignored, {} AccountTxnID steps ({} metadata links)",
+            self.pages, self.rows, self.ignored, self.walked, self.rpc_links)
+    }
 }
 
 struct Pipeline<'ctx, 'data, L: LedgerSource> {
@@ -440,12 +505,13 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
         };
         let envelope = decode_kind(&tx, MemoKind::Proof, "proof.binding")?;
         let proof = ProofMemo::decode(&envelope.data).map_err(|err| Stop::invalid("proof.binding", err.to_string()))?;
-        self.capture(Refs { manifest_tx: proof.manifest_tx, proof_tx: Some(hash) }, None, &info, Some(tx)).await
+        let capture = self.tx(&proof.manifest_tx, "capture.found").await?;
+        self.capture(Refs { manifest_tx: proof.manifest_tx, proof_tx: Some(hash) }, None, &info, Some(tx), capture).await
     }
 
-    async fn capture(&mut self, refs: Refs, image: Option<PhotoIdentity>, info: &ServerInfo, exact: Option<LedgerTx>) -> Result<(), Stop> {
+    async fn capture(&mut self, refs: Refs, image: Option<PhotoIdentity>, info: &ServerInfo, exact: Option<LedgerTx>, tx: Option<LedgerTx>) -> Result<(), Stop> {
         let inception = self.ctx.config.inception_ledger;
-        let tx = match self.tx(&refs.manifest_tx, "capture.found").await? {
+        let tx = match tx {
             Some(tx) => tx,
             None => {
                 self.report.note_range("CAPTURE search coverage", inception, info.validated_ledger);
@@ -482,6 +548,9 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
         if core.account_id != envelope.account {
             return Err(Stop::invalid("capture.account_binding", "CAPTURE AccountSet account differs from the account in the signed core"));
         }
+        let predecessor = envelope.account_txn_id.filter(|hash| *hash != [0; 32])
+            .ok_or_else(|| Stop::invalid("capture.txn_chain", "CAPTURE has no nonzero AccountTxnID predecessor"))?;
+        self.report.pass("capture.txn_chain", "CAPTURE binds its AccountTxnID predecessor in the master-key signature");
         let l0 = tx.ledger_index;
         let lpre = core.preledger_index;
         let core299 = core.encode();
@@ -502,7 +571,10 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
         self.report.pass("circuit.accepted", "Circuit, policy and VK digest are explicitly pinned in the network config");
         let circuit = circuit::resolve(self.ctx, &core.circuit_id, Some(&core.policy_id)).await?;
         if let Some((min, max)) = circuit.chunk_range { self.report.note_range("CIRCUIT chunks", min, max); }
-        self.report.pass("circuit.registration", format!("Circuit descriptor, policy and verifying-key digests match ({})", circuit.info.source));
+        self.report.pass("circuit.registration", format!(
+            "Circuit descriptor, policy and verifying-key digests match ({}; {} non-records ignored)",
+            circuit.info.source, circuit.ignored_chunks,
+        ));
         if let Some(proof) = &mut self.report.proof {
             proof.policy_name = Some(circuit.info.policy.name.clone());
             proof.ceremony = circuit.info.descriptor["ceremony"].as_str().map(str::to_owned);
@@ -519,29 +591,60 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
         } else {
             "App Attest assertion over the CAPTURE core is valid"
         });
-        let history = self.history(&envelope.account, &core.registration_tx, &credential, manifest_ledger, &tx, &capture_id, info).await?;
-        if let Some(ledger) = history.duplicate {
-            return Err(Stop::invalid("capture.unique", format!("The same capture_id was already published in ledger {ledger}")));
+        let before = (l0, tx.transaction_index);
+        let anchor = HistoryAnchor::Capture { predecessor, before, registration: core.registration_tx };
+        let earlier = self.history("A: CAPTURE", &envelope.account, manifest_ledger, l0, MemoKind::Capture, anchor, info).await?;
+        let mut counters = Vec::new();
+        for (entry, memo) in earlier {
+            let here = (entry.ledger_index, entry.transaction_index);
+            if here >= before { continue; }
+            let Ok(other) = CaptureMemo::decode(&memo.data) else { continue };
+            if other.core.registration_tx != core.registration_tx { continue; }
+            let other_core = other.core.encode();
+            if same_capture(core, &other.core) || ids::capture_id(&other_core) == capture_id {
+                return Err(Stop::invalid("capture.unique", format!(
+                    "An earlier CAPTURE of this registration in ledger {} shares the capture ID, photo ID, RGB root or evidence root", entry.ledger_index,
+                )));
+            }
+            if let Ok(assertion) = verify_capture_assertion(&credential, &other_core, &other.assertion) {
+                if let Some(counter) = assertion.counter {
+                    counters.push(CounterRecord { ledger_index: here.0, tx_index: here.1, counter });
+                }
+            }
         }
-        self.report.pass("capture.unique", "No earlier CAPTURE of this account has the same capture_id");
+        self.report.pass("capture.unique", "No earlier CAPTURE of this registration shares the capture ID, photo ID, RGB root or evidence root");
         match assertion.counter {
             Some(counter) => {
-                verify_counter(CounterRecord { ledger_index: l0, tx_index: tx.transaction_index, counter }, &history.counters)
+                verify_counter(CounterRecord { ledger_index: l0, tx_index: tx.transaction_index, counter }, &counters)
                     .map_err(|err| Stop::invalid("capture.counter", format!("{err} ({})", err.code())))?;
                 if let Some(report) = &mut self.report.capture { report.counter = Some(counter); }
                 self.report.pass("capture.counter", format!(
-                    "Counter {counter} exceeds all {} earlier authenticated counters of this registration", history.counters.len(),
+                    "Counter {counter} exceeds all {} earlier authenticated counters of this registration", counters.len(),
                 ));
             }
             None => self.report.set("capture.counter", Status::NotApplicable,
-                "Development credential has no authenticated counter; replay is bounded by capture_id uniqueness"),
+                "Development credential has no authenticated counter; only the re-challenge check applies"),
         }
-        let ignored = if history.ignored_revokes > 0 {
-            format!("; {} REVOKE record(s) ignored as malformed, future-dated or out of range", history.ignored_revokes)
+        let anchor = HistoryAnchor::Tip { index: info.validated_ledger, registration: Some(core.registration_tx) };
+        let revokes = self.history("C: REVOKE", &envelope.account, manifest_ledger, info.validated_ledger, MemoKind::Revoke, anchor, info).await?;
+        let mut revoked_from = None;
+        let mut ignored_revokes = 0;
+        for (entry, memo) in revokes {
+            let Ok(revoke) = RevokeMemo::decode(&memo.data) else { ignored_revokes += 1; continue };
+            if revoke.registration_tx != core.registration_tx { continue; }
+            let effective = if revoke.effective_ledger == 0 { entry.ledger_index } else { revoke.effective_ledger };
+            if revoke.network != self.network() || effective < manifest_ledger || effective > entry.ledger_index {
+                ignored_revokes += 1;
+                continue;
+            }
+            if revoked_from.is_none_or(|(current, _)| effective < current) { revoked_from = Some((effective, entry.hash)); }
+        }
+        let ignored = if ignored_revokes > 0 {
+            format!("; {ignored_revokes} REVOKE record(s) ignored as malformed, future-dated or out of range")
         } else {
             String::new()
         };
-        if let Some((effective, revoke_tx)) = history.revoked_from {
+        if let Some((effective, revoke_tx)) = revoked_from {
             if l0 >= effective {
                 return Err(Stop::invalid("registration.revocation", format!(
                     "Credential revoked from ledger {effective} by {} (CAPTURE ledger {l0}); credential state as of ledger {}{ignored}",
@@ -588,21 +691,44 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
             account: envelope.account, manifest_tx: refs.manifest_tx, circuit_id: core.circuit_id, lsel,
             lsel_hash: selection.hash, deadline, public: public_inputs_v1(&rgb, &evidence, &capture_id, &seed, &tiles),
         };
-        self.proofs(refs, &statement, &circuit, info, history.proofs, exact).await
+        let mut discovered = Vec::new();
+        let proof_max = deadline.min(info.validated_ledger);
+        if lsel < proof_max {
+            let anchor = HistoryAnchor::Tip { index: info.validated_ledger, registration: None };
+            let window = self.history("B: PROOF", &envelope.account, lsel + 1, proof_max, MemoKind::Proof, anchor, info).await?;
+            for (entry, memo) in window {
+                if ProofMemo::decode(&memo.data).is_ok_and(|proof| proof.manifest_tx == tx.hash)
+                {
+                    if discovered.len() >= MAX_PROOFS {
+                        return Err(Stop::unavailable("proof.found", format!(
+                            "More than {MAX_PROOFS} PROOF transactions reference this CAPTURE; not evaluated",
+                        )));
+                    }
+                    discovered.push(entry);
+                }
+            }
+        }
+        self.proofs(refs, &statement, &circuit, info, discovered, exact).await
     }
 
     /// DEVICE manifest, bundle and attestation of the registration named in the CAPTURE.
     async fn registration(&mut self, capture: &CaptureMemo, tx: &LedgerTx, info: &ServerInfo) -> Result<(VerifiedCredential, u32), Stop> {
         let core = &capture.core;
         let check = "registration.resolve";
-        if self.tx(&core.registration_tx, check).await?.is_none() {
+        let Some(registration) = self.tx(&core.registration_tx, check).await? else {
             let stop = missing_ref(self.ctx.config.inception_ledger, info, check, "DEVICE registration");
             return Err(if stop.state == State::NotFound {
                 Stop::invalid(check, "The CAPTURE names a DEVICE registration that does not exist in the consulted history")
             } else {
                 stop
             });
+        };
+        check_success(&registration, info, check, "DEVICE registration")?;
+        let envelope = decode_kind(&registration, MemoKind::Device, check)?;
+        if envelope.account_txn_id.is_none_or(|hash| hash == [0; 32]) {
+            return Err(Stop::invalid("registration.txn_chain", "DEVICE has no nonzero AccountTxnID predecessor"));
         }
+        self.report.pass("registration.txn_chain", "DEVICE binds its AccountTxnID predecessor in the master-key signature");
         let fetched = fetch_bundle(self.ctx.ledger, &core.registration_tx, self.network(), self.ctx.config.allow_mainnet)
             .await.map_err(|err| Stop::from_rpc("registration.bundle", &err, true))?;
         let Manifest::Device(manifest) = fetched.manifest else {
@@ -625,7 +751,9 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
             "DEVICE manifest validated in ledger {}; registration ledger {} hash matches", fetched.manifest_ledger, manifest.reg_ledger_index,
         ));
         let bundle = DeviceBundle::decode(&fetched.bytes).map_err(|err| Stop::invalid("registration.bundle", err.to_string()))?;
-        self.report.pass("registration.bundle", "Device bundle reassembled from validated chunks; bundle_id and manifest fields match");
+        self.report.pass("registration.bundle", format!(
+            "Device bundle reassembled from valid chunks; bundle_id and manifest match ({} non-records ignored)", fetched.ignored_records,
+        ));
         let close_time = self.header(fetched.manifest_ledger, "registration.attestation").await?.close_time;
         let accepted = AcceptedAttestation {
             app_ids: self.ctx.config.accepted_app_ids.clone(),
@@ -660,96 +788,145 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
         Ok((credential, fetched.manifest_ledger))
     }
 
-    /// One bounded scan of the registration account from the DEVICE manifest to
-    /// the latest validated ledger: counter history and duplicates before the
-    /// CAPTURE, every REVOKE, and PROOF candidates for this CAPTURE.
     #[allow(clippy::too_many_arguments)]
     async fn history(
-        &mut self, account: &AccountId, registration_tx: &Hash32, credential: &VerifiedCredential, from: u32,
-        capture_tx: &LedgerTx, capture_id: &Hash32, info: &ServerInfo,
-    ) -> Result<History, Stop> {
-        let check = "registration.revocation";
-        let to = info.validated_ledger;
-        self.report.note_range("registration account history", from, to);
+        &mut self, name: &'static str, account: &AccountId, from: u32, to: u32,
+        kind: MemoKind, anchor: HistoryAnchor, info: &ServerInfo,
+    ) -> Result<Vec<(LedgerTx, GalaxyMemo)>, Stop> {
+        const CHECK: &str = "history.complete";
+        self.report.note_range(name, from, to);
         if !covers(&info.complete_ledgers, from, to) {
-            return Err(Stop::unavailable(check, format!(
-                "RPC history does not cover ledgers {from}..{to} needed for counters, revocations and proofs",
-            )));
+            return Err(Stop::unavailable(CHECK, format!("{name} requires complete history in ledgers {from}..{to}")));
         }
-        let position = (capture_tx.ledger_index, capture_tx.transaction_index);
-        let mut history = History { counters: Vec::new(), duplicate: None, revoked_from: None, ignored_revokes: 0, proofs: Vec::new() };
+        let mut scan = HistoryScan::default();
         let mut marker = None;
         let mut markers = HashSet::new();
-        for _ in 0..MAX_PAGES {
+        for _ in 0..self.ctx.options.history_pages {
             let page = self.ctx.ledger.account_tx(account, from, to, marker, PAGE_LIMIT).await
-                .map_err(|err| Stop::from_rpc(check, &err, false))?;
+                .map_err(|err| Stop::unavailable(CHECK, format!("{}; {}", scan.detail(name), Stop::from_rpc(CHECK, &err, false).detail)))?;
+            scan.pages += 1;
+            scan.rows += page.transactions.len();
+            if page.transactions.len() > usize::from(PAGE_LIMIT) {
+                return Err(Stop::unavailable(CHECK, format!("{}; page exceeded its row limit", scan.detail(name))));
+            }
             for entry in page.transactions {
-                if entry.hash == capture_tx.hash || !entry.validated || entry.transaction_result != "tesSUCCESS" {
-                    continue;
+                if !(from..=to).contains(&entry.ledger_index) {
+                    return Err(Stop::unavailable(CHECK, format!("{}; transaction outside requested window", scan.detail(name))));
                 }
-                // Other transaction types and non-Galaxy memos are expected on an account.
-                let Ok(envelope) = decode_galaxy_memo(&entry.tx_blob) else { continue };
-                if envelope.account != *account || !network_field(&envelope, self.network()) {
-                    continue;
-                }
-                let here = (entry.ledger_index, entry.transaction_index);
-                match MemoKind::from_memo_type(&envelope.kind) {
-                    Some(MemoKind::Capture) if here < position => {
-                        let Ok(other) = CaptureMemo::decode(&envelope.data) else { continue };
-                        if other.core.registration_tx != *registration_tx { continue; }
-                        let core299 = other.core.encode();
-                        if ids::capture_id(&core299) == *capture_id {
-                            history.duplicate.get_or_insert(entry.ledger_index);
-                        }
-                        // Only authenticated assertions define the counter history.
-                        if let Ok(info) = verify_capture_assertion(credential, &core299, &other.assertion) {
-                            if let Some(counter) = info.counter {
-                                history.counters.push(CounterRecord { ledger_index: here.0, tx_index: here.1, counter });
-                            }
-                        }
-                    }
-                    Some(MemoKind::Revoke) => {
-                        let Ok(revoke) = RevokeMemo::decode(&envelope.data) else {
-                            history.ignored_revokes += 1;
-                            continue;
-                        };
-                        if revoke.registration_tx != *registration_tx { continue; }
-                        let effective = if revoke.effective_ledger == 0 { entry.ledger_index } else { revoke.effective_ledger };
-                        if revoke.network != self.network() || effective < from || effective > entry.ledger_index {
-                            history.ignored_revokes += 1;
-                            continue;
-                        }
-                        if history.revoked_from.is_none_or(|(current, _)| effective < current) {
-                            history.revoked_from = Some((effective, entry.hash));
-                        }
-                    }
-                    Some(MemoKind::Proof) if here > position => {
-                        let Ok(proof) = ProofMemo::decode(&envelope.data) else { continue };
-                        if proof.manifest_tx == capture_tx.hash {
-                            if history.proofs.len() >= MAX_PROOFS {
-                                return Err(Stop::unavailable("proof.found", format!(
-                                    "More than {MAX_PROOFS} PROOF transactions reference this CAPTURE; not evaluated",
-                                )));
-                            }
-                            history.proofs.push(entry);
-                        }
-                    }
-                    _ => {}
-                }
+                let envelope = if entry.validated && entry.transaction_result == "tesSUCCESS" {
+                    decode_galaxy_memo(&entry.tx_blob).ok()
+                } else { None };
+                self.collect_record(&mut scan, account, kind, entry, envelope);
             }
             marker = page.marker;
             let Some(next) = &marker else {
-                history.proofs.sort_by_key(|tx| (tx.ledger_index, tx.transaction_index));
-                return Ok(history);
+                self.finish_history(name, &mut scan)?;
+                return Ok(scan.records);
             };
             if !markers.insert(next.to_string()) {
-                return Err(Stop::unavailable(check, "account_tx pagination did not advance"));
+                return Err(Stop::unavailable(CHECK, format!("{}; account_tx pagination did not advance", scan.detail(name))));
             }
         }
-        Err(Stop::unavailable(check, format!(
-            "Registration account history exceeds {} transactions; counters and revocations not established",
-            MAX_PAGES * usize::from(PAGE_LIMIT),
-        )))
+        // Partial pagination must not contribute candidates to a fallback result.
+        scan.records.clear();
+        if let Err(reason) = self.walk_history(account, from, to, kind, anchor, &mut scan).await {
+            return Err(Stop::unavailable(CHECK, format!("{}; {reason}", scan.detail(name))));
+        }
+        self.finish_history(name, &mut scan)?;
+        Ok(scan.records)
+    }
+
+    fn collect_record(&self, scan: &mut HistoryScan, account: &AccountId, kind: MemoKind, entry: LedgerTx, envelope: Option<GalaxyMemo>) {
+        let Some((kind_found, memo)) = envelope.and_then(|memo| {
+            if memo.account != *account || !network_field(&memo, self.network()) {
+                return None;
+            }
+            let kind = MemoKind::from_memo_type(&memo.kind)?;
+            if kind == MemoKind::Proof && memo.account_txn_id.is_none_or(|hash| hash == [0; 32]) {
+                return None;
+            }
+            Some((kind, memo))
+        }) else {
+            scan.ignored += 1;
+            return;
+        };
+        if kind_found == kind {
+            scan.records.push((entry, memo));
+        }
+    }
+
+    fn finish_history(&mut self, name: &str, scan: &mut HistoryScan) -> Result<(), Stop> {
+        const CHECK: &str = "history.complete";
+        scan.records.sort_unstable_by_key(|(tx, _)| (tx.ledger_index, tx.transaction_index));
+        if scan.records.windows(2).any(|pair| {
+            let (a, b) = (&pair[0].0, &pair[1].0);
+            (a.ledger_index, a.transaction_index) == (b.ledger_index, b.transaction_index) && a.hash != b.hash
+        }) {
+            return Err(Stop::unavailable(CHECK, format!("{}; conflicting transaction positions", scan.detail(name))));
+        }
+        scan.records.dedup_by_key(|(tx, _)| (tx.ledger_index, tx.transaction_index));
+        let detail = scan.detail(name);
+        let detail = match self.report.check(CHECK).filter(|check| check.status == Status::Pass) {
+            Some(check) => format!("{}; {detail}", check.detail),
+            None => detail,
+        };
+        self.report.pass(CHECK, detail);
+        Ok(())
+    }
+
+    async fn walk_history(
+        &self, account: &AccountId, from: u32, to: u32, kind: MemoKind,
+        anchor: HistoryAnchor, scan: &mut HistoryScan,
+    ) -> Result<(), &'static str> {
+        let (mut hash, mut before, registration) = match anchor {
+            HistoryAnchor::Capture { predecessor, before, registration } => (predecessor, before, Some(registration)),
+            HistoryAnchor::Tip { index, registration } => {
+                let root = self.ctx.ledger.account_root(account, index).await.map_err(|_| "validated AccountRoot unavailable")?;
+                let hash = root.account_txn_id.filter(|hash| *hash != [0; 32]).ok_or("AccountRoot has no nonzero AccountTxnID")?;
+                (hash, (index, u32::MAX), registration)
+            }
+        };
+        let mut reached_registration = registration.is_none();
+        while scan.walked < usize::from(self.ctx.options.history_walk) {
+            let tx = self.tx(&hash, "history.complete").await
+                .map_err(|_| "AccountTxnID transaction unavailable or inconsistent")?
+                .ok_or("AccountTxnID transaction missing")?;
+            scan.walked += 1;
+            let here = (tx.ledger_index, tx.transaction_index);
+            if !tx.validated || tx.transaction_result != "tesSUCCESS" || here >= before || here.0 == 0 {
+                return Err("AccountTxnID transaction has invalid status or order");
+            }
+            let object = codec::decode(&tx.tx_blob).map_err(|_| "AccountTxnID transaction decoding failed")?;
+            let signer = object["Account"].as_str().and_then(|s| decode_address(s).ok());
+            if signer.as_ref() != Some(account) {
+                return Err("AccountTxnID link does not name an own transaction");
+            }
+            if here.0 < from {
+                return if reached_registration { Ok(()) } else { Err("AccountTxnID chain skipped the DEVICE manifest") };
+            }
+            reached_registration |= registration == Some(hash);
+            let previous = match account_txn_id(&object).map_err(|_| "invalid signed AccountTxnID")? {
+                Some(previous) => previous,
+                None => {
+                    let previous = tx.previous_account_txn_id(account).map_err(|_| "invalid AccountRoot AccountTxnID metadata")?
+                        .ok_or("missing AccountRoot PreviousFields.AccountTxnID")?;
+                    scan.rpc_links += 1;
+                    previous
+                }
+            };
+            if here.0 <= to {
+                let envelope = decode_galaxy_object(&object).ok();
+                self.collect_record(scan, account, kind, tx, envelope);
+            }
+            if previous == [0; 32] {
+                return if here.0 == from && registration.is_some() && reached_registration {
+                    Ok(())
+                } else { Err("AccountTxnID chain ends before completing the requested window") };
+            }
+            before = here;
+            hash = previous;
+        }
+        Err("AccountTxnID walk budget exhausted")
     }
 
     fn evaluate_proof(&self, tx: &LedgerTx, statement: &Statement, circuit: &Circuit, latest: u32) -> ProofOutcome {
@@ -772,6 +949,9 @@ impl<'ctx, 'data, L: LedgerSource> Pipeline<'ctx, 'data, L> {
         }
         if envelope.account != statement.account {
             return out.end(Verdict::Rejected, "proof.account", Status::Fail, "PROOF is not sent by the CAPTURE account");
+        }
+        if envelope.account_txn_id.is_none_or(|hash| hash == [0; 32]) {
+            return out.end(Verdict::Rejected, "proof.account", Status::Fail, "PROOF has no nonzero AccountTxnID predecessor");
         }
         out.pass("proof.account", "PROOF is sent by the CAPTURE account");
         let memo = match ProofMemo::decode(&envelope.data) {
@@ -988,4 +1168,8 @@ fn decode_kind(tx: &LedgerTx, kind: MemoKind, check: &'static str) -> Result<Gal
 /// §12: no NetworkID field for network ids ≤ 1024, mandatory above.
 fn network_field(envelope: &GalaxyMemo, network: u32) -> bool {
     envelope.network_id == (network > 1024).then_some(network)
+}
+
+fn same_capture(a: &CaptureCore, b: &CaptureCore) -> bool {
+    a.photo_id == b.photo_id || a.rgb_root == b.rgb_root || a.evidence_root == b.evidence_root
 }

@@ -121,7 +121,7 @@ fn measure_offline() -> Result<(), Error> {
         let payload = vec![0; len];
         let memo = Memo { kind, data: &payload };
         let signed = AccountSet { account: wallet.account_id(), sequence: 1, fee_drops: 10,
-            last_ledger_sequence: 50, network_id: 1, memo }.sign(&wallet)?;
+            last_ledger_sequence: 50, network_id: 1, account_txn_id: Some([1; 32]), memo }.sign(&wallet)?;
         let memos_bytes = measured_memos(codec::decode(&signed.blob)?, signed.blob.len())?;
         show_json(&json!({"size_only":label,"blob_bytes":signed.blob.len(),"memos_bytes":memos_bytes,"memo_data_bytes":len}))?;
     }

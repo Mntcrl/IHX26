@@ -7,7 +7,7 @@ use galaxy_protocol::ids;
 use galaxy_protocol::wire::{AttestationEnv, ChunkMemo, CircuitBundle, CircuitManifest, DeviceBundle, DeviceKind};
 use galaxy_xrpl::dev_wallet::wallet_load;
 use galaxy_xrpl::keys::Wallet;
-use galaxy_xrpl::ledger::{AccountTxPage, LedgerHeader, LedgerTx, RpcTransport, ServerInfo};
+use galaxy_xrpl::ledger::{AccountRoot, AccountTxPage, LedgerHeader, LedgerTx, RpcTransport, ServerInfo};
 use galaxy_xrpl::native::RpcClient;
 use galaxy_xrpl::registry::{fetch_bundle, fetch_bundle_in, publish_bundle_in, BundleKind, Manifest, Namespace};
 use galaxy_xrpl::submission::{account_info_params, autofill_from_responses, FileTxStore, PendingTx, Submitter, TxState, TxStore};
@@ -84,7 +84,7 @@ async fn reject_invalid_registry_records(
         ("conflict", CircuitManifest { last_chunk_ledger: conflict.ledger_index, ..good.clone() }, "conflicting registry chunk"),
         ("index", CircuitManifest { first_chunk_ledger: index.ledger_index, last_chunk_ledger: index.ledger_index, ..good.clone() }, "chunk index or total"),
         ("digest", CircuitManifest { chunk_total: 1, bundle_len: 1, first_chunk_ledger: digest.ledger_index, last_chunk_ledger: digest.ledger_index, ..good.clone() }, "bundle digest mismatch"),
-        ("failed", CircuitManifest { chunk_total: 1, bundle_len: 1, first_chunk_ledger: failed.ledger_index, last_chunk_ledger: failed.ledger_index, ..good.clone() }, "registry record is failed"),
+        ("failed", CircuitManifest { chunk_total: 1, bundle_len: 1, first_chunk_ledger: failed.ledger_index, last_chunk_ledger: failed.ledger_index, ..good.clone() }, "missing chunks"),
         ("gap", CircuitManifest { last_chunk_ledger: good.first_chunk_ledger, ..good.clone() }, "missing chunks"),
         ("wrong-id", CircuitManifest { bundle_id: [0x33; 32], ..good.clone() }, "missing chunks"),
         ("oversize", CircuitManifest { bundle_len: 1024 * 1024 + 1, ..good.clone() }, "bundle chunk span"),
@@ -114,6 +114,10 @@ impl LedgerSource for AlteredHistory<'_> {
         self.rpc.ledger_header(index).await
     }
 
+    async fn account_root(&self, account: &AccountId, index: u32) -> Result<AccountRoot, Error> {
+        self.rpc.account_root(account, index).await
+    }
+
     async fn server_info(&self) -> Result<ServerInfo, Error> {
         self.rpc.server_info().await
     }
@@ -134,7 +138,7 @@ fn wrong_account(tx: &mut LedgerTx) {
     let wallet = Wallet::from_entropy(&[9; 16]);
     let replacement = AccountSet {
         account: wallet.account_id(), fee_drops: 10, sequence: 1, last_ledger_sequence: tx.ledger_index,
-        network_id: 1, memo: Memo { kind: &memo.kind, data: &memo.data },
+        network_id: 1, account_txn_id: memo.account_txn_id, memo: Memo { kind: &memo.kind, data: &memo.data },
     }.sign(&wallet).unwrap();
     (tx.tx_blob, tx.hash) = (replacement.blob, replacement.hash);
 }
@@ -178,14 +182,11 @@ async fn testnet_test_namespace_registry_round_trip() {
     let manifest_tx = rpc.tx(&published.manifest_tx).await.unwrap().unwrap();
     let decoded = codec::decode(&manifest_tx.tx_blob).unwrap();
     assert_eq!(decoded["Memos"][0]["Memo"]["MemoType"], hex::encode_upper("galaxy/test/circuit"));
-    for (alter, expected) in [
-        (wrong_account as fn(&mut LedgerTx), "wrong type, account or ledger order"),
-        (unvalidated, "registry record is failed, unvalidated or hash-mismatched"),
-    ] {
+    for alter in [wrong_account as fn(&mut LedgerTx), unvalidated] {
         let history = AlteredHistory { rpc: &rpc, target: published.chunk_txs[0], alter };
         let error = fetch_bundle_in(&history, &published.manifest_tx, 1, false, Namespace::Test).await.unwrap_err();
-        assert!(error.to_string().contains(expected), "{error}");
-        println!("rejected altered history row for {}: {error}", hex::encode_upper(published.chunk_txs[0]));
+        assert!(error.to_string().contains("missing chunks"), "{error}");
+        println!("ignored altered history row for {}: {error}", hex::encode_upper(published.chunk_txs[0]));
     }
 
     let head = submitter.validated_ledger().await.unwrap();
@@ -218,6 +219,10 @@ async fn testnet_test_namespace_registry_round_trip() {
     assert_eq!(device_fetched.account, wallet.account_id());
     let Manifest::Device(manifest) = &device_fetched.manifest else { panic!("expected a DEVICE manifest") };
     assert_eq!((manifest.key_id, manifest.reg_ledger_index), (device.key_id, head));
+    let expected_predecessor = *device_published.chunk_txs.last().unwrap();
+    let device_tx = rpc.tx(&device_published.manifest_tx).await.unwrap().unwrap();
+    assert_eq!(decode_galaxy_memo(&device_tx.tx_blob).unwrap().account_txn_id, Some(expected_predecessor));
+    assert_eq!(rpc.account_root(&wallet.account_id(), device_tx.ledger_index).await.unwrap().account_txn_id, Some(device_tx.hash));
     assert!(fetch_bundle(&rpc, &device_published.manifest_tx, 1, false).await.is_err());
 
     println!("{}", serde_json::json!({

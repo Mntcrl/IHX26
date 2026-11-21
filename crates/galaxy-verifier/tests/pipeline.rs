@@ -295,8 +295,8 @@ async fn first_valid_proof_in_ledger_order_wins_over_later_invalid_and_earlier_r
     assert_eq!(report.state, State::Unsupported, "{report}");
     assert_check(&report, "proof.groth16", Status::Pass);
     assert_eq!(report.proof.as_ref().unwrap().lproof, Some(PROOF_LEDGER));
-    assert_eq!(report.candidates.len(), 2, "evaluation stops at the first valid proof");
-    assert_eq!(report.candidates[0].state, State::NotFound);
+    assert_eq!(report.candidates.len(), 1, "proofs before window B are not candidates");
+    assert_eq!(report.candidates[0].state, State::Verified);
 }
 
 #[tokio::test]
@@ -319,7 +319,13 @@ async fn proof_outside_window_leaves_the_capture_without_accepted_proof() {
     let report = case.direct().await;
     assert_eq!(report.state, State::Unsupported, "{report}");
     assert!(report.summary.contains("Proof status INCONCLUSIVE"), "{}", report.summary);
-    assert_check(&report, "proof.window", Status::Fail);
+    // Window B never enumerates the late proof; only the XMP hint lists it.
+    assert_check(&report, "proof.window", Status::Skipped);
+    assert_eq!(report.candidates.len(), 1);
+    let hint = &report.candidates[0];
+    assert_eq!(hint.proof_tx.as_deref(), Some(hex::encode_upper(late).as_str()));
+    assert_eq!(hint.state, State::NotFound);
+    assert!(hint.checks.iter().any(|check| check.id == "proof.window" && check.status == Status::Fail));
     assert_check(&report, "proof.groth16", Status::Skipped);
 }
 
@@ -330,6 +336,7 @@ async fn proof_from_another_account_is_not_used() {
     let capture = world.publish_capture(world.core(&rgb, 1), L0);
     let memo = world.proof_memo(&capture, prove(&world.public_inputs(&capture)));
     let stranger = Wallet::from_entropy(&[0x55; 16]);
+    world.chain.add(&stranger, "galaxy/test/fixture", &[1], L0);
     let proof_tx = world.chain.add(&stranger, MemoKind::Proof.as_str(), &memo, PROOF_LEDGER);
     let case = Case { world, rgb, capture, proof_tx };
     let report = case.direct().await;
@@ -354,6 +361,122 @@ async fn replayed_capture_id_is_invalid() {
     assert_check(&report, "capture.unique", Status::Fail);
     let report = verify_photo(&png(&rgb), Some(Refs { manifest_tx: first.hash, proof_tx: None }), &ctx).await;
     assert_check(&report, "capture.unique", Status::Pass);
+}
+
+#[tokio::test]
+async fn changed_nonce_is_not_a_rechallenge_and_lookup_uses_the_earliest_evidence() {
+    let mut world = World::new();
+    let rgb = raster(1);
+    let core = world.core(&rgb, 1);
+    let first = world.publish_capture(core.clone(), L0);
+    let mut retry = core;
+    retry.nonce = [2; 32];
+    let retry = world.publish_capture(retry, L0 + 1);
+    assert_ne!(first.capture_id, retry.capture_id);
+    world.publish_proof(&retry, PROOF_LEDGER);
+    let ledger = world.chain.ledger();
+    let ctx = world.ctx(&ledger);
+    let report = verify_proof_only(retry.hash, &ctx).await;
+    assert_eq!(report.state, State::Invalid, "{report}");
+    assert_check(&report, "capture.unique", Status::Fail);
+    let node = StaticNode::new(vec![
+        Refs { manifest_tx: retry.hash, proof_tx: None },
+        Refs { manifest_tx: first.hash, proof_tx: None },
+    ], INCEPTION, TIP);
+    let report = verify_by_photo_id(&png(&rgb), &[node], &ctx).await;
+    assert_eq!(report.candidates[0].manifest_tx, hex::encode_upper(first.hash));
+    assert_eq!(report.candidates[1].manifest_tx, hex::encode_upper(retry.hash));
+    assert!(report.candidates[1].summary.starts_with("Not evaluated"));
+    assert_check(&report, "proof.groth16", Status::Skipped);
+}
+
+#[tokio::test]
+async fn device_without_account_txn_id_is_invalid() {
+    let mut world = World::new();
+    let old = world.chain.tx_mut(&world.registration_tx);
+    let mut object = galaxy_xrpl::codec::decode(&old.blob).unwrap();
+    for field in ["AccountTxnID", "SigningPubKey", "TxnSignature"] {
+        object.as_object_mut().unwrap().remove(field);
+    }
+    let signed = galaxy_xrpl::transaction::sign_transaction(object, &world.device).unwrap();
+    old.blob = signed.blob;
+    old.hash = signed.hash;
+    world.registration_tx = signed.hash;
+    let rgb = raster(1);
+    let capture = world.publish_capture(world.core(&rgb, 1), L0);
+    let ledger = world.chain.ledger();
+    let report = verify_proof_only(capture.hash, &world.ctx(&ledger)).await;
+    assert_eq!(report.state, State::Invalid, "{report}");
+    assert_check(&report, "registration.txn_chain", Status::Fail);
+}
+
+#[tokio::test]
+async fn mis_signed_history_revocation_is_ignored_and_counted() {
+    let mut case = valid_case();
+    let hash = case.world.revoke(L0 + 20, L0 - 1);
+    let row = case.world.chain.tx_mut(&hash);
+    let mut object = galaxy_xrpl::codec::decode(&row.blob).unwrap();
+    object["TxnSignature"] = json!(hex::encode_upper([1; 64]));
+    row.blob = galaxy_xrpl::codec::encode(&object).unwrap();
+    row.hash = galaxy_xrpl::keys::tx_hash(&row.blob);
+    let report = case.direct().await;
+    assert_eq!(report.state, State::Unsupported, "{report}");
+    assert_check(&report, "registration.revocation", Status::Pass);
+    assert!(report.check("history.complete").unwrap().detail.contains("1 non-records ignored"));
+}
+
+#[tokio::test]
+async fn bounded_history_restarts_on_the_account_chain_in_every_window() {
+    let mut case = valid_case();
+    // A legacy own REVOKE has no signed chain field; its authenticated
+    // publication still counts, and its predecessor is in metadata.
+    let hash = case.world.revoke(PROOF_LEDGER + 1, 0);
+    let tx = case.world.chain.tx_mut(&hash);
+    let mut object = galaxy_xrpl::codec::decode(&tx.blob).unwrap();
+    for field in ["AccountTxnID", "SigningPubKey", "TxnSignature"] {
+        object.as_object_mut().unwrap().remove(field);
+    }
+    let signed = galaxy_xrpl::transaction::sign_transaction(object, &case.world.device).unwrap();
+    tx.blob = signed.blob;
+    tx.hash = signed.hash;
+    let mut recording = case.world.chain.recording();
+    let address = case.world.device.classic_address();
+    let stranger = Wallet::from_entropy(&[0x57; 16]);
+    let signed = galaxy_xrpl::transaction::sign_transaction(json!({
+        "TransactionType": "SetRegularKey", "Account": stranger.classic_address(),
+        "RegularKey": address, "Fee": "10", "Sequence": 1, "LastLedgerSequence": TIP,
+    }), &stranger).unwrap();
+    let meta = hex::encode_upper(galaxy_xrpl::codec::encode(&json!({
+        "AffectedNodes": [], "TransactionResult": "tesSUCCESS", "TransactionIndex": 1,
+    })).unwrap());
+    for (from, to) in [(DEVICE_MANIFEST, L0), (LSEL + 1, DEADLINE), (DEVICE_MANIFEST, TIP)] {
+        recording.exchanges.retain(|x| x.method != "account_tx" || x.params["account"] != address
+            || x.params["ledger_index_min"] != from || x.params["ledger_index_max"] != to);
+        let row = json!({"ledger_index": from, "validated": true, "tx_blob": hex::encode_upper(&signed.blob), "meta_blob": meta});
+        for page in 0..64 {
+            let mut params = json!({"account": address, "ledger_index_min": from, "ledger_index_max": to,
+                "binary": true, "forward": true, "limit": 200});
+            if page > 0 { params["marker"] = json!({"page": page}); }
+            recording.push("account_tx", params, json!({"account": address, "ledger_index_min": from,
+                "ledger_index_max": to, "validated": true, "marker": {"page": page + 1},
+                "transactions": vec![row.clone(); 200]}));
+        }
+    }
+    // A chain without its anchored predecessor is unavailable, never an absence claim.
+    let predecessor = case.world.chain.txs.iter().find(|tx| tx.ledger == DEVICE_CHUNKS).unwrap().hash;
+    let mut broken = recording.clone();
+    broken.exchanges.retain(|x| x.method != "tx" || x.params["transaction"] != hex::encode_upper(predecessor));
+    let ledger = recording.into_ledger();
+    let report = verify_proof_only(case.capture.hash, &case.world.ctx(&ledger)).await;
+    assert_eq!(report.state, State::Unsupported, "{report}");
+    assert_check(&report, "proof.groth16", Status::Pass);
+    let detail = &report.check("history.complete").unwrap().detail;
+    assert_eq!(detail.matches("64 account_tx pages, 12800 rows, 12800 non-records ignored").count(), 3, "{detail}");
+    assert_eq!(detail.matches("(1 metadata links)").count(), 2, "{detail}");
+    let ledger = broken.into_ledger();
+    let report = verify_proof_only(case.capture.hash, &case.world.ctx(&ledger)).await;
+    assert_eq!(report.state, State::Unavailable, "{report}");
+    assert_check(&report, "history.complete", Status::Unavailable);
 }
 
 #[tokio::test]

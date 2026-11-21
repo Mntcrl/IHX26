@@ -3,7 +3,10 @@
 
 use crate::keys::{classic_address, tx_hash, Wallet};
 use crate::ledger::{parse_tx, LedgerTx, RpcTransport};
-use crate::transaction::{decode_galaxy_object, AccountSet, Memo};
+use crate::transaction::{
+    account_txn_id, decode_account_preparation, decode_galaxy_object, sign_account_preparation,
+    valid_signing_predecessor, AccountSet, Memo,
+};
 use crate::{codec, Error, Hash32};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -144,6 +147,7 @@ pub struct Autofill {
     pub last_ledger_sequence: u32,
     /// `validated + 1`: the first ledger that can include the transaction.
     pub first_possible_ledger: u32,
+    pub account_txn_id: Option<Hash32>,
 }
 
 /// `LastLedgerSequence = min(validated + 20, deadline)`; fails once the
@@ -178,7 +182,8 @@ pub fn autofill_from_responses(
         return Err(Error::Invalid("account_info does not match validated account/ledger"));
     }
     let sequence = index(&account_info["account_data"]["Sequence"])?;
-    Ok(Autofill { sequence, fee_drops, last_ledger_sequence, first_possible_ledger: validated_ledger + 1 })
+    let account_txn_id = account_txn_id(&account_info["account_data"])?;
+    Ok(Autofill { sequence, fee_drops, last_ledger_sequence, first_possible_ledger: validated_ledger + 1, account_txn_id })
 }
 
 /// `tx` parameters for looking up a persisted transaction. Once the validated
@@ -266,15 +271,20 @@ impl<'a, R: RpcTransport, S: TxStore> Submitter<'a, R, S> {
         checked_head(self.rpc, self.network_id, self.allow_mainnet).await
     }
 
-    async fn build(&self, purpose: &str, wallet: &Wallet, memo: Memo<'_>, deadline: Option<u32>) -> Result<PendingTx, Error> {
+    async fn autofill(&self, wallet: &Wallet, deadline: Option<u32>) -> Result<Autofill, Error> {
         let head = self.validated_ledger().await?;
         last_ledger_for(head, deadline)?;
         let fee = request(self.rpc, "fee", json!({})).await?;
         let address = wallet.classic_address();
         let account = request(self.rpc, "account_info", account_info_params(&address, head)).await?;
-        let autofill = autofill_from_responses(head, deadline, self.max_fee_drops, &address, &fee, &account)?;
+        autofill_from_responses(head, deadline, self.max_fee_drops, &address, &fee, &account)
+    }
+
+    async fn build(&self, purpose: &str, wallet: &Wallet, memo: Memo<'_>, deadline: Option<u32>) -> Result<PendingTx, Error> {
+        let autofill = self.autofill(wallet, deadline).await?;
         let signed = AccountSet { account: wallet.account_id(), sequence: autofill.sequence, fee_drops: autofill.fee_drops,
-            last_ledger_sequence: autofill.last_ledger_sequence, network_id: self.network_id, memo }.sign(wallet)?;
+            last_ledger_sequence: autofill.last_ledger_sequence, network_id: self.network_id,
+            account_txn_id: autofill.account_txn_id, memo }.sign(wallet)?;
         PendingTx::new(purpose, signed, self.network_id, &autofill)
     }
 
@@ -283,6 +293,9 @@ impl<'a, R: RpcTransport, S: TxStore> Submitter<'a, R, S> {
         let actual = decode_galaxy_object(&decoded)?;
         if actual.account != wallet.account_id() || actual.kind != memo.kind || actual.data != memo.data {
             return Err(Error::Invalid("persisted purpose is bound to a different account or memo"));
+        }
+        if !valid_signing_predecessor(memo.kind, actual.account_txn_id) {
+            return Err(Error::Invalid("persisted device transaction has no valid AccountTxnID"));
         }
         if deadline.is_some_and(|deadline| pending.last_ledger > deadline) {
             return Err(Error::Invalid("persisted transaction exceeds caller's deadline"));
@@ -303,6 +316,50 @@ impl<'a, R: RpcTransport, S: TxStore> Submitter<'a, R, S> {
         let existing = self.store.load(purpose)?.ok_or(Error::Invalid("transaction store lost persisted entry"))?;
         self.check_intent(&existing, purpose, wallet, memo, deadline)?;
         Ok(existing)
+    }
+
+    /// Enable tracking once for a device account; submit only a journalled,
+    /// memo-free SetFlag 5 and require validated success before any chunk.
+    pub(crate) async fn ensure_account_tracking<D, F>(&self, wallet: &Wallet, delay: &D) -> Result<(), Error>
+    where D: Fn() -> F, F: Future<Output = ()>,
+    {
+        let autofill = self.autofill(wallet, None).await?;
+        if autofill.account_txn_id.is_some() { return Ok(()); }
+        let purpose = format!("account-prepare/{}/{}", self.network_id, wallet.classic_address());
+        let build = |fields: &Autofill| {
+            let tx = sign_account_preparation(wallet, fields.sequence, fields.fee_drops,
+                fields.last_ledger_sequence, self.network_id)?;
+            PendingTx::new(&purpose, tx, self.network_id, fields)
+        };
+        let mut pending = match self.store.load(&purpose)? {
+            Some(pending) => pending,
+            None => {
+                let fresh = build(&autofill)?;
+                if self.store.compare_and_swap(None, &fresh)? { fresh } else {
+                    self.store.load(&purpose)?.ok_or(Error::Invalid("account preparation journal entry lost"))?
+                }
+            }
+        };
+        if decode_account_preparation(&pending.check(&purpose, self.network_id)?)? != wallet.account_id() {
+            return Err(Error::Invalid("account preparation bound to another wallet"));
+        }
+        let mut state = self.run(&pending, delay).await?;
+        if matches!(state, TxState::Expired) {
+            let fields = self.autofill(wallet, None).await?;
+            if fields.account_txn_id.is_some() { return Ok(()); }
+            let replacement = build(&fields)?;
+            if !self.store.compare_and_swap(Some(pending.hash), &replacement)? {
+                return Err(Error::Invalid("account preparation was concurrently replaced"));
+            }
+            pending = replacement;
+            state = self.run(&pending, delay).await?;
+        }
+        if !matches!(&state, TxState::Validated(tx) if tx.transaction_result == "tesSUCCESS")
+            || self.autofill(wallet, None).await?.account_txn_id.is_none()
+        {
+            return Err(Error::Invalid("AccountTxnID preparation did not validate and enable tracking"));
+        }
+        Ok(())
     }
 
     /// Create a replacement only after the entire old window was searched by

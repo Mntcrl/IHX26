@@ -4,10 +4,9 @@
 use crate::keys::{classic_address, tx_hash, Wallet};
 use crate::ledger::{LedgerTx, RpcTransport};
 use crate::submission::{Submitter, TxState, TxStore};
-use crate::transaction::{decode_galaxy_object, Memo};
-use crate::{codec, AccountId, Error, Hash32, LedgerSource};
+use crate::transaction::{decode_galaxy_memo, Memo};
+use crate::{AccountId, Error, Hash32, LedgerSource};
 use galaxy_protocol::{ids, wire::{ChunkMemo, CircuitBundle, CircuitManifest, DeviceBundle, DeviceManifest, MemoKind, WireError}};
-use serde_json::Value;
 use std::{collections::HashSet, future::Future};
 
 pub const MAX_BUNDLE_BYTES: usize = 1024 * 1024;
@@ -60,6 +59,7 @@ pub struct FetchedBundle {
     pub manifest_tx_index: u32,
     pub account: AccountId,
     pub bytes: Vec<u8>,
+    pub ignored_records: usize,
 }
 
 /// Publishes a `galaxy/v1/*` bundle; see [`publish_bundle_in`].
@@ -88,6 +88,7 @@ where R: RpcTransport, S: TxStore, D: Fn() -> F, F: Future<Output = ()>,
             if b.account_id != account || b.network != network {
                 return Err(Error::Invalid("device bundle is not bound to wallet/network"));
             }
+            submitter.ensure_account_tracking(wallet, &delay).await?;
             let deadline = b.reg_ledger_index.checked_add(100).ok_or(Error::Invalid("registration deadline overflow"))?;
             (Some(b), None, Some(deadline))
         }
@@ -176,17 +177,20 @@ pub async fn fetch_bundle_in<L: LedgerSource>(
     source: &L, hash: &Hash32, network_id: u32, allow_mainnet: bool, namespace: Namespace,
 ) -> Result<FetchedBundle, Error> {
     if network_id == 0 && !allow_mainnet { return Err(Error::Network); }
-    let tx = source.tx(hash).await?.ok_or(Error::HistoryUnavailable("registry manifest not found"))?;
-    let info = source.server_info().await?;
+    let tx = source.tx(hash).await.map_err(|_| Error::HistoryUnavailable("registry manifest transaction unavailable"))?
+        .ok_or(Error::HistoryUnavailable("registry manifest not found"))?;
+    let info = source.server_info().await.map_err(|_| Error::HistoryUnavailable("registry ledger coverage unavailable"))?;
     if info.network_id != network_id { return Err(Error::Network); }
     if &tx.hash != hash || tx.ledger_index > info.validated_ledger { return Err(Error::Invalid("registry manifest identity mismatch")); }
     validate_record(&tx)?;
-    let object = codec::decode(&tx.tx_blob)?;
-    let memo = decode_galaxy_object(&object)?;
+    let memo = decode_galaxy_memo(&tx.tx_blob)?;
     check_network(memo.network_id, network_id)?;
     let account = memo.account;
     let (kind, manifest, id, len, total, first, last) = match memo.kind.as_str() {
         kind if kind == BundleKind::Device.manifest_type(namespace) => {
+            if memo.account_txn_id.is_none_or(|hash| hash == [0; 32]) {
+                return Err(Error::Invalid("DEVICE manifest has no nonzero AccountTxnID"));
+            }
             let b = DeviceManifest::decode(&memo.data)?;
             if b.account_id != account || b.network != network_id
                 || !(b.reg_ledger_index..=b.reg_ledger_index.saturating_add(100)).contains(&tx.ledger_index)
@@ -221,23 +225,27 @@ pub async fn fetch_bundle_in<L: LedgerSource>(
     let mut marker = None;
     let mut markers = HashSet::new();
     let chunk_type = kind.chunk_type(namespace);
-    let memo_type = hex::encode_upper(chunk_type);
+    let namespace_prefix = match namespace { Namespace::V1 => "galaxy/v1/", Namespace::Test => "galaxy/test/" };
+    let mut ignored_records = 0;
     loop {
-        let mut page = source.account_tx(&account, first, last, marker, 200).await?;
+        let mut page = source.account_tx(&account, first, last, marker, 200).await
+            .map_err(|_| Error::HistoryUnavailable("registry chunk range unavailable"))?;
         for entry in page.transactions.drain(..) {
-            let object = codec::decode(&entry.tx_blob)?;
-            // A different bundle can legitimately have chunks on this account in
-            // the same ledger range. Do not try to reconstruct it. A malformed
-            // envelope explicitly naming this bundle is not silently ignored.
-            if !names_bundle(&object, &memo_type, &id) { continue; }
-            validate_record(&entry)?;
-            let decoded = decode_galaxy_object(&object)?;
-            check_network(decoded.network_id, network_id)?;
-            if decoded.kind != chunk_type || decoded.account != account
-                || !(first..=last).contains(&entry.ledger_index)
+            if validate_record(&entry).is_err() { ignored_records += 1; continue; }
+            let Ok(decoded) = decode_galaxy_memo(&entry.tx_blob) else { ignored_records += 1; continue };
+            if decoded.account != account || check_network(decoded.network_id, network_id).is_err()
+                || !decoded.kind.starts_with(namespace_prefix)
+                || (kind == BundleKind::Device && decoded.account_txn_id.is_none())
+            {
+                ignored_records += 1;
+                continue;
+            }
+            // Only chunks naming the requested bundle are relevant.
+            if decoded.kind != chunk_type || decoded.data.get(1..33) != Some(id.as_slice()) { continue; }
+            if !(first..=last).contains(&entry.ledger_index)
                 || (entry.ledger_index, entry.transaction_index) >= (tx.ledger_index, tx.transaction_index)
             {
-                return Err(Error::Invalid("registry chunk has wrong type, account or ledger order"));
+                return Err(Error::Invalid("registry chunk has wrong ledger order"));
             }
             let chunk = ChunkMemo::decode(&decoded.data)?;
             if chunk.bundle_id != id || chunk.total != total || chunk.index >= total {
@@ -260,7 +268,7 @@ pub async fn fetch_bundle_in<L: LedgerSource>(
         match &marker {
             None => break,
             Some(value) if !markers.insert(serde_json::to_string(value)?) || markers.len() > 4096 => {
-                return Err(Error::Invalid("registry account_tx pagination did not terminate"));
+                return Err(Error::HistoryUnavailable("registry account_tx pagination did not terminate"));
             }
             _ => {}
         }
@@ -284,23 +292,12 @@ pub async fn fetch_bundle_in<L: LedgerSource>(
             }
         }
     }
-    Ok(FetchedBundle { manifest, manifest_ledger: tx.ledger_index, manifest_tx_index: tx.transaction_index, account, bytes })
+    Ok(FetchedBundle { manifest, manifest_ledger: tx.ledger_index, manifest_tx_index: tx.transaction_index, account, bytes, ignored_records })
 }
 
 fn check_network(field: Option<u32>, network: u32) -> Result<(), Error> {
     if field != (network > 1024).then_some(network) { return Err(Error::Network); }
     Ok(())
-}
-
-fn names_bundle(object: &Value, memo_type: &str, id: &Hash32) -> bool {
-    object["Memos"].as_array().is_some_and(|memos| memos.iter().any(|entry| {
-        let memo = &entry["Memo"];
-        if memo["MemoType"] != memo_type { return false; }
-        let mut given = [0; 32];
-        memo["MemoData"].as_str().and_then(|s| s.get(2..66)).is_some_and(|s| {
-            hex::decode_to_slice(s, &mut given).is_ok() && &given == id
-        })
-    }))
 }
 
 /// Whether a well-formed rippled `complete_ledgers` range list covers every

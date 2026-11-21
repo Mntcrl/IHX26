@@ -104,6 +104,41 @@ fn verify_modified_and_bare_images() {
 }
 
 #[test]
+fn configured_lookup_nodes_are_never_used_without_explicit_consent() {
+    let png = galaxy_image::encode(galaxy_image::ImageProfile::PngV1, &raster()).unwrap();
+    let bare = temp("lookup-consent.png", &png);
+    let dir = vectors();
+    let run = |opts: &[&str]| Command::new(env!("CARGO_BIN_EXE_galaxy"))
+        .env("GALAXY_NODES", "invalid-node-url")
+        .arg("--recording").arg(dir.join("recording.json"))
+        .arg("--network-config").arg(dir.join("network.toml"))
+        .args(["--json", "verify"]).arg(&bare)
+        .args(opts).output().unwrap();
+    let direct = run(&[]);
+    assert_eq!(direct.status.code(), Some(40), "{:?}", direct.stderr);
+    let report: Value = serde_json::from_slice(&direct.stdout).unwrap();
+    assert_eq!(report["trust"]["lookup_endpoints"], serde_json::json!([]));
+    assert_eq!(run(&["--lookup"]).status.code(), Some(2), "requested lookup validates the node URL");
+    std::fs::remove_file(bare).unwrap();
+}
+
+#[test]
+fn history_diagnostics_can_force_a_walk_and_bound_its_steps() {
+    let manifest = refs()["manifest_tx"].as_str().unwrap().to_owned();
+    let (code, output) = galaxy(&["--json", "--history-pages", "0", "inspect", &manifest]);
+    assert_eq!(code, 60, "{output}");
+    let report = json(&output);
+    let checks = report["checks"].as_array().unwrap();
+    let history = checks.iter().find(|check| check["id"] == "history.complete").unwrap();
+    assert_eq!(history["status"], "pass");
+    assert_eq!(history["detail"].as_str().unwrap().matches("0 account_tx pages").count(), 3);
+
+    let (code, output) = galaxy(&["--json", "--history-pages", "0", "--history-walk", "1", "inspect", &manifest]);
+    assert_eq!(code, 50, "{output}");
+    assert!(json(&output)["summary"].as_str().unwrap().contains("walk budget exhausted"));
+}
+
+#[test]
 fn proof_only_commands() {
     let refs = refs();
     let (code, out) = galaxy(&["--json", "inspect", refs["manifest_tx"].as_str().unwrap()]);

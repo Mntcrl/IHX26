@@ -17,8 +17,8 @@ use crate::keys::encode_family_seed;
 use crate::keys::{decode_family_seed, Wallet};
 use crate::ledger::{parse_server_info, take_http_result};
 use crate::submission::{self, Autofill, PendingTx, ResultClass, TxState};
-use crate::transaction::{decode_galaxy_object, AccountSet, Memo};
-use crate::Error;
+use crate::transaction::{decode_account_preparation, decode_galaxy_object, sign_account_preparation, valid_signing_predecessor, AccountSet, Memo};
+use crate::{Error, Hash32};
 use serde_json::{json, Value};
 use zeroize::Zeroizing;
 
@@ -77,6 +77,7 @@ pub struct AutofillFields {
     pub fee_drops: u64,
     pub last_ledger_sequence: u32,
     pub first_possible_ledger: u32,
+    pub account_txn_id: Option<Hash32>,
 }
 
 /// The journal record the app must persist before submitting.
@@ -171,7 +172,7 @@ pub fn autofill(
     let account = rpc_result(&account_info_body)?;
     let a = submission::autofill_from_responses(validated_ledger, deadline, network.max_fee_drops, &classic_address, &fee, &account)?;
     Ok(AutofillFields { sequence: a.sequence, fee_drops: a.fee_drops, last_ledger_sequence: a.last_ledger_sequence,
-        first_possible_ledger: a.first_possible_ledger })
+        first_possible_ledger: a.first_possible_ledger, account_txn_id: a.account_txn_id })
 }
 
 /// Signs a Galaxy AccountSet carrying exactly one Memo (MemoType = `memo_type`
@@ -179,15 +180,35 @@ pub fn autofill(
 pub fn sign_galaxy_account_set(
     seed: String, network: NetworkParams, purpose: String, fields: AutofillFields, memo_type: String, memo_data: Vec<u8>,
 ) -> Result<SignedRecord, MobileError> {
-    network.check()?;
-    if fields.fee_drops > network.max_fee_drops { return Err(Error::Invalid("fee exceeds configured cap").into()); }
-    let autofill = Autofill { sequence: fields.sequence, fee_drops: fields.fee_drops,
-        last_ledger_sequence: fields.last_ledger_sequence, first_possible_ledger: fields.first_possible_ledger };
+    let autofill = checked_autofill(network, fields)?;
     let wallet = wallet_from(seed)?;
     let signed = AccountSet { account: wallet.account_id(), sequence: fields.sequence, fee_drops: fields.fee_drops,
         last_ledger_sequence: fields.last_ledger_sequence, network_id: network.network_id,
+        account_txn_id: fields.account_txn_id,
         memo: Memo { kind: &memo_type, data: &memo_data } }.sign(&wallet)?;
     Ok(record_of(PendingTx::new(&purpose, signed, network.network_id, &autofill)?))
+}
+
+const ACCOUNT_PREPARE_PURPOSE: &str = "account-prepare";
+
+pub fn sign_account_tracking_preparation(
+    seed: String, network: NetworkParams, fields: AutofillFields,
+) -> Result<SignedRecord, MobileError> {
+    let autofill = checked_autofill(network, fields)?;
+    if fields.account_txn_id.is_some() {
+        return Err(Error::Invalid("the account already tracks AccountTxnID").into());
+    }
+    let wallet = wallet_from(seed)?;
+    let signed = sign_account_preparation(&wallet, fields.sequence, fields.fee_drops,
+        fields.last_ledger_sequence, network.network_id)?;
+    Ok(record_of(PendingTx::new(ACCOUNT_PREPARE_PURPOSE, signed, network.network_id, &autofill)?))
+}
+
+fn checked_autofill(network: NetworkParams, fields: AutofillFields) -> Result<Autofill, MobileError> {
+    network.check()?;
+    if fields.fee_drops > network.max_fee_drops { return Err(Error::Invalid("fee exceeds configured cap").into()); }
+    Ok(Autofill { sequence: fields.sequence, fee_drops: fields.fee_drops, last_ledger_sequence: fields.last_ledger_sequence,
+        first_possible_ledger: fields.first_possible_ledger, account_txn_id: fields.account_txn_id })
 }
 
 fn record_of(p: PendingTx) -> SignedRecord {
@@ -205,7 +226,14 @@ fn pending_of(network: &NetworkParams, record: SignedRecord) -> Result<PendingTx
     let pending = PendingTx { purpose: record.purpose, hash, blob: record.blob, network_id: record.network_id,
         first_possible_ledger: record.first_possible_ledger, last_ledger: record.last_ledger };
     let decoded = pending.check_fee(network.network_id, network.max_fee_drops)?;
-    decode_galaxy_object(&decoded)?;
+    if pending.purpose == ACCOUNT_PREPARE_PURPOSE {
+        decode_account_preparation(&decoded)?;
+    } else {
+        let memo = decode_galaxy_object(&decoded)?;
+        if !valid_signing_predecessor(&memo.kind, memo.account_txn_id) {
+            return Err(Error::Invalid("persisted device transaction has no valid AccountTxnID").into());
+        }
+    }
     Ok(pending)
 }
 
@@ -269,7 +297,9 @@ mod tests {
         let fee = ok(json!({"drops":{"open_ledger_fee":"12"}}));
         let account = ok(json!({"validated":true,"ledger_index":400,"account_data":{"Account":info.classic_address,"Sequence":9}}));
         let fields = autofill(NET, 400, Some(410), info.classic_address.clone(), fee.clone(), account.clone()).unwrap();
-        assert_eq!(fields, AutofillFields { sequence: 9, fee_drops: 12, last_ledger_sequence: 410, first_possible_ledger: 401 });
+        assert_eq!(fields, AutofillFields {
+            sequence: 9, fee_drops: 12, last_ledger_sequence: 410, first_possible_ledger: 401, account_txn_id: None,
+        });
         assert!(autofill(NetworkParams { max_fee_drops: 11, ..NET }, 400, None, info.classic_address.clone(), fee, account).is_err());
 
         let record = sign_galaxy_account_set(seed.clone(), NET, "capture/1".into(), fields, "galaxy/test/mobile".into(), vec![5; 32]).unwrap();

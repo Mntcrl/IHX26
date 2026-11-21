@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{atomic::AtomicBool, Arc};
 
 use galaxy_crypto::field::fr_to_be;
 use galaxy_evidence::{bundle, ingest, try_commit, Commitments, Salts};
@@ -28,16 +28,17 @@ pub struct CommitmentIds {
     pub evidence_root: Vec<u8>,
 }
 
-/// Sensitive, immutable capture state. No sensor planes or salts are exposed.
+/// Sensitive capture state. No sensor planes or salts are exposed.
 #[derive(uniffi::Object)]
 pub struct CaptureEvidence {
     pub(crate) bundle: bundle::EvidenceBundle,
     pub(crate) commitments: Commitments,
     pub(crate) photo_id: Hash32,
+    pub(crate) statement_available: AtomicBool,
 }
 
 impl CaptureEvidence {
-    pub(crate) fn from_bundle(bundle: bundle::EvidenceBundle) -> Result<Arc<Self>> {
+    pub(crate) fn from_bundle(bundle: bundle::EvidenceBundle, statement_available: bool) -> Result<Arc<Self>> {
         let commitments =
             try_commit(&bundle.evidence, &bundle.salts).map_err(|_| GalaxyError::Evidence)?;
         let photo_id = galaxy_image::photo_id(&bundle.evidence.image.rgb)
@@ -46,6 +47,7 @@ impl CaptureEvidence {
             bundle,
             commitments,
             photo_id,
+            statement_available: AtomicBool::new(statement_available),
         }))
     }
 
@@ -83,7 +85,7 @@ pub fn ingest_gxrw(
             evidence,
             salts,
             capture_state,
-        })
+        }, true)
     })
 }
 
@@ -92,7 +94,8 @@ pub fn decode_evidence_bundle(bytes: Vec<u8>) -> Result<Arc<CaptureEvidence>> {
     guarded(|| {
         let bundle = bundle::decode(&bytes).map_err(|_| GalaxyError::EvidenceBundle)?;
         drop(bytes);
-        CaptureEvidence::from_bundle(bundle)
+        // Restored evidence may be evaluated/exported only against the journaled statement.
+        CaptureEvidence::from_bundle(bundle, false)
     })
 }
 

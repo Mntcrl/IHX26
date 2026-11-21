@@ -72,12 +72,14 @@ impl ValidatedLedger {
     }
 }
 
-#[derive(Clone, Copy, uniffi::Record)]
+#[derive(Clone, uniffi::Record)]
 pub struct XrplAutofill {
     pub sequence: u32,
     pub fee_drops: u64,
     pub last_ledger_sequence: u32,
     pub first_possible_ledger: u32,
+    /// A 32-byte predecessor (including the initial zero sentinel); absent before setup.
+    pub account_txn_id: Option<Vec<u8>>,
 }
 
 #[derive(Clone, uniffi::Record)]
@@ -298,6 +300,7 @@ pub fn xrpl_autofill(
             fee_drops: a.fee_drops,
             last_ledger_sequence: a.last_ledger_sequence,
             first_possible_ledger: a.first_possible_ledger,
+            account_txn_id: a.account_txn_id.map(|id| id.to_vec()),
         })
     })
 }
@@ -346,12 +349,7 @@ pub fn xrpl_sign_account_set(
         if bound_network.is_some_and(|id| id != network.network_id) {
             return Err(GalaxyError::Network);
         }
-        let fields = mobile::AutofillFields {
-            sequence: fields.sequence,
-            fee_drops: fields.fee_drops,
-            last_ledger_sequence: fields.last_ledger_sequence,
-            first_possible_ledger: fields.first_possible_ledger,
-        };
+        let fields = mobile_autofill(fields)?;
         let signed = mobile::sign_galaxy_account_set(
             family_seed(&entropy)?,
             params,
@@ -369,6 +367,33 @@ pub fn xrpl_sign_account_set(
             }
         }
         Ok(signed.into())
+    })
+}
+
+fn mobile_autofill(fields: XrplAutofill) -> Result<mobile::AutofillFields> {
+    Ok(mobile::AutofillFields {
+        sequence: fields.sequence,
+        fee_drops: fields.fee_drops,
+        last_ledger_sequence: fields.last_ledger_sequence,
+        first_possible_ledger: fields.first_possible_ledger,
+        account_txn_id: fields.account_txn_id.as_deref().map(exact).transpose()?,
+    })
+}
+
+/// Persist the one-time memo-free account preparation before submission.
+#[uniffi::export]
+pub fn xrpl_sign_account_preparation(
+    entropy: Vec<u8>,
+    network: XrplNetwork,
+    fields: XrplAutofill,
+) -> Result<SignedTransaction> {
+    let entropy = Zeroizing::new(entropy);
+    guarded(|| {
+        mobile::sign_account_tracking_preparation(
+            family_seed(&entropy)?, network.try_into()?, mobile_autofill(fields)?,
+        )
+        .map(Into::into)
+        .map_err(|_| GalaxyError::Transaction)
     })
 }
 

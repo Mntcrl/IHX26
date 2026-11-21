@@ -45,10 +45,11 @@ export type VerificationOptions = {
 );
 /** Input is the XRPL command's parameter object as JSON; output is the bare XRPL `result` as JSON. */
 export interface JsLedgerSource {
-    tx(params: string): Promise<string>;
-    ledger_header(params: string): Promise<string>;
-    account_tx(params: string): Promise<string>;
-    server_info(params: string): Promise<string>;
+    tx(params: string, endpoint: number): Promise<string>;
+    ledger_header(params: string, endpoint: number): Promise<string>;
+    account_root(params: string, endpoint: number): Promise<string>;
+    account_tx(params: string, endpoint: number): Promise<string>;
+    server_info(params: string, endpoint: number): Promise<string>;
 }
 /** Fetch one capped raw §14 response. WASM validates its fields and follows pagination. */
 export interface JsNodeClient {
@@ -68,13 +69,15 @@ extern "C" {
     pub type JsNode;
 
     #[wasm_bindgen(method, catch, js_name = tx)]
-    fn tx_js(this: &JsLedger, params: &str) -> Result<Promise, JsValue>;
+    fn tx_js(this: &JsLedger, params: &str, endpoint: usize) -> Result<Promise, JsValue>;
     #[wasm_bindgen(method, catch, js_name = ledger_header)]
-    fn ledger_header_js(this: &JsLedger, params: &str) -> Result<Promise, JsValue>;
+    fn ledger_header_js(this: &JsLedger, params: &str, endpoint: usize) -> Result<Promise, JsValue>;
+    #[wasm_bindgen(method, catch, js_name = account_root)]
+    fn account_root_js(this: &JsLedger, params: &str, endpoint: usize) -> Result<Promise, JsValue>;
     #[wasm_bindgen(method, catch, js_name = account_tx)]
-    fn account_tx_js(this: &JsLedger, params: &str) -> Result<Promise, JsValue>;
+    fn account_tx_js(this: &JsLedger, params: &str, endpoint: usize) -> Result<Promise, JsValue>;
     #[wasm_bindgen(method, catch, js_name = server_info)]
-    fn server_info_js(this: &JsLedger, params: &str) -> Result<Promise, JsValue>;
+    fn server_info_js(this: &JsLedger, params: &str, endpoint: usize) -> Result<Promise, JsValue>;
     #[wasm_bindgen(method, catch, js_name = lookup)]
     fn lookup_js(
         this: &JsNode,
@@ -126,41 +129,45 @@ pub async fn verify(
         return Err(js_error("configure between one and eight XRPL endpoints"));
     }
     let config = NetworkConfig::from_toml(&options.network_config).map_err(js_error)?;
-    let ledger = RpcLedger::new(JsRpc(ledger_source));
-    let mut ctx = VerifyContext::new(&ledger, &config);
-    ctx.rpc_endpoints = options.rpc_endpoints;
-    let report = match options.mode {
-        Mode::Direct => verify_photo(&bytes, None, &ctx).await,
-        Mode::Manual { manifest_tx } => {
-            verify_manifest(Some(&bytes), hash32(&manifest_tx).map_err(js_error)?, &ctx).await
-        }
-        Mode::Lookup { nodes, node_lookup_consent } => {
-            let client = node_client
-                .as_ref()
-                .filter(|_| node_lookup_consent)
-                .ok_or_else(|| js_error("photo identifier lookup requires consent and a node client"))?;
-            if !(1..=MAX_ENDPOINTS).contains(&nodes.len()) {
-                return Err(js_error("configure between one and eight lookup nodes"));
+    for (index, endpoint) in options.rpc_endpoints.iter().enumerate() {
+        let ledger = RpcLedger::new(JsRpc(&ledger_source, index));
+        let mut ctx = VerifyContext::new(&ledger, &config);
+        ctx.rpc_endpoints = vec![endpoint.clone()];
+        let report = match &options.mode {
+            Mode::Direct => verify_photo(&bytes, None, &ctx).await,
+            Mode::Manual { manifest_tx } => {
+                verify_manifest(Some(&bytes), hash32(manifest_tx).map_err(js_error)?, &ctx).await
             }
-            let sources: Vec<_> = nodes.iter().map(|endpoint| JsLookup { endpoint, client }).collect();
-            verify_by_photo_id(&bytes, &sources, &ctx).await
+            Mode::Lookup { nodes, node_lookup_consent } => {
+                let client = node_client.as_ref().filter(|_| *node_lookup_consent)
+                    .ok_or_else(|| js_error("photo identifier lookup requires consent and a node client"))?;
+                if !(1..=MAX_ENDPOINTS).contains(&nodes.len()) {
+                    return Err(js_error("configure between one and eight lookup nodes"));
+                }
+                let sources: Vec<_> = nodes.iter().map(|endpoint| JsLookup { endpoint, client }).collect();
+                verify_by_photo_id(&bytes, &sources, &ctx).await
+            }
+        };
+        if !report.needs_rpc_retry() || index + 1 == options.rpc_endpoints.len() {
+            return serde_json::to_string(&report).map_err(js_error);
         }
-    };
-    serde_json::to_string(&report).map_err(js_error)
+    }
+    unreachable!("empty endpoints rejected above")
 }
 
 /// The JavaScript transport pins every endpoint to the configured network before use;
 /// the pipeline checks `server_info` again.
-struct JsRpc(JsLedger);
+struct JsRpc<'a>(&'a JsLedger, usize);
 
-impl RpcTransport for JsRpc {
+impl RpcTransport for JsRpc<'_> {
     async fn request(&self, method: &str, params: Value) -> Result<Value, LedgerError> {
         let params = serde_json::to_string(&params)?;
         let pending = match method {
-            "tx" => self.0.tx_js(&params),
-            "ledger" => self.0.ledger_header_js(&params),
-            "account_tx" => self.0.account_tx_js(&params),
-            "server_info" => self.0.server_info_js(&params),
+            "tx" => self.0.tx_js(&params, self.1),
+            "ledger" => self.0.ledger_header_js(&params, self.1),
+            "account_info" => self.0.account_root_js(&params, self.1),
+            "account_tx" => self.0.account_tx_js(&params, self.1),
+            "server_info" => self.0.server_info_js(&params, self.1),
             _ => return Err(LedgerError::Invalid("unexpected browser RPC method")),
         };
         let text = receive(pending, MAX_RPC_BYTES).await.map_err(LedgerError::Rpc)?;

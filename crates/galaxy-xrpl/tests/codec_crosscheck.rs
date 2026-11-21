@@ -134,7 +134,7 @@ fn account_set_memo_signatures() {
     assert_eq!(wallet.classic_address(), vectors.address);
     assert_eq!(hex::encode_upper(wallet.account_id()), vectors.account_id);
     assert_eq!(hex::encode_upper(wallet.public_key()), vectors.public_key);
-    assert_eq!(vectors.cases.len(), 2);
+    assert_eq!(vectors.cases.len(), 3);
     for case in vectors.cases {
         let tx = &case.unsigned;
         let unsigned_blob = hex::decode(case.unsigned_blob).expect("unsigned transaction hex");
@@ -163,6 +163,7 @@ fn account_set_memo_signatures() {
                 .try_into()
                 .unwrap(),
             network_id: case.network_id,
+            account_txn_id: galaxy_xrpl::transaction::account_txn_id(tx).unwrap(),
             memo: Memo {
                 kind: &vectors.memo_type,
                 data: &memo_data,

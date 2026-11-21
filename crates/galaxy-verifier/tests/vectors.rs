@@ -23,7 +23,8 @@ fn network_toml(world: &World) -> String {
         hex::encode(entry.circuit_id), hex::encode(entry.vk_digest), hex::encode(entry.policy_id),
         hex::encode_upper(entry.registration_tx),
     );
-    let text = base
+    let unpinned = base.split_once("[[accepted_circuits]]").map_or(base, |(before, _)| before);
+    let text = unpinned
         .replace("inception_ledger = 22480444", &format!("inception_ledger = {INCEPTION}"))
         .replace("accepted_circuits = []\n", "");
     format!("{text}\n# Offline test vector: development circuit (tests/support), never a real trust anchor.\n{circuit}")

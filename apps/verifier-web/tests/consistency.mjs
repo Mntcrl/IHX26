@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import init, { inspect_image, verify } from '../../../bindings/wasm/pkg/galaxy_wasm.js';
 import { replay } from './recording.mjs';
 
@@ -26,6 +28,7 @@ function request(method, json) {
 const ledger = {
   tx: async params => request('tx', params),
   ledger_header: async params => request('ledger', params),
+  account_root: async params => request('account_info', params),
   account_tx: async params => request('account_tx', params),
   server_info: async params => request('server_info', params),
 };
@@ -48,6 +51,65 @@ for (const [mode, cliArgs] of [
   // No elapsed-time fields exist in galaxy-report/v1. Compare even ledger and claimed times.
   assert.deepEqual(wasmReport, cliReport);
   console.log(`CLI/WASM ${mode.mode} parity: ${wasmReport.state}, full report JSON identical`);
+}
+
+// Fail at a ledger request on the first endpoint, after serving a usable CAPTURE.
+// A correct restart obtains a new tip and re-fetches CAPTURE from endpoint 2.
+const calls = [];
+const restarted = Object.fromEntries(Object.entries(ledger).map(([name, call]) => [name, async (params, index) => {
+  calls.push([index, name]);
+  if (index === 0 && name === 'ledger_header') throw new Error('first XRPL endpoint disconnected');
+  return call(params);
+}]));
+const failover = JSON.parse(await verify(image, {
+  ...options, mode: 'direct', rpc_endpoints: ['https://first.example', 'https://second.example'],
+}, restarted));
+assert.deepEqual(calls.slice(0, 5), [[0, 'server_info'], [0, 'tx'], [0, 'ledger_header'], [1, 'server_info'], [1, 'tx']]);
+assert.equal(failover.state, refs.expected_state);
+assert.deepEqual(failover.trust.rpc_endpoints, ['https://second.example']);
+console.log('WASM endpoint failure: restarted from server_info and CAPTURE on second endpoint');
+
+async function rpcServer(failLedger, log) {
+  const server = createServer(async (req, res) => {
+    try {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const { method, params: [params] } = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      log.push([method, params.transaction]);
+      if (failLedger && method === 'ledger') {
+        res.writeHead(503).end();
+      } else {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ result: replay(recording, method, params) }));
+      }
+    } catch {
+      res.writeHead(500).end();
+    }
+  });
+  await new Promise((resolve, reject) => server.once('error', reject).listen(0, '127.0.0.1', resolve));
+  return { server, endpoint: `http://127.0.0.1:${server.address().port}` };
+}
+const firstCalls = [], secondCalls = [];
+const first = await rpcServer(true, firstCalls);
+const second = await rpcServer(false, secondCalls);
+try {
+  const run = await promisify(execFile)(cli, [
+    '--json', '--network-config', networkPath, '--rpc', first.endpoint, '--rpc', second.endpoint,
+    'verify', imagePath,
+  ], { cwd: root }).catch(error => error);
+  assert.equal(run.code, refs.expected_exit_code, run.stderr);
+  const report = JSON.parse(run.stdout);
+  assert.equal(report.state, refs.expected_state);
+  assert.deepEqual(firstCalls.filter(([method]) => method !== 'server_info'), [
+    ['tx', refs.manifest_tx], ['ledger', undefined],
+  ]);
+  assert.deepEqual(secondCalls[0], ['server_info', undefined]);
+  assert.deepEqual(secondCalls.find(([method]) => method !== 'server_info'), ['tx', refs.manifest_tx]);
+  assert.deepEqual(report.trust.rpc_endpoints, [second.endpoint]);
+  console.log('Native endpoint failure: restarted from server_info and CAPTURE on second endpoint');
+} finally {
+  first.server.close();
+  second.server.close();
 }
 
 const nodes = ['https://index.example'];

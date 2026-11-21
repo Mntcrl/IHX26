@@ -203,16 +203,19 @@ pub const CHECKS: &[(&str, ProvenBy)] = {
         ("capture.validated_success", LedgerRpc),
         ("capture.decode", Cryptographic),
         ("capture.network", Cryptographic),
+        ("capture.txn_chain", Cryptographic),
         ("capture.photo_binding", Cryptographic),
         ("capture.rgb_binding", Cryptographic),
         ("capture.account_binding", Cryptographic),
         ("circuit.accepted", Cryptographic),
         ("circuit.registration", Cryptographic),
         ("registration.resolve", LedgerRpc),
+        ("registration.txn_chain", Cryptographic),
         ("registration.bundle", Cryptographic),
         ("registration.attestation", Attestation),
         ("capture.assertion", Attestation),
         ("capture.counter", Attestation),
+        ("history.complete", LedgerRpc),
         ("capture.unique", LedgerRpc),
         ("registration.revocation", LedgerRpc),
         ("ledger.preledger_window", LedgerRpc),
@@ -276,6 +279,15 @@ impl Report {
 
     pub fn exit_code(&self) -> u8 {
         self.state.exit_code()
+    }
+
+    /// A different endpoint may have the missing data. Restart the entire
+    /// operation rather than retaining any reports from this attempt.
+    pub fn needs_rpc_retry(&self) -> bool {
+        fn unavailable(candidate: &Candidate) -> bool {
+            candidate.state == State::Unavailable || candidate.proofs.iter().any(unavailable)
+        }
+        self.state == State::Unavailable || self.candidates.iter().any(unavailable)
     }
 
     pub(crate) fn set_check(&mut self, check: Check) {

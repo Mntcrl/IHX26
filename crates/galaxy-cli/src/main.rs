@@ -10,7 +10,7 @@ use galaxy_verifier::{
     inspect_circuit, parse_lookup_response, photo_identity,
     recorded::{Recorder, Recording},
     verify_by_photo_id, verify_photo, verify_proof_only, verify_proof_transaction, CircuitInfo, LookupError,
-    LookupResult, LookupSource, Refs, Report, RpcTrust, State, Status, TrustReport, VerifyContext,
+    LookupResult, LookupSource, Refs, Report, RpcTrust, State, TrustReport, VerifierConfig, VerifyContext,
     DEFAULT_LOOKUP_PAGE_SIZE, MAX_LOOKUP_NODES, MAX_LOOKUP_PAGES, MAX_LOOKUP_RESPONSE_BYTES,
 };
 use galaxy_xrpl::{ledger::RpcLedger, native::RpcClient, LedgerSource};
@@ -53,6 +53,14 @@ struct Global {
     /// Time limit for network work, in seconds.
     #[arg(long, global = true, default_value_t = 300, value_parser = clap::value_parser!(u64).range(1..=3600))]
     timeout: u64,
+    /// Maximum account_tx pages (200 rows each) in one history window; 0 forces the walk.
+    #[arg(long, global = true, default_value_t = VerifierConfig::DEFAULT_HISTORY_PAGES,
+        value_parser = clap::value_parser!(u16).range(0..=i64::from(VerifierConfig::DEFAULT_HISTORY_PAGES)))]
+    history_pages: u16,
+    /// Maximum AccountTxnID steps in one history window.
+    #[arg(long, global = true, default_value_t = VerifierConfig::DEFAULT_HISTORY_WALK,
+        value_parser = clap::value_parser!(u16).range(1..=i64::from(VerifierConfig::DEFAULT_HISTORY_WALK)))]
+    history_walk: u16,
 }
 
 #[derive(Subcommand)]
@@ -116,7 +124,7 @@ struct VerifyArgs {
     /// Lookup node base URL, repeatable (also GALAXY_NODES, comma-separated).
     #[arg(long = "node", value_name = "URL", env = "GALAXY_NODES", value_delimiter = ',')]
     nodes: Vec<String>,
-    /// Never contact lookup nodes: the photo ID does not leave this machine.
+    /// Never contact lookup nodes (the default unless --lookup is requested).
     #[arg(long, conflicts_with = "lookup")]
     no_discovery: bool,
 }
@@ -235,28 +243,46 @@ async fn run(cli: Cli) -> Outcome {
         _ => {}
     }
     let config = load_config(&global)?;
+    let verification = if let Command::Verify(args) = &command {
+        let nodes = if args.lookup { http_nodes(&args.nodes)? } else { Vec::new() };
+        if args.lookup && nodes.is_empty() {
+            return Err(Failure::Usage("--lookup needs at least one --node URL (or GALAXY_NODES)".into()));
+        }
+        Some((read_image(&args.image)?, nodes))
+    } else { None };
+    let input = LedgerInput { command, verification };
     if let Some(path) = &global.recording {
         let bytes = std::fs::read(path).map_err(|err| internal(format!("cannot read {}: {err}", path.display())))?;
         let ledger = Recording::from_json(&bytes).map_err(internal)?.into_ledger();
         let endpoints = vec![format!("recording:{}", path.display())];
-        return execute(command, &global, &config, &ledger, endpoints, RpcTrust::Remote).await;
+        return execute(&input, &global, &config, &ledger, endpoints, RpcTrust::Remote, Duration::from_secs(global.timeout)).await?.emit(global.json);
     }
     let endpoints = if global.rpc.is_empty() {
         config.trusted_local_rippled.iter().chain([&config.json_rpc]).cloned().collect()
     } else {
         global.rpc.clone()
     };
-    let trust = if endpoints.iter().all(|url| is_local(url, &config)) { RpcTrust::Local } else { RpcTrust::Remote };
+    let limit = Duration::from_secs(global.timeout);
+    let deadline = tokio::time::Instant::now() + limit;
     let client = RpcClient::new(&endpoints, config.network_id.as_u32(), config.allow_mainnet)
         .map_err(|err| Failure::Usage(format!("XRPL endpoint rejected: {err}")))?;
-    let recorder = Recorder::new(client);
-    let ledger = RpcLedger::new(&recorder);
-    let outcome = execute(command, &global, &config, &ledger, endpoints, trust).await;
-    if let Some(path) = &global.record {
-        std::fs::write(path, recorder.recording().to_json())
-            .map_err(|err| internal(format!("cannot write {}: {err}", path.display())))?;
+    let mut attempts = client.pinned_endpoints().peekable();
+    while let Some((url, pinned)) = attempts.next() {
+        let trust = if is_local(url.as_str(), &config) { RpcTrust::Local } else { RpcTrust::Remote };
+        let recorder = Recorder::new(pinned);
+        let ledger = RpcLedger::new(&recorder);
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let endpoint = url.origin().ascii_serialization();
+        let result = execute(&input, &global, &config, &ledger, vec![endpoint], trust, remaining).await?;
+        if attempts.peek().is_none() || tokio::time::Instant::now() >= deadline || !result.needs_rpc_retry() {
+            if let Some(path) = &global.record {
+                std::fs::write(path, recorder.recording().to_json())
+                    .map_err(|err| internal(format!("cannot write {}: {err}", path.display())))?;
+            }
+            return result.emit(global.json);
+        }
     }
-    outcome
+    unreachable!("empty XRPL endpoint list rejected by RpcClient")
 }
 
 fn load_config(global: &Global) -> Result<NetworkConfig, Failure> {
@@ -280,65 +306,86 @@ fn read_image(path: &PathBuf) -> Result<Vec<u8>, Failure> {
     std::fs::read(path).map_err(|err| internal(format!("cannot read {}: {err}", path.display())))
 }
 
+struct LedgerInput {
+    command: Command,
+    verification: Option<(Vec<u8>, Vec<HttpNode>)>,
+}
+
+enum Execution {
+    Report(Box<Report>),
+    Circuit(Box<CircuitInfo>, Option<Hash32>),
+    UnsupportedPolicy(String),
+}
+
+impl Execution {
+    fn needs_rpc_retry(&self) -> bool {
+        matches!(self, Self::Report(report) if report.needs_rpc_retry())
+    }
+
+    fn emit(self, json: bool) -> Outcome {
+        match self {
+            Self::Report(report) => Ok(emit(&report, json)),
+            Self::Circuit(info, policy) => print_circuit(&info, policy.as_ref(), json),
+            Self::UnsupportedPolicy(reason) => {
+                eprintln!("{reason}");
+                Ok(State::Unsupported.exit_code())
+            }
+        }
+    }
+}
+
 async fn execute<L: LedgerSource>(
-    command: Command, global: &Global, config: &NetworkConfig, ledger: &L, endpoints: Vec<String>, trust: RpcTrust,
-) -> Outcome {
+    input: &LedgerInput, global: &Global, config: &NetworkConfig, ledger: &L, endpoints: Vec<String>, trust: RpcTrust, remaining: Duration,
+) -> Result<Execution, Failure> {
     let mut ctx = VerifyContext::new(ledger, config);
     ctx.rpc_endpoints = endpoints;
     ctx.rpc_trust = trust;
+    ctx.options = VerifierConfig { history_pages: global.history_pages, history_walk: global.history_walk };
     let limit = Duration::from_secs(global.timeout);
-    let report = match command {
+    let circuit_result = |result, policy, mode| match result {
+        Some(Ok(info)) => Execution::Circuit(Box::new(info), policy),
+        Some(Err(report)) => Execution::Report(Box::new(report)),
+        None => Execution::Report(Box::new(timeout_report(&ctx, mode, limit))),
+    };
+    let report = match &input.command {
         Command::Verify(args) => {
-            let image = read_image(&args.image)?;
-            let nodes = if args.no_discovery { Vec::new() } else { http_nodes(&args.nodes)? };
-            if args.lookup && nodes.is_empty() {
-                return Err(Failure::Usage("--lookup needs at least one --node URL (or GALAXY_NODES)".into()));
-            }
-            bounded(&ctx, "verify", limit, async {
+            let (image, nodes) = input.verification.as_ref().expect("verify input loaded before retry");
+            bounded(&ctx, "verify", remaining, limit, async {
                 if let Some(manifest_tx) = args.manifest_tx {
-                    return verify_photo(&image, Some(Refs { manifest_tx, proof_tx: args.proof_tx }), &ctx).await;
+                    return verify_photo(image, Some(Refs { manifest_tx, proof_tx: args.proof_tx }), &ctx).await;
                 }
                 if args.lookup {
-                    return verify_by_photo_id(&image, &nodes, &ctx).await;
+                    return verify_by_photo_id(image, nodes, &ctx).await;
                 }
-                let report = verify_photo(&image, None, &ctx).await;
-                // No references in the image: discover captures through the configured nodes.
-                let unreferenced = report.state == State::NotFound
-                    && report.check("refs.metadata").is_some_and(|check| check.status == Status::NotApplicable);
-                if unreferenced && !nodes.is_empty() { verify_by_photo_id(&image, &nodes, &ctx).await } else { report }
+                verify_photo(image, None, &ctx).await
             })
             .await
         }
-        Command::Inspect { manifest_tx } => bounded(&ctx, "proof-only", limit, verify_proof_only(manifest_tx, &ctx)).await,
+        Command::Inspect { manifest_tx } => bounded(&ctx, "proof-only", remaining, limit, verify_proof_only(*manifest_tx, &ctx)).await,
         Command::Proof { command: ProofCommand::Verify { proof_tx } } => {
-            bounded(&ctx, "proof-only", limit, verify_proof_transaction(proof_tx, &ctx)).await
+            bounded(&ctx, "proof-only", remaining, limit, verify_proof_transaction(*proof_tx, &ctx)).await
         }
         Command::Circuit { command: CircuitCommand::Inspect { circuit_id } } => {
-            return match timed(limit, inspect_circuit(circuit_id, &ctx)).await {
-                Some(Ok(info)) => print_circuit(&info, None, global.json),
-                Some(Err(report)) => Ok(emit(&report, global.json)),
-                None => Ok(emit(&timeout_report(&ctx, "circuit-inspect", limit), global.json)),
-            };
+            let result = timed(remaining, inspect_circuit(*circuit_id, &ctx)).await;
+            return Ok(circuit_result(result, None, "circuit-inspect"));
         }
         Command::Policy { command: PolicyCommand::Inspect { policy } } => {
-            let policy_id = parse_hash(&policy).map_err(|_| {
+            let policy_id = parse_hash(policy).map_err(|_| {
                 Failure::Usage(format!("{policy} is neither a readable policy file nor a 64-hex policy ID"))
             })?;
             let Some(entry) = config.accepted_circuits.iter().find(|entry| entry.policy_id == policy_id) else {
-                eprintln!("UNSUPPORTED: policy {policy} is not bound to any accepted circuit of {}", config.name);
-                return Ok(State::Unsupported.exit_code());
+                return Ok(Execution::UnsupportedPolicy(format!(
+                    "UNSUPPORTED: policy {policy} is not bound to any accepted circuit of {}", config.name,
+                )));
             };
-            return match timed(limit, inspect_circuit(entry.circuit_id, &ctx)).await {
-                Some(Ok(info)) => print_circuit(&info, Some(&policy_id), global.json),
-                Some(Err(report)) => Ok(emit(&report, global.json)),
-                None => Ok(emit(&timeout_report(&ctx, "policy-inspect", limit), global.json)),
-            };
+            let result = timed(remaining, inspect_circuit(entry.circuit_id, &ctx)).await;
+            return Ok(circuit_result(result, Some(policy_id), "policy-inspect"));
         }
         Command::Photo { .. } | Command::Lookup { .. } => unreachable!("handled without a ledger"),
         #[cfg(feature = "node")]
         Command::Node { .. } => unreachable!("handled without a ledger"),
     };
-    Ok(emit(&report, global.json))
+    Ok(Execution::Report(Box::new(report)))
 }
 
 async fn timed<T>(limit: Duration, work: impl Future<Output = T>) -> Option<T> {
@@ -353,9 +400,9 @@ fn timeout_report<L: LedgerSource>(ctx: &VerifyContext<'_, L>, mode: &'static st
 }
 
 async fn bounded<L: LedgerSource>(
-    ctx: &VerifyContext<'_, L>, mode: &'static str, limit: Duration, work: impl Future<Output = Report>,
+    ctx: &VerifyContext<'_, L>, mode: &'static str, remaining: Duration, limit: Duration, work: impl Future<Output = Report>,
 ) -> Report {
-    match timed(limit, work).await {
+    match timed(remaining, work).await {
         Some(report) => report,
         None => timeout_report(ctx, mode, limit),
     }

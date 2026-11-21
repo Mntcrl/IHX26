@@ -13,11 +13,13 @@ cargo build -p galaxy-cli --release --features node   # adds `galaxy node …` (
 | option | meaning |
 |---|---|
 | `--network-config PATH` | network configuration TOML (spec §12: trusted circuits, app IDs, attestation environments, inception ledger). Default: the built-in copy of `deployments/networks/xrpl-testnet.toml`. |
-| `--rpc URL` (repeatable) | XRPL JSON-RPC endpoints tried in order. Default: the config's `trusted_local_rippled` (if set), then `json_rpc`. HTTPS required except loopback HTTP. Reports `rpc_trust: local` when every endpoint is loopback or the configured local rippled. |
+| `--rpc URL` (repeatable) | XRPL JSON-RPC endpoints tried in order. One endpoint per verification attempt; on failure the entire attempt restarts on the next endpoint. The report identifies the endpoint used. Default: the config's `trusted_local_rippled` (if set), then `json_rpc`. HTTPS required except loopback HTTP. |
 | `--recording FILE` | replay recorded XRPL answers (offline, deterministic; unanswered requests → UNAVAILABLE). |
-| `--record FILE` | save every XRPL answer of this run to FILE (replay later with `--recording`). |
+| `--record FILE` | save XRPL answers from the final endpoint attempt only (replay later with `--recording`). |
 | `--json` | print the `galaxy-report/v1` JSON (or the command's JSON document) instead of text. |
 | `--timeout SECS` | overall time limit for network work (default 300); exceeding it yields UNAVAILABLE. |
+| `--history-pages N` | maximum `account_tx` pages per history window, at 200 rows per page (default 64). Use `0` to force the AccountTxnID walk for diagnostics. |
+| `--history-walk N` | maximum AccountTxnID steps per history window (default 4,096). If the chain cannot be followed within this budget, verification is UNAVAILABLE. |
 
 ## Commands
 
@@ -38,17 +40,17 @@ cargo build -p galaxy-cli --release --features node   # adds `galaxy node …` (
   every binding is checked against XRPL.
 - **manual**: `--manifest-tx H` (and optionally `--proof-tx H`, which is evaluated
   and listed but can never select itself).
-- **lookup**: `--lookup` asks the nodes given with `--node` (or `GALAXY_NODES`,
-  comma-separated) for the photo ID, then verifies every hint from XRPL. Without
-  `--lookup`, an image without references falls back to lookup when nodes are
-  configured.
-- `--no-discovery`: never contact a lookup node (the photo ID stays local); an
-  image without references then reports NOT_FOUND with "no capture was
-  consulted". There is no built-in node list.
+- **lookup**: only `--lookup` sends the photo ID to nodes configured by `--node`
+  or `GALAXY_NODES` (comma-separated). These return CAPTURE hints, which are
+  checked independently against XRPL.
+- Without `--lookup`, the CLI never contacts nodes, even with `GALAXY_NODES`
+  configured; `--no-discovery` states this explicitly. If there are also no
+  references, it reports NOT_FOUND with "no capture was consulted".
+  The separate `galaxy lookup <photo_id>` command explicitly requests node lookup.
 
 Lookup endpoint (node REST API): `GET {node}/v1/photos/{photo_id}?network_id=N`
-→ `{"candidates": [{"manifest_tx", "proof_tx"|null}], "ranges": [{"min", "max"}],
-"incomplete": bool}` (≤ 1 MiB, no redirects, 15 s timeout).
+returns paginated `galaxy-node/v1` candidate hints and coverage ranges
+(see spec §14; responses ≤ 256 KiB, no redirects, 15 s timeout).
 
 ## Exit codes
 

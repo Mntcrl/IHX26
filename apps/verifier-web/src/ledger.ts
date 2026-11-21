@@ -3,7 +3,7 @@ import { type Fetch, fetchJson, MAX_RPC_BYTES, object, REQUEST_TIMEOUT_MS, u32 }
 import { endpoint } from './settings';
 
 type Params = Record<string, unknown>;
-type Method = 'server_info' | 'tx' | 'ledger' | 'account_tx';
+type Method = 'server_info' | 'tx' | 'ledger' | 'account_tx' | 'account_info';
 type Socket = Pick<WebSocket, 'readyState' | 'addEventListener' | 'send' | 'close'>;
 type Pending = { resolve: (payload: Params) => void; reject: (error: Error) => void; timer: number };
 
@@ -78,7 +78,6 @@ export class BrowserLedger implements JsLedgerSource {
   private readonly sockets = new Map<string, LedgerSocket>();
   private readonly urls: string[];
   private nextId = 1;
-  private preferred = 0;
 
   constructor(
     urls: string[], private readonly network: number,
@@ -89,42 +88,37 @@ export class BrowserLedger implements JsLedgerSource {
     this.urls = urls.map(url => endpoint(url, 'rpc'));
   }
 
-  tx(params: string): Promise<string> { return this.request('tx', params); }
-  ledger_header(params: string): Promise<string> { return this.request('ledger', params); }
-  account_tx(params: string): Promise<string> { return this.request('account_tx', params); }
-  server_info(params: string): Promise<string> { return this.request('server_info', params); }
+  tx(params: string, index: number): Promise<string> { return this.request('tx', params, index); }
+  ledger_header(params: string, index: number): Promise<string> { return this.request('ledger', params, index); }
+  account_root(params: string, index: number): Promise<string> { return this.request('account_info', params, index); }
+  account_tx(params: string, index: number): Promise<string> { return this.request('account_tx', params, index); }
+  server_info(params: string, index: number): Promise<string> { return this.request('server_info', params, index); }
 
   close(): void {
     for (const socket of this.sockets.values()) socket.stop('Verification finished');
     this.sockets.clear();
   }
 
-  private async request(method: Method, json: string): Promise<string> {
+  private async request(method: Method, json: string, index: number): Promise<string> {
     const params = object(JSON.parse(json));
     const preflight = { api_version: params.api_version };
-    let lastError = new Error('No XRPL endpoint configured');
-    for (let offset = 0; offset < this.urls.length; offset++) {
-      const index = (this.preferred + offset) % this.urls.length;
-      const url = this.urls[index];
-      try {
-        // Pin the network before sending a transaction hash or account query.
-        const probe = await this.call(url, 'server_info', preflight);
-        const info = object(probe.info);
-        const seq = object(info.validated_ledger).seq;
-        if (probe.error !== undefined || (probe.status !== undefined && probe.status !== 'success')
-            || info.network_id !== this.network || !u32(seq) || seq === 0
-            || typeof info.complete_ledgers !== 'string') throw new Error('XRPL endpoint failed the network check');
-        // An XRPL command-level error (including txnNotFound) is a valid response.
-        const result = method === 'server_info' ? probe : await this.call(url, method, params);
-        this.preferred = index;
-        return JSON.stringify(result);
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error('XRPL request failed');
-        this.sockets.get(url)?.stop('Abandoning XRPL endpoint');
-        this.sockets.delete(url);
-      }
+    const url = this.urls[index];
+    if (url === undefined) throw new Error('No XRPL endpoint configured at that index');
+    try {
+      const probe = await this.call(url, 'server_info', preflight);
+      const info = object(probe.info);
+      const seq = object(info.validated_ledger).seq;
+      if (probe.error !== undefined || (probe.status !== undefined && probe.status !== 'success')
+          || info.network_id !== this.network || !u32(seq) || seq === 0
+          || typeof info.complete_ledgers !== 'string') throw new Error('XRPL endpoint failed the network check');
+      // Return command errors unchanged. Rust decides whether to restart verification.
+      const result = method === 'server_info' ? probe : await this.call(url, method, params);
+      return JSON.stringify(result);
+    } catch (error) {
+      this.sockets.get(url)?.stop('Abandoning XRPL endpoint');
+      this.sockets.delete(url);
+      throw error;
     }
-    throw lastError;
   }
 
   private async call(url: string, method: Method, params: Params): Promise<Params> {

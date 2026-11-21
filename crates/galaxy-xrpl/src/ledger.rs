@@ -51,6 +51,7 @@ pub trait RpcTransport: Sync {
 pub trait LedgerSource {
     fn tx(&self, hash: &Hash32) -> impl LedgerFuture<Option<LedgerTx>>;
     fn ledger_header(&self, index: u32) -> impl LedgerFuture<LedgerHeader>;
+    fn account_root(&self, account: &AccountId, index: u32) -> impl LedgerFuture<AccountRoot>;
     fn account_tx(
         &self,
         account: &AccountId,
@@ -73,6 +74,39 @@ pub struct LedgerTx {
     pub validated: bool,
     /// Unix seconds, if the endpoint supplied the transaction's ledger close time.
     pub close_time: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AccountRoot {
+    pub account_txn_id: Option<Hash32>,
+}
+
+impl LedgerTx {
+    /// Previous own transaction when the signed blob has no AccountTxnID.
+    pub fn previous_account_txn_id(&self, account: &AccountId) -> Result<Option<Hash32>, Error> {
+        let metadata = codec::decode(&self.meta_blob)?;
+        let nodes = metadata["AffectedNodes"].as_array().ok_or(Error::Invalid("missing AffectedNodes"))?;
+        let keylet = account_root_keylet(account);
+        let mut matching = nodes.iter().map(|entry| &entry["ModifiedNode"]).filter(|node| {
+            node["LedgerEntryType"] == "AccountRoot" && hash_field(node, "LedgerIndex").ok() == Some(keylet)
+        });
+        let Some(change) = matching.next() else { return Ok(None) };
+        let final_fields = &change["FinalFields"];
+        if matching.next().is_some() || final_fields["Account"] != keys::classic_address(account)
+            || crate::transaction::account_txn_id(final_fields)? != Some(self.hash)
+        {
+            return Err(Error::Invalid("invalid AccountRoot metadata"));
+        }
+        crate::transaction::account_txn_id(&change["PreviousFields"])
+    }
+}
+
+/// XRPL AccountRoot ledger-entry index: SHA-512Half(0x0061 || AccountID).
+pub fn account_root_keylet(account: &AccountId) -> Hash32 {
+    let mut digest = Sha512::new();
+    digest.update(b"\x00a");
+    digest.update(account);
+    digest.finalize()[..32].try_into().expect("SHA-512Half length")
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -134,6 +168,10 @@ impl<T: RpcTransport> LedgerSource for RpcLedger<T> {
         ledger_header(&self.transport, index).await
     }
 
+    async fn account_root(&self, account: &AccountId, index: u32) -> Result<AccountRoot, Error> {
+        account_root(&self.transport, account, index).await
+    }
+
     async fn account_tx(
         &self,
         account: &AccountId,
@@ -180,6 +218,22 @@ pub(crate) async fn ledger_header(
     parse_ledger_header(&result, index).map(|(header, _)| header)
 }
 
+pub(crate) async fn account_root(rpc: &impl RpcTransport, account: &AccountId, index: u32) -> Result<AccountRoot, Error> {
+    let address = keys::classic_address(account);
+    let result = rpc.request("account_info", json!({
+        "api_version": API_VERSION, "account": address, "ledger_index": index,
+    })).await?;
+    check_result(&result)?;
+    let root = &result["account_data"];
+    if u32_field(&result, "ledger_index")? != index || !validated(&result)?
+        || root["LedgerEntryType"] != "AccountRoot" || root["Account"] != address
+        || hash_field(root, "index")? != account_root_keylet(account)
+    {
+        return Err(Error::Invalid("unexpected AccountRoot account, ledger or validation state"));
+    }
+    Ok(AccountRoot { account_txn_id: crate::transaction::account_txn_id(root)? })
+}
+
 pub(crate) async fn account_tx(
     rpc: &impl RpcTransport,
     account: &AccountId,
@@ -213,14 +267,17 @@ pub(crate) async fn account_tx(
         return Err(Error::Invalid("account_tx marker did not advance"));
     }
     let entries = transaction_array(&result)?;
+    if entries.len() > usize::from(limit) {
+        return Err(Error::Invalid("account_tx returned more rows than requested"));
+    }
     let mut transactions = Vec::with_capacity(entries.len());
     for entry in entries {
         let ledger_index = u32_field(entry, "ledger_index")?;
-        if !(min..=max).contains(&ledger_index) || !validated(entry)? {
-            return Err(Error::Invalid("unexpected account_tx ledger or validation state"));
+        if !(min..=max).contains(&ledger_index) {
+            return Err(Error::Invalid("unexpected account_tx ledger"));
         }
         // rippled doesn't include the hash on binary account_tx entries; Clio can.
-        transactions.push(parse_binary_tx(entry, ledger_index, true, close_time(entry)?, false)?);
+        transactions.push(parse_binary_tx(entry, ledger_index, validated(entry)?, close_time(entry)?, false)?);
     }
     Ok(AccountTxPage {
         transactions,

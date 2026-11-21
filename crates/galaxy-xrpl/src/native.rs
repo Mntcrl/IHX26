@@ -20,7 +20,7 @@ use tokio_tungstenite::{
 };
 
 use crate::{
-    ledger::{self, AccountTxPage, LedgerBackfill, LedgerHeader, LedgerSource, LedgerTx, RpcTransport, ServerInfo},
+    ledger::{self, AccountRoot, AccountTxPage, LedgerBackfill, LedgerHeader, LedgerSource, LedgerTx, RpcTransport, ServerInfo},
     AccountId, Error, Hash32,
 };
 
@@ -66,6 +66,16 @@ impl RpcClient {
             .build()
             .map_err(|_| Error::Rpc("could not create XRPL HTTP client".into()))?;
         Ok(Self { http, urls, expected_network_id })
+    }
+
+    /// One transport per configured endpoint. Verification callers may restart
+    /// with the next transport but must never merge responses across attempts.
+    pub fn pinned_endpoints(&self) -> impl Iterator<Item = (&Url, Self)> {
+        self.urls.iter().map(|url| (url, Self {
+            http: self.http.clone(),
+            urls: vec![url.clone()],
+            expected_network_id: self.expected_network_id,
+        }))
     }
 
     /// Fetch a validated ledger and all its binary transactions in one request.
@@ -171,6 +181,10 @@ impl LedgerSource for RpcClient {
         ledger::ledger_header(self, index).await
     }
 
+    async fn account_root(&self, account: &AccountId, index: u32) -> Result<AccountRoot, Error> {
+        ledger::account_root(self, account, index).await
+    }
+
     async fn account_tx(&self, account: &AccountId, min: u32, max: u32, marker: Option<Value>, limit: u16) -> Result<AccountTxPage, Error> {
         ledger::account_tx(self, account, min, max, marker, limit).await
     }
@@ -189,7 +203,7 @@ fn check_network(result: &Value, expected: u32) -> Result<(), Error> {
 
 fn history_miss(method: &str, result: &Value) -> bool {
     match (method, result["error"].as_str()) {
-        ("ledger", Some("lgrNotFound")) => true,
+        ("ledger" | "account_info", Some("lgrNotFound")) => true,
         ("tx", Some("txnNotFound")) => result["searched_all"] != true,
         _ => false,
     }

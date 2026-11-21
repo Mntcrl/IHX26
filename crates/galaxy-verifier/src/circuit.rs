@@ -27,6 +27,7 @@ pub(crate) struct Circuit {
     pub info: CircuitInfo,
     pub vk: VerifyingKey,
     pub chunk_range: Option<(u32, u32)>,
+    pub ignored_chunks: usize,
 }
 
 pub async fn inspect_circuit<L: LedgerSource>(
@@ -67,8 +68,8 @@ pub(crate) async fn resolve<L: LedgerSource>(
         return Err(Stop::unsupported("ledger.network", "Mainnet is not enabled in the network config"));
     }
     let check = "circuit.registration";
-    let (bundle, manifest, source) = if let Some(bytes) = ctx.local_circuit {
-        (CircuitBundle::decode(bytes).map_err(|err| Stop::invalid(check, err.to_string()))?, None, "local-digest-pinned")
+    let (bundle, manifest, source, ignored_chunks) = if let Some(bytes) = ctx.local_circuit {
+        (CircuitBundle::decode(bytes).map_err(|err| Stop::invalid(check, err.to_string()))?, None, "local-digest-pinned", 0)
     } else {
         let fetched = fetch_bundle(ctx.ledger, &entry.registration_tx, network, ctx.config.allow_mainnet)
             .await.map_err(|err| Stop::from_rpc(check, &err, true))?;
@@ -76,9 +77,11 @@ pub(crate) async fn resolve<L: LedgerSource>(
             return Err(Stop::invalid(check, "Configured registration is not a CIRCUIT manifest"));
         };
         let bundle = CircuitBundle::decode(&fetched.bytes).map_err(|err| Stop::invalid(check, err.to_string()))?;
-        (bundle, Some(manifest), "xrpl-digest-pinned")
+        (bundle, Some(manifest), "xrpl-digest-pinned", fetched.ignored_records)
     };
-    check_bundle(entry, bundle, manifest, source)
+    let mut circuit = check_bundle(entry, bundle, manifest, source)?;
+    circuit.ignored_chunks = ignored_chunks;
+    Ok(circuit)
 }
 
 fn check_bundle(
@@ -127,5 +130,6 @@ fn check_bundle(
     };
     Ok(Circuit {
         info, vk, chunk_range: manifest.map(|m| (m.first_chunk_ledger, m.last_chunk_ledger)),
+        ignored_chunks: 0,
     })
 }

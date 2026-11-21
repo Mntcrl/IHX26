@@ -545,6 +545,11 @@ RustBuffer uniffi_galaxy_ffi_fn_func_xrpl_server_info_request(RustCallStatus *_N
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_FN_FUNC_XRPL_SIGN_ACCOUNT_PREPARATION
+#define UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_FN_FUNC_XRPL_SIGN_ACCOUNT_PREPARATION
+RustBuffer uniffi_galaxy_ffi_fn_func_xrpl_sign_account_preparation(RustBuffer entropy, RustBuffer network, RustBuffer fields, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_FN_FUNC_XRPL_SIGN_ACCOUNT_SET
 #define UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_FN_FUNC_XRPL_SIGN_ACCOUNT_SET
 RustBuffer uniffi_galaxy_ffi_fn_func_xrpl_sign_account_set(RustBuffer entropy, RustBuffer network, RustBuffer purpose, RustBuffer fields, RustBuffer memo, RustCallStatus *_Nonnull out_status
@@ -910,6 +915,12 @@ uint16_t uniffi_galaxy_ffi_checksum_func_xrpl_parse_validated_ledger(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_CHECKSUM_FUNC_XRPL_SERVER_INFO_REQUEST
 #define UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_CHECKSUM_FUNC_XRPL_SERVER_INFO_REQUEST
 uint16_t uniffi_galaxy_ffi_checksum_func_xrpl_server_info_request(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_CHECKSUM_FUNC_XRPL_SIGN_ACCOUNT_PREPARATION
+#define UNIFFI_FFIDEF_UNIFFI_GALAXY_FFI_CHECKSUM_FUNC_XRPL_SIGN_ACCOUNT_PREPARATION
+uint16_t uniffi_galaxy_ffi_checksum_func_xrpl_sign_account_preparation(void
     
 );
 #endif

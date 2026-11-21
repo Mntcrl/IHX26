@@ -38,6 +38,7 @@ its digests match the config.
    mode). Validated + `tesSUCCESS` required (not validated → PENDING, failed →
    INVALID). Network (memo field, `NetworkID` presence rule §12, inception ledger)
    and account (AccountSet sender = core account) are bound.
+   The master-key signature must verify and bind a nonzero `AccountTxnID`.
 4. **Circuit** — `circuit_id` must be in `NetworkConfig.accepted_circuits` with the
    CAPTURE's `policy_id`, else UNSUPPORTED. The GXCB bundle is reassembled from the
    configured CIRCUIT registration (or taken from a local copy); descriptor, policy
@@ -45,23 +46,30 @@ its digests match the config.
    v1 public layout (22 inputs), policy id, VK digest and name a ceremony; the
    policy must validate. A VK published on XRPL is never trusted by itself.
 5. **Registration** — DEVICE manifest + chunks (§10 retrieval rules), manifest
-   earlier than the CAPTURE and from the same account, registration ledger hash
-   equal to the validated ledger's hash, then `verify_registration` (App Attest
+   earlier than the CAPTURE and from the same account, a nonzero `AccountTxnID`
+   signed by that account's master key, registration ledger hash equal to
+   the validated ledger's hash, then `verify_registration` (App Attest
    chain to the pinned Apple root at the manifest ledger close time, app ID and
    environment accepted by the config). A dev-unattested credential is accepted
    for key possession only and labelled "development unattested credential".
 6. **Assertion** — `verify_capture_assertion` over the exact 299-byte core
    (App Attest ES256, or the dev Ed25519 signature).
-7. **Account history** — one bounded `account_tx` scan of the registration
-   account from the DEVICE manifest ledger to the evaluation tip (pages of 200,
-   at most 64 pages; the RPC must claim complete history for the range):
-   earlier CAPTUREs of the same registration whose assertions verify define the
-   counter history; duplicates of the capture_id; every REVOKE; PROOF candidates
-   that name this CAPTURE.
-8. **Uniqueness, counter, revocation** — an earlier CAPTURE with the same
-   capture_id → INVALID. App Attest counter must exceed every earlier
-   authenticated counter (dev credentials have none: not applicable). REVOKE
-   rules §10: effective ledger 0 = revoke ledger; backdating allowed;
+7. **Account history** — three bounded windows: A `[DEVICE, L0]` for earlier
+   CAPTUREs and counters; B `(Lsel, min(deadline, tip)]` for PROOF; C
+   `[DEVICE, tip]` for REVOKE. Each scans up to 64 `account_tx` pages of 200 rows
+   by default. If pagination exceeds the budget, discard that partial scan
+   and follow `AccountTxnID` (up to 4,096 own-transaction steps). A starts
+   at the CAPTURE's signed predecessor; B/C start at the validated tip's
+   AccountRoot `AccountTxnID`. Recompute each linked hash and require its
+   account, order and successful validation. If an own transaction has no
+   signed predecessor, read `PreviousFields.AccountTxnID` in RPC metadata.
+   Third-party, failed, unsigned and mis-signed rows are ignored and counted;
+   incomplete history or a broken/exhausted walk returns UNAVAILABLE.
+8. **Uniqueness, counter, revocation** — an earlier CAPTURE of the same
+   registration that shares its capture ID, photo ID, RGB root or evidence root
+   → INVALID. App Attest counters must be strictly increasing (dev credentials
+   have none). REVOKE is honoured with or without the predecessor field.
+   Under §10, effective ledger 0 = revoke ledger; backdating is allowed;
    future-dated or out-of-range revokes are ignored and reported; L0 ≥ effective
    → INVALID. The report states "credential state as of ledger N".
 9. **Windows** — `Lpre < L0 ≤ Lpre + w_cap`, Lpre hash equals the validated
@@ -70,10 +78,11 @@ its digests match the config.
     (`galaxy_crypto::sampling`, `public_inputs_v1`) from the CAPTURE, its
     capture_id and the Lsel hash.
 11. **PROOF selection** — candidates are the PROOFs found in the account history
-    (ledger order). A PROOF hint from XMP, the caller or a node is evaluated and
+    (ledger order). A PROOF hint from XMP or the caller is evaluated and
     listed but can never select itself. Each candidate: validated + `tesSUCCESS`,
-    sent by the CAPTURE account, references this CAPTURE, ledger in
-    `(Lsel, Lsel + w_proof]`, memo network / Lsel / Lsel hash / circuit equal to
+    signed with the CAPTURE account's master key, with a nonzero `AccountTxnID`,
+    references this CAPTURE, ledger in `(Lsel, Lsel + w_proof]`, memo network /
+    Lsel / Lsel hash / circuit equal to
     the CAPTURE challenge, Groth16 proof valid for the recomputed public inputs
     under the pinned VK. The first valid one in ledger order wins; evaluation
     stops there. Candidates outside the window or from other accounts are
@@ -106,17 +115,20 @@ Report order; `proven_by` is fixed per check.
 | capture.validated_success | ledger-rpc | validated, tesSUCCESS |
 | capture.decode | cryptographic | strict v1 CAPTURE decode |
 | capture.network | cryptographic | network fields and inception |
+| capture.txn_chain | cryptographic | CAPTURE signs a nonzero AccountTxnID |
 | capture.photo_binding | cryptographic | CAPTURE photo_id = image photo_id |
 | capture.rgb_binding | cryptographic | CAPTURE rgb_root = image rgb_root |
 | capture.account_binding | cryptographic | sender = core account = registration account |
 | circuit.accepted | cryptographic | circuit + policy pinned in config |
 | circuit.registration | cryptographic | bundle digests match the config |
 | registration.resolve | ledger-rpc | DEVICE manifest found, earlier, same account, reg ledger hash |
+| registration.txn_chain | cryptographic | DEVICE signs a nonzero AccountTxnID |
 | registration.bundle | cryptographic | bundle reassembled and matches manifest |
 | registration.attestation | attestation | App Attest registration (dev credential: fail, labelled) |
 | capture.assertion | attestation | assertion over the CAPTURE core |
 | capture.counter | attestation | counter strictly increasing |
-| capture.unique | ledger-rpc | capture_id not published earlier |
+| history.complete | ledger-rpc | history windows complete, with page, ignored-row and walk counts |
+| capture.unique | ledger-rpc | no earlier CAPTURE of this registration shares capture ID, photo ID, RGB root or evidence root |
 | registration.revocation | ledger-rpc | no applicable REVOKE up to the tip |
 | ledger.preledger_window | ledger-rpc | Lpre hash and capture window |
 | ledger.selection | ledger-rpc | Lsel validated |
@@ -153,6 +165,8 @@ binding candidate is invalid. An incomplete lookup (node error, gaps, caps,
 unavailable candidate) yields UNAVAILABLE unless a state above INVALID was
 established. A complete lookup with no binding candidate yields NOT_FOUND with
 the consulted ranges and nodes.
+Only the earliest lookup candidate of a registration with a given evidence
+root is evaluated; later equal-evidence candidates are listed as re-challenges.
 
 ## Report (`galaxy-report/v1`)
 
@@ -168,14 +182,17 @@ Limitations are always included.
 
 ## Trust boundaries
 
-- **XRPL RPC** — trusted for validation status, transaction results, ledger
-  order, ledger hashes/close times and history completeness (`complete_ledgers`).
-  Not trusted for content: every blob is hashed and decoded locally; a blob that
-  does not hash to the requested id makes the answer unusable (UNAVAILABLE).
-  Use a local synchronized rippled (`rpc_trust: local`) to remove this trust.
+- **XRPL RPC** — trusted for validation status, results, ledger order, hashes,
+  close times, history coverage and the AccountRoot and metadata anchors.
+  Every blob fetched by hash must match it. CAPTUREs, PROOFs, registrations,
+  history rows and chunks must verify under the Galaxy account's Ed25519
+  master key before they can contribute evidence. One endpoint supplies all
+  answers for an attempt; a failure restarts the entire attempt on the next
+  endpoint. Answers are never combined or cross-checked. Use your own
+  synchronized rippled to avoid trusting a remote endpoint.
 - **Lookup nodes** — trusted for nothing. They can omit records (absence is only
-  reported for the ranges they claim) and observe photo-id queries. `galaxy verify
-  --no-discovery` never contacts a node.
+  reported for the ranges they claim) and observe explicit photo-ID queries.
+  `galaxy verify` sends no photo ID unless `--lookup` is present.
 - **App Attest** — establishes that the credential key lives in a genuine Apple
   app instance of an accepted app ID; it does not attest sensor data.
   Development-environment credentials are reported and accepted only if the config
@@ -187,9 +204,10 @@ Limitations are always included.
 
 ## Resource limits
 
-Image ≤ 16 MiB; registry bundles ≤ 1 MiB; account history ≤ 64 pages × 200
-transactions; ≤ 32 PROOF candidates per capture; lookup: ≤ 16 nodes, ≤ 32
-candidates, node response ≤ 1 MiB; recordings ≤ 64 MiB. Network transports
+Image ≤ 16 MiB; registry bundles ≤ 1 MiB; per history window defaults of 64
+pages × 200 `account_tx` rows, then ≤ 4,096 AccountTxnID steps; ≤ 32 PROOF
+candidates per capture; lookup: ≤ 16 nodes, ≤ 32 candidates, node response
+≤ 256 KiB; recordings ≤ 64 MiB. Network transports
 bound each request (galaxy-xrpl: timeouts and response caps); the CLI adds an
 overall `--timeout`. Hostile inputs produce INVALID/UNSUPPORTED/UNAVAILABLE
 reports, never panics.
@@ -199,7 +217,8 @@ reports, never panics.
 `recorded::Recording` replays JSON-RPC answers (`[{method, params, result}]`,
 `api_version` ignored when matching); an unmatched request is a transport error
 (UNAVAILABLE, never absence). `recorded::Recorder` wraps a live transport and
-captures a run (`galaxy --record FILE`). The test suite
+captures a run (`galaxy --record FILE`). An AccountTxnID-walk recording includes
+the `account_info` anchors and linked `tx` results. The test suite
 (`crates/galaxy-verifier/tests/`) builds histories from real signed AccountSet
 transactions (throwaway wallets); `tests/main_v1m.rs` runs the real main_v1m
 circuit (development setup) with a proof made for its offline challenge

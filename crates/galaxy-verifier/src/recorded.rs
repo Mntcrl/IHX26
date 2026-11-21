@@ -5,6 +5,8 @@
 //! XRPL `result`. Requests match on method and params with the `api_version`
 //! key ignored; the first match wins. An unmatched request is a transport error,
 //! so missing data surfaces as UNAVAILABLE, never as an absence claim.
+//! AccountRoot anchors use the same format with method `account_info`; they
+//! are required when an offline attempt walks the AccountTxnID chain.
 
 use galaxy_xrpl::{
     ledger::{RpcLedger, RpcTransport},
@@ -65,10 +67,17 @@ impl Recording {
     }
 
     fn find(&self, method: &str, params: &Value) -> Option<&Value> {
-        let wanted = strip(params.clone());
+        let wanted = params.as_object()?;
+        let without_version = |values: &serde_json::Map<String, Value>| {
+            values.len() - usize::from(values.contains_key("api_version"))
+        };
         self.exchanges
             .iter()
-            .find(|exchange| exchange.method == method && strip(exchange.params.clone()) == wanted)
+            .find(|exchange| exchange.method == method && exchange.params.as_object().is_some_and(|stored| {
+                without_version(stored) == without_version(wanted)
+                    && stored.iter().filter(|(key, _)| *key != "api_version")
+                        .all(|(key, value)| wanted.get(key) == Some(value))
+            }))
             .map(|exchange| &exchange.result)
     }
 }
